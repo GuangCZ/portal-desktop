@@ -7,7 +7,6 @@ import { MakerSquirrel } from '@electron-forge/maker-squirrel';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { wrapWindowsInstallers } from './scripts/wrap-windows-installer';
 import { ignoreMacSigningFile } from './scripts/mac-signing';
 import signing from './desktop/macos-signing.json';
 import { macDmgIdentifier, verifyMacSignature } from './desktop/mac-signature';
@@ -60,7 +59,6 @@ const config: ForgeConfig = {
       }
     },
     postMake: async (_forgeConfig, makeResults) => {
-      if (process.platform === 'win32') await wrapWindowsInstallers(makeResults.flatMap(result => result.artifacts));
       if (process.platform === 'darwin') {
         for (const dmg of makeResults.flatMap(result => result.artifacts).filter(file => file.endsWith('.dmg'))) {
           execFileSync('/usr/bin/codesign', ['--force', '--sign', macIdentity, '--identifier', macDmgIdentifier,

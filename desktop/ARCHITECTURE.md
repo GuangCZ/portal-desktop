@@ -42,7 +42,7 @@ Portal 的 connect 模式不会打开旧的 Cowork HTTP 服务或 MCP TCP 端口
 
 `background.ts` 将引擎复制到应用数据目录内的独立版本目录，注册当前用户的登录任务。服务只运行 Rust 和系统启动脚本，不启动 Electron 或窗口。设置更新先准备新运行目录，注册失败时恢复旧服务；只在成功后替换服务元数据。相同配置重复启动只附着，不重启正在工作的进程。设置中的后台开关控制持久启动，显式停止同时禁用登录恢复。关闭窗口仅隐藏并保留临时 Portal；明确退出客户端才会清理临时子进程。
 
-客户端托盘提供恢复窗口和退出入口；Dock 激活与第二次启动同样恢复原窗口。`client-startup.ts` 独立管理 macOS/Windows 的客户端登录自启，读取系统状态并校验写入结果，不依赖 Being 配置或 Portal 生命周期。Windows Squirrel 安装使用稳定的上级启动器，便携版使用当前可执行文件；开发模式与 Linux 不注册登录项。
+客户端托盘提供恢复窗口和退出入口；Dock 激活与第二次启动同样恢复原窗口。`client-startup.ts` 独立管理 macOS/Windows 的客户端登录自启，读取系统状态并校验写入结果，不依赖 Being 配置或 Portal 生命周期。Windows Squirrel 安装使用 Squirrel 提供的稳定启动器，便携版使用当前可执行文件；开发模式与 Linux 不注册登录项。
 
 macOS 可识别配置目录、连接链接和已知启动脚本均匹配的原 Heart Portal LaunchAgent；不改写它的脚本、TOML 或凭据。改变此类已有服务的连接/路径需要在原配置中处理。新建的 macOS 后台凭据用 `0600` 文件和 `0700` 目录保护；Windows 后台凭据用当前用户 DPAPI 加密。服务注册项和进程参数不包含 token。
 

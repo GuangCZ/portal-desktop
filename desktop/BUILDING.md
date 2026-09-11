@@ -7,7 +7,7 @@
 | 环境 | 前置条件 | 当前交付状态 |
 | --- | --- | --- |
 | macOS | Git、Node.js 22.12+、npm、Rust stable、Xcode Command Line Tools | Apple Silicon 支持 `.app` / DMG / ZIP；Intel 需对应 x64 机器另行构建 |
-| Windows | Git、Node.js 22.12+、npm、Rust stable MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK | 配置了 ZIP / Squirrel Setup；Windows 原生构建、安装和后台任务仍需实机验收 |
+| Windows | Git、Node.js 22.12+、npm、Rust stable MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK | 使用 Electron Forge 默认 Squirrel Setup；Windows 原生构建、安装和后台任务仍需实机验收 |
 | Linux | Git、Node.js 22.12+、npm、Rust stable、本机 C/C++ 链接工具及 Electron 桌面运行依赖、密钥库 | 配置了 ZIP；后台常驻未实现，未完成 Linux 桌面验收 |
 
 这些是源码构建条件。使用已打包客户端进行聊天、运行内置 Portal 不需要另装 Node 或 Rust。特定 Kit 可能另需 Node/Python、账号凭据或外部 CLI，安装窗口会说明依赖。
@@ -79,7 +79,7 @@ macOS 打开 DMG，将 `Portal Desktop.app` 拖到其中的 Applications 快捷�
 
 ### Windows 安装包的明确边界
 
-客户端已处理 Squirrel 安装、更新和卸载事件，由安装程序创建或移除快捷方式；这些短进程不会启动 Portal。Windows Setup 升级及后台任务仍需实机验收。
+客户端已处理 Squirrel 安装、更新和卸载事件，由 Electron Forge 默认 Squirrel 安装程序创建或移除快捷方式；这些短进程不会启动 Portal。Windows Setup 升级及后台任务仍需实机验收。
 
 macOS 签发与 [Portal 源仓](https://github.com/d5z/heart-portal/blob/main/scripts/package-portal-macos.py) 保持一致：使用 `Developer ID Application: D5 Inc. (7N8XHQWCNN)`、固定标识、Hardened Runtime 和安全时间戳。客户端及 Electron Helpers/Frameworks 由同一证书签名；客户端标识为 `town.beings.portal-desktop`，内置 Portal 保留源仓的 `com.aspect.heart-portal`。签名身份和标识记录在 `desktop/macos-signing.json`，升级时保持稳定。
 
