@@ -7,7 +7,9 @@ import { requirePortalSource } from './portal-source.mjs';
 const source = await requirePortalSource();
 if (!process.env.HEART_PORTAL_SOURCE) {
   execFileSync('git', ['-C', source, 'fetch', 'origin', 'main'], { stdio: 'inherit' });
-  execFileSync('git', ['-C', source, 'merge', '--no-edit', 'origin/main'], { stdio: 'inherit' });
+  // The compatibility branch may have been created independently from the
+  // upstream repository history. Allow the one-time history join explicitly.
+  execFileSync('git', ['-C', source, 'merge', '--no-edit', '--allow-unrelated-histories', 'origin/main'], { stdio: 'inherit' });
 }
 const child = spawn('cargo', ['build', '--release', '--locked', '-p', 'heart-portal'], { cwd: source, stdio: 'inherit', shell: false });
 await new Promise((resolve, reject) => { child.on('error', reject); child.on('exit', code => code === 0 ? resolve() : reject(new Error(`cargo exited with ${code}`))); });
