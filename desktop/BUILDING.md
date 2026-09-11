@@ -6,7 +6,7 @@
 
 | 环境 | 前置条件 | 当前交付状态 |
 | --- | --- | --- |
-| macOS | Git、Node.js 22.12+、npm、Rust stable、Xcode Command Line Tools | 已在 Apple Silicon 本机构建 `.app` / ZIP 并运行；Intel 需对应 x64 机器另行构建 |
+| macOS | Git、Node.js 22.12+、npm、Rust stable、Xcode Command Line Tools | Apple Silicon 支持 `.app` / DMG / ZIP；Intel 需对应 x64 机器另行构建 |
 | Windows | Git、Node.js 22.12+、npm、Rust stable MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK | 配置了 ZIP / Squirrel Setup；Windows 原生构建、安装和后台任务仍需实机验收 |
 | Linux | Git、Node.js 22.12+、npm、Rust stable、本机 C/C++ 链接工具及 Electron 桌面运行依赖、密钥库 | 配置了 ZIP；后台常驻未实现，未完成 Linux 桌面验收 |
 
@@ -70,17 +70,37 @@ npm run make
 | package / Windows | `out/Portal Desktop-win32-<arch>/portal-desktop.exe`，必须连同所在目录的其他文件使用 |
 | package / Linux | `out/Portal Desktop-linux-<arch>/portal-desktop`，必须连同所在目录的其他文件使用 |
 | make / ZIP | `out/make/zip/<platform>/<arch>/Portal Desktop-<platform>-<arch>-<version>.zip` |
+| make / macOS DMG | `out/make/Portal Desktop-<version>-<arch>.dmg` |
 | make / Windows Setup | `out/make/squirrel.windows/<arch>/Portal Desktop-<version> Setup.exe`，同目录另有 `RELEASES` 和 `portal-desktop-<version>-full.nupkg` |
 
-ZIP 含完整应用目录和内置 Portal。不要只拷贝 Windows 的单个 exe 或 macOS `.app` 中的单个可执行文件。当前没有 DMG、MSI、AppImage、deb/rpm。版本标签触发 macOS / Windows 配套构建，全部验证通过后才发布 GitHub Release。
+DMG 和 ZIP 均含完整客户端和内置 Portal；macOS 的 DMG 用于拖拽安装，ZIP 用于客户端内升级。不要只拷贝 Windows 的单个 exe 或 macOS `.app` 中的单个可执行文件。当前没有 MSI、AppImage、deb/rpm。版本标签触发 macOS / Windows 配套构建，全部验证通过后才发布 GitHub Release。
 
-macOS 可将解压后的 `Portal Desktop.app` 放到 Applications 或稳定的用户目录再启动。Windows ZIP 应解压到当前用户可写的稳定目录再运行 `portal-desktop.exe`，不要直接在压缩包预览里启动。
+macOS 打开 DMG，将 `Portal Desktop.app` 拖到其中的 Applications 快捷方式，推出磁盘映像后从应用程序启动；也可将 ZIP 解压到稳定、可写的用户应用目录。DMG 内运行及 App Translocation 路径不适合原地升级，客户端会在下载前要求更换安装位置。Windows ZIP 应解压到当前用户可写的稳定目录再运行 `portal-desktop.exe`，不要直接在压缩包预览里启动。
 
 ### Windows 安装包的明确边界
 
 客户端已处理 Squirrel 安装、更新和卸载事件，由安装程序创建或移除快捷方式；这些短进程不会启动 Portal。Windows Setup 升级及后台任务仍需实机验收。
 
-当前未配置 macOS Developer ID、公证或 Windows Authenticode。客户端支持用户主动下载并安装更新。操作系统可能提示来源未验证；正式公开发布前应配置签名并在目标系统验收。Electron 的下载校验不等于应用代码签名。
+macOS 签发与 [Portal 源仓](https://github.com/baiye0/heart-portal/blob/main/scripts/package-portal-macos.py) 保持一致：使用 `Developer ID Application: D5 Inc. (7N8XHQWCNN)`、固定标识、Hardened Runtime 和安全时间戳。客户端及 Electron Helpers/Frameworks 由同一证书签名；客户端标识为 `town.beings.portal-desktop`，内置 Portal 保留源仓的 `com.aspect.heart-portal`。签名身份和标识记录在 `desktop/macos-signing.json`，升级时保持稳定。
+
+内置 Portal 直接复用锁定子模块的 `scripts/package-portal-macos.py` 签发并验证，之后才生成 `runtime-bundle.json`。应用签名阶段保留该二进制的签名，确保发布清单描述最终包内字节。`package` / `make` 默认要求该 Developer ID 的证书和私钥位于当前钥匙串；可用 `PORTAL_DESKTOP_MAC_KEYCHAIN` 指定专用钥匙串路径。证书缺失、时间戳或签名验证失败会终止出包，不自动降级。
+
+DMG 完成后由同一 Developer ID 签名并添加安全时间戳，标识为 `town.beings.portal-desktop.dmg`；其内部应用保持原签名。`test:macos-package` 实际挂载只读 DMG，检查 Applications 快捷方式、复制安装后的签名，以及 DMG 与 ZIP 的应用一致性。
+
+与源仓当前策略一致，公证暂缓，不自动提交 Apple 公证请求；签名通过不代表已通过新 Mac 的 Gatekeeper 下载安装验收。Windows Authenticode 尚未配置。
+
+```bash
+npm run make
+npm run test:macos-package
+```
+
+完整升级验收使用 `npm run test:macos-upgrade`，需要已登录图形会话的 Mac、上述签发证书及实际签名 DMG 和 ZIP。先退出日常客户端；测试会拒绝并行启动另一份客户端。自定义构建输出目录时，同时为构建和测试设置 `PORTAL_DESKTOP_PACKAGE_OUT`。测试基线、配置保留及自动启动范围见 [UPDATING.md](UPDATING.md#验证)。
+
+GitHub 发布任务使用与 Portal 源仓同名的 `APPLE_CERTIFICATE_BASE64` 和 `APPLE_CERTIFICATE_PASSWORD` Secrets，在临时钥匙串导入证书，并在结束时清理。仓库之间的 Secrets 不会自动共享；维护者需在客户端仓库单独配置这两个 Secret。不要将私钥、P12 或密码提交到源码。
+
+没有发布证书的贡献者可显式使用 `PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npm run package` 构建仅供本地测试的 ad hoc 应用。PR CI 使用这种模式，不发布分发包；版本 tag 禁止该模式，正式安装器也拒绝这种签名。
+
+安装器在停止旧服务前验证版本、架构、Portal 摘要及两者的 Developer ID、固定标识、Hardened Runtime 和安全时间戳。临时转移目录（App Translocation）或不可写安装位置会提示先将应用移到稳定目录。
 
 ## 网络与常见失败
 
@@ -118,7 +138,7 @@ npm run make
 
 客户端设置位于 Electron 的用户数据目录（通常 macOS 为 `~/Library/Application Support/portal-desktop`，Windows 为 `%APPDATA%\portal-desktop`，Linux 为 `$XDG_CONFIG_HOME/portal-desktop` 或 `~/.config/portal-desktop`）。`PORTAL_DESKTOP_USER_DATA` 会覆盖该目录，仅用于隔离开发/测试 profile。
 
-客户端采用手动安装新版本、首次启动自动同步 Portal 与守护的配套升级方式。先结束本机任务并保存草稿，退出旧客户端并安装新版，再重新打开。配置、Kits、凭据和工作目录保留；停止状态保留，失败恢复旧服务。详细范围、发布和恢复流程见 [UPDATING.md](UPDATING.md)。
+客户端采用手动安装新版本、首次启动自动同步 Portal 与守护的配套升级方式。先结束本机任务并保存草稿，退出旧客户端并安装新版，再重新打开。配置、Kits、凭据和工作目录保留；配套升级完成后启动 Portal，没有版本变化的普通启动尊重停止状态，失败回滚恢复升级前状态。详细范围、发布和恢复流程见 [UPDATING.md](UPDATING.md)。
 
 卸载前若不再需要本机能力，在「本机 Portal」点击「停止」，确认后台常驻和登录自启已停用，再移除客户端。删除客户端安装目录本身不会卸载后台服务，也不会删除用户配置或 Kit 凭据。由客户端识别并沿用的服务同样需要先停用；不要按进程名批量杀死其他 Portal。
 
@@ -126,6 +146,6 @@ npm run make
 
 静态类型检查：`npm run typecheck`。完整测试及覆盖边界见 [TESTING.md](TESTING.md)。`npm run test:all` 会构建 package，但本地不会顺带生成 make 分发包；发布前还需执行 `npm run make`。
 
-Push / PR 的 GitHub Actions 在 macOS 和 Windows 运行测试，通过后执行 make，并上传分发包和测试报告（保存 14 天）。上传 artifact 不会创建 Release 或安装到用户机器。托管 runner 跳过真实登录服务测试；可通过手动 `native_background` job 使用专用已登录 Mac runner。Windows 原生后台任务、睡眠唤醒以及其他平台仍需实机验收。
+Push / PR 的 GitHub Actions 在 macOS 和 Windows 运行测试并上传测试报告（保存 14 天）。只有版本 tag 触发分发包构建和 Release 发布；其中 Mac DMG 和 ZIP 必须共同通过 `test:macos-package`。托管 runner 跳过真实登录服务测试；可通过手动 `native_background` job 使用专用已登录 Mac runner。Windows 原生后台任务、睡眠唤醒以及其他平台仍需实机验收。
 
 每次交付记录客户端 commit、桌面版本、Portal commit、平台/架构和验证范围。更新桌面版本使用 `npm version <新版本> --no-git-tag-version` 同步 `package.json` / lockfile，然后重新构建；不要只改原网页的 `VERSION`。依赖风险应以交付时重新执行的 `npm audit` 为准，README 中的历史构建记录不代表永久无漏洞。

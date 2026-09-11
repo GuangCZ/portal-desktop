@@ -6,10 +6,47 @@ import { createServer } from 'node:net';
 import { spawn } from 'node:child_process';
 import { ExternalPortalObserver } from '../desktop/external-portal';
 import { BackgroundPortal, command, windowsModulePath } from '../desktop/background';
-import { RuntimeUpdater, digest, type RuntimeBundle } from '../desktop/runtime-update';
+import { RuntimeUpdater, digest, restoreRuntimeMode, type RuntimeBundle } from '../desktop/runtime-update';
 import { parseConnection } from '../desktop/connection';
 import type { Settings } from '../desktop/shared';
 import { PortalSupervisor } from '../desktop/portal';
+
+it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.platform !== 'darwin')('returns an upgraded saved service to foreground mode without leaving login startup enabled', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'portal-foreground-upgrade-'));
+  const directory = path.join(root, 'profile');
+  const background = new BackgroundPortal(directory), portal = new PortalSupervisor(directory);
+  const binary = path.resolve('resources/heart-portal');
+  const settings: Settings = { endpoint: '', being: '', hasToken: true, portalName: 'foreground-upgrade', portalBinary: binary,
+    workspace: root, autoStart: false, backgroundEnabled: false, allowExec: false, kitsEnabled: false };
+  const connection = parseConnection(`http://127.0.0.1:1/${path.basename(root)}/?token=foreground-upgrade-fixture`);
+  const version = /\b(\d+\.\d+\.\d+)\b/.exec(await command(binary, ['--version']))![1];
+  const bundle: RuntimeBundle = { schema: 1, id: 'e'.repeat(64), clientVersion: '0.1.4', portalVersion: version,
+    sha256: digest(await readFile(binary)), platform: process.platform, arch: process.arch };
+  try {
+    // A disabled registration can remain after the user switches to foreground.
+    await background.enable({ ...settings, backgroundEnabled: true }, connection);
+    await background.disable();
+    expect((await new RuntimeUpdater(directory, background).sync(binary, bundle, settings, connection)).phase).toBe('updated');
+    const probePid = background.state.pid!;
+    const service = background.installedService!;
+    const next = { ...settings, portalBinary: path.join(service.root, 'heart-portal'), portalConfigPath: service.configPath };
+    await restoreRuntimeMode(background, next, async () => { await portal.start(next, connection); await portal.waitReady(); }, true);
+    expect(await background.refresh()).toMatchObject({ enabled: false, running: false });
+    expect(() => process.kill(probePid, 0)).toThrow();
+    const pid = portal.state.pid!;
+    expect(pid).toBeGreaterThan(0);
+    expect(pid).not.toBe(probePid);
+    await portal.stop();
+    expect(() => process.kill(pid, 0)).toThrow();
+    await restoreRuntimeMode(background, next, () => portal.start(next, connection), false);
+    expect(portal.managing).toBe(false);
+    expect(await background.refresh()).toMatchObject({ enabled: false, running: false });
+  } finally {
+    await portal.stop(); await background.disable();
+    if (background.installedService) await rm(background.installedService.file, { force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+}, 45_000);
 
 it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || !['darwin', 'win32'].includes(process.platform))('runs the bundled engine in the foreground without relocating or starting a second supervisor', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'town-foreground-'));

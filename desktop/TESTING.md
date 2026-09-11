@@ -19,12 +19,14 @@
 | 桌面集成 | 实际 Electron 安装包、本地 HTTP/WebSocket 模拟 Being、真实 Rust Portal、附件与 SSE、文件写入、stdio Kit、模型设置、主题、草稿保留、对话刻度索引/搜索、过程区停止按钮和配置重载 | `npm run test:e2e` |
 | 原生后台服务 | 实际 macOS LaunchAgent，关闭客户端后工具调用、SIGKILL 恢复、无界面启动登录项、附着和停用持久化 | 已包含在 macOS 桌面集成中 |
 | Town 界面 | 模拟 HTTPS 数据通过真实 IPC/代理，验证篝火、收发件箱、认证、正文净化、分页、Kit 参数及实际导入 | `npm run test:town-ui` |
+| macOS 安装包 | DMG 只读挂载、Applications 快捷方式、复制安装后的完整签名、DMG/ZIP 一致性及 ZIP 安装前检查，不启动客户端窗口 | `npm run test:macos-package` |
+| macOS 客户端升级 | 从 DMG 安装并全新启动签名包，在独立 profile 中从较低版本测试基线经 Release 请求、ZIP 下载、替换和 LaunchServices 启动新版；保留原配置、工作文件和工具能力，确认运行随包 Portal 且没有重复客户端 | `npm run test:macos-upgrade` |
 
 本地模拟 Being 能稳定复现协议及客户端行为，不代表真实云端当前可用，也不测试 LLM 回复质量或真实 Town token 的授权情况。登录项测试通过卸载/重新加载临时注册项模拟启动过程，不会重启或注销电脑。睡眠唤醒和 Windows 计划任务全生命周期仍需目标机器补充验收。Windows 专用 Rust 测试在 Mac 上按引擎声明跳过。
 
 ## CI 接入
 
-`.github/workflows/desktop-tests.yml` 在 push、pull request 和手动运行时执行 macOS/Windows 矩阵，构建并运行客户端和引擎测试，通过后执行 `npm run make` 并上传平台分发包。Portal 源码与客户端位于同一仓库，由同一次提交记录，无需跨仓库 checkout 权限。
+`.github/workflows/desktop-tests.yml` 在分支 push、pull request 和手动运行时执行 macOS/Windows 矩阵，构建并运行客户端和引擎测试，上传测试报告。普通 CI 的 macOS 包仅使用显式本地测试签名，不作为分发包。正式签名、安装包检查和发布由版本 tag 触发的 `.github/workflows/release.yml` 执行；完整图形升级测试需在具备发布证书的已登录 Mac 上单独运行。Portal 源码由客户端仓库的子模块引用锁定。
 
 托管 runner 设置 `PORTAL_DESKTOP_TEST_BACKGROUND=0`，报告中显示 **SKIPPED**；普通 Portal 子进程、真实 Relay/工具调用及 Rust 测试仍执行。不能把这个结果当成登录自启验收。
 
@@ -47,4 +49,4 @@
 
 桌面 E2E 统一通过 `tests/support/electron-lifecycle.mjs` 启动：同一时间仅允许一个测试实例，单个测试设 5 分钟上限，退出等待最多 8 秒；超时仅清理该次 launch 返回的子进程。原生桌面 E2E 会显示窗口，不在日常使用客户端时自动运行。浏览器生命周期单元测试使用替身验证销毁窗口后不再访问 shell。
 
-本次原生界面调整已通过 TypeScript、85 项单元测试（5 项平台/环境测试跳过），以及 headless Chrome 中实际 renderer + 本地 IPC fixture 的回复、草稿、字数、诊断、字号检查；没有重新运行图形 Electron E2E，也没有发送真实 Town 消息。
+macOS 安装包与完整升级测试需要实际 Developer ID 签名包，签发条件见 [BUILDING.md](BUILDING.md)。完整升级测试会打开真实客户端窗口，运行前需退出日常客户端；它使用签名包构造较低版本基线，不代表覆盖所有历史发布版本。签名和升级通过也不代表 Apple 公证或首次下载的 Gatekeeper 检查通过，详见 [UPDATING.md](UPDATING.md#验证)。

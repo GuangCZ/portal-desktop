@@ -12,7 +12,7 @@ export class SettingsStore {
   constructor(private directory: string, private storage: SecretStorage, binary: string) {
     this.settings = { endpoint: '', being: '', hasToken: false, workspace: path.join(os.homedir(), 'portal-desktop Workspace'),
       portalBinary: binary, portalName: `portal-desktop-${os.hostname().replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 50)}`,
-      autoStart: false, backgroundEnabled: true, allowExec: true, kitsEnabled: false };
+      autoStart: false, backgroundEnabled: true, allowExec: true, kitsEnabled: true };
   }
   async load() {
     let raw: string;

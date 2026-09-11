@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { access, chmod, copyFile, mkdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { BackgroundPortal, atomic, command, fingerprint, unixRunner, windowsRunner, type Service } from './background';
+import { BackgroundPortal, atomic, fingerprint, unixRunner, windowsRunner, type Service } from './background';
 import type { Connection } from './connection';
 import type { Settings } from './shared';
 import { readPortalSample, readPortalReady } from './portal-status';
@@ -31,6 +31,18 @@ export async function loadRuntimeBundle(resources: string): Promise<{ bundle: Ru
   return { bundle, binary };
 }
 
+// An upgrade may use the OS supervisor to check the candidate, but it must not
+// turn a foreground-only client's disabled login service into a permanent one.
+export async function restoreRuntimeMode(background: BackgroundPortal, settings: Settings,
+  startForeground: () => Promise<unknown>, start: boolean) {
+  if (!settings.backgroundEnabled) {
+    await background.disable();
+    if (start || settings.autoStart) await startForeground();
+  } else if (start && !background.state.enabled) {
+    await background.load(background.installedService!);
+  }
+}
+
 // Only invoked under the main process mutation queue and Electron's profile lock.
 // Journal precedes any stop; recovery always restores the old registration first.
 export class RuntimeUpdater {
@@ -38,12 +50,6 @@ export class RuntimeUpdater {
   constructor(private directory: string, private background: BackgroundPortal,
     private platform = process.platform,
     private ready: (service: Service) => Promise<void> = service => this.waitReady(service),
-    private version: (binary: string) => Promise<string> = async binary => {
-      const output = await command(binary, ['--version']);
-      const match = /\b(\d+\.\d+\.\d+)\b/.exec(output);
-      if (!match) throw new Error('无法识别原 Portal 版本，未停止服务。');
-      return match[1];
-    },
     private discoverExternal = (connection: Connection, exclude?: string) => new ExternalPortalObserver(undefined, platform).forUpgrade(connection, background.label, exclude),
   ) { this.journal = path.join(directory, 'runtime-update.json'); }
 
@@ -88,30 +94,15 @@ export class RuntimeUpdater {
     if (digest(await readFile(binary)) !== bundle.sha256) throw new Error('Portal 文件校验失败，旧服务未修改。');
     const primary = external[0] || previous;
     const additional = external.filter(s => s.root !== previous.root);
-    // A newer independently installed engine remains newer, but its old
-    // supervisor is still stopped and replaced by the current client runner.
-    const packageId = bundle.id;
-    let legacyProcessHealth = false;
-    for (const service of [previous, ...additional]) {
-      const oldBinary = service.binary || (service.existing ? settings.portalBinary : path.join(service.root, this.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal'));
-      const oldVersion = await this.version(oldBinary);
-      if (compareVersions(oldVersion, bundle.portalVersion) > 0) {
-        const bytes = await readFile(oldBinary);
-        const sha256 = digest(bytes);
-        // Upstream builds may predate our structured telemetry interface even
-        // when their version is newer. Never downgrade them to gain telemetry.
-        legacyProcessHealth = !bytes.includes(Buffer.from('HEART_PORTAL_STATUS_FILE'));
-        binary = oldBinary;
-        bundle = { ...bundle, portalVersion: oldVersion, sha256, id: digest(Buffer.from(`${packageId}:${sha256}`)) };
-      }
-    }
+    // A client release owns one tested engine/runner pair. Preserve the user's
+    // configuration, but always activate the binary covered by this manifest.
     if (!additional.length && previous.kind !== 'portable' && previous.bundleId === bundle.id && digest(await readFile(path.join(previous.root, this.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal'))) === bundle.sha256) return { phase: 'current', message: '客户端、Portal 与守护程序已同步。', portalVersion: bundle.portalVersion };
     const config = primary.configPath || settings.portalConfigPath || path.join(primary.root, 'portal.toml');
     await access(config);
     const wasEnabled = previous.kind === 'portable' || (await this.background.refresh()).enabled;
     const root = path.join(this.background.runtimeDirectory, randomUUID());
     const candidate: Service = { label: previous.label, file: previous.kind === 'portable' ? path.join(root, 'launch.plist') : previous.file, root, existing: false, login: previous.login,
-      name: primary.name || settings.portalName, environment: primary.environment, bundleId: bundle.id, legacyProcessHealth, configPath: config, cwd: primary.cwd || (primary.existing ? primary.root : settings.workspace),
+      name: primary.name || settings.portalName, environment: primary.environment, bundleId: bundle.id, configPath: config, cwd: primary.cwd || (primary.existing ? primary.root : settings.workspace),
       fingerprint: fingerprint({ ...settings, portalBinary: path.join(root, this.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal'), portalConfigPath: config, workspace: primary.cwd || settings.workspace, portalEnvironmentPath: primary.environment?.PATH || settings.portalEnvironmentPath, portalName: primary.name || settings.portalName }, connection) };
     await mkdir(root, { recursive: true, mode: 0o700 });
     try {

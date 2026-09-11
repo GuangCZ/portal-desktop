@@ -19,6 +19,7 @@ function exactlyOne(items, label) {
   return items[0];
 }
 await mkdir(output, { recursive: true });
+if ((await readdir(output)).length) throw new Error('Release staging directory must be empty; refusing to include stale assets.');
 for (const [artifact, platform, arch, label] of [
   ['portal-desktop-macos-14', 'darwin', 'arm64', 'macos-arm64'],
   ['portal-desktop-windows-latest', 'win32', 'x64', 'windows-x64'],
@@ -49,6 +50,12 @@ with zipfile.ZipFile(sys.argv[1]) as z:
   if (archive.binary !== bundle.sha256) throw new Error(`${label} engine checksum mismatch`);
   await copyFile(zip, path.join(output, `portal-desktop-${version}-${label}.zip`));
   await copyFile(metadata, path.join(output, `runtime-bundle-${label}.json`));
+  if (platform === 'darwin') {
+    // Signature, mount/copy installation and ZIP parity are checked on macOS
+    // before this artifact is uploaded. Both formats ship in the same release.
+    const dmg = exactlyOne(contents.filter(f => f.endsWith('.dmg')), 'macOS DMG');
+    await copyFile(dmg, path.join(output, `portal-desktop-${version}-${label}.dmg`));
+  }
   if (platform === 'win32') {
     const setup = exactlyOne(contents.filter(f => /setup\.exe$/i.test(f)), 'Windows Setup');
     await copyFile(setup, path.join(output, `portal-desktop-${version}-${label}-Setup.exe`));

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { BackgroundPortal, type Command } from '../desktop/background';
-import { RuntimeUpdater, digest, type RuntimeBundle } from '../desktop/runtime-update';
+import { RuntimeUpdater, digest, restoreRuntimeMode, type RuntimeBundle } from '../desktop/runtime-update';
 import { parseConnection } from '../desktop/connection';
 import type { Settings } from '../desktop/shared';
 const dirs: string[] = [];
@@ -41,7 +41,7 @@ async function fixture(platform: 'darwin' | 'win32' = 'darwin') {
   await writeFile(previous.configPath!, original);
   const binary = path.join(root, 'new-engine'); await writeFile(binary, 'new executable');
   const bundle: RuntimeBundle = { schema: 1, id: 'a'.repeat(64), clientVersion: '0.1.1', portalVersion: '0.8.1', sha256: digest(await readFile(binary)), platform, arch: process.arch };
-  const updater = (ready: (service: any) => Promise<void> = async () => {}, version = '0.8.1') => new RuntimeUpdater(profile, background, platform, ready, async () => version, async () => []);
+  const updater = (ready: (service: any) => Promise<void> = async () => {}) => new RuntimeUpdater(profile, background, platform, ready, async () => []);
   calls.length = 0;
   return { root, profile, background, previous, original, settings, connection, binary, bundle, calls, updater };
 }
@@ -77,14 +77,30 @@ for (const platform of ['darwin', 'win32'] as const) {
     expect(f.background.state.enabled).toBe(true); expect(f.background.state.running).toBe(true);
     expect(f.calls.some(s => s.includes(platform === 'darwin' ? 'bootstrap' : 'Enable-ScheduledTask'))).toBe(true);
   });
+  it(`keeps ${platform} login startup disabled for a foreground-only client after upgrading a saved service`, async () => {
+    const f = await fixture(platform);
+    const settings = { ...f.settings, backgroundEnabled: false, autoStart: false };
+    await f.background.disable();
+    await f.updater().sync(f.binary, f.bundle, settings, f.connection);
+    const start = vi.fn(async () => {
+      expect(f.background.state.enabled).toBe(false);
+      expect(f.background.state.running).toBe(false);
+    });
+    await restoreRuntimeMode(f.background, settings, start, true);
+    expect(start).toHaveBeenCalledTimes(1);
+    // A later ordinary launch must respect the user's disabled startup option.
+    await restoreRuntimeMode(f.background, settings, start, false);
+    expect(start).toHaveBeenCalledTimes(1);
+  });
 }
-it('retains a newer engine while updating its supervisor once, and rejects corrupt packages', async () => {
+it('activates the exact bundled engine once even when the old service used a different binary, and rejects corrupt packages', async () => {
   const f = await fixture();
-  const current = await readFile(path.join(f.previous.root, 'heart-portal'));
-  expect((await f.updater(undefined, '0.8.2').sync(f.binary, f.bundle, f.settings, f.connection)).phase).toBe('updated');
+  const current = await readFile(f.binary);
+  expect((await f.updater().sync(f.binary, f.bundle, f.settings, f.connection)).phase).toBe('updated');
   expect(await readFile(path.join(f.background.installedService!.root, 'heart-portal'))).toEqual(current);
+  expect(f.background.installedService!.bundleId).toBe(f.bundle.id);
   f.calls.length = 0;
-  expect((await f.updater(undefined, '0.8.2').sync(f.binary, f.bundle, f.settings, f.connection)).phase).toBe('current');
+  expect((await f.updater().sync(f.binary, f.bundle, f.settings, f.connection)).phase).toBe('current');
   expect(f.calls).toEqual([]);
   await writeFile(f.binary, 'corrupted');
   await expect(f.updater().sync(f.binary, f.bundle, f.settings, f.connection)).rejects.toThrow('校验失败');
@@ -127,7 +143,7 @@ for (const platform of ['darwin', 'win32'] as const) {
     const stop = f.background.unload.bind(f.background), install = f.background.installRegistration.bind(f.background);
     vi.spyOn(f.background, 'unload').mockImplementation(async service => { events.push('stop:' + service.root); if (service.kind !== 'portable') await stop(service); });
     vi.spyOn(f.background, 'installRegistration').mockImplementation(async service => { events.push('install'); await install(service); });
-    const updater = new RuntimeUpdater(f.profile, f.background, platform, async () => {}, async () => '0.8.1', async () => [external]);
+    const updater = new RuntimeUpdater(f.profile, f.background, platform, async () => {}, async () => [external]);
     await updater.sync(f.binary, f.bundle, f.settings, f.connection);
     expect(events).toEqual(['stop:' + f.previous.root, 'stop:' + root, 'install']);
     expect(f.background.installedService).toMatchObject({ configPath, cwd: root, name: 'original-name', environment: { ORIGINAL: 'preserved' } });
@@ -144,7 +160,7 @@ it('restores an independent supervisor if the new engine fails', async () => {
   const restored: string[] = [];
   vi.spyOn(f.background, 'unload').mockImplementation(async service => { if (service.kind !== 'portable') await stop(service); });
   vi.spyOn(f.background, 'load').mockImplementation(async service => { if (service.kind === 'portable') restored.push(service.root); else await start(service); });
-  const updater = new RuntimeUpdater(f.profile, f.background, 'darwin', async () => { throw new Error('bad candidate'); }, async () => '0.8.1', async () => [external]);
+  const updater = new RuntimeUpdater(f.profile, f.background, 'darwin', async () => { throw new Error('bad candidate'); }, async () => [external]);
   await expect(updater.sync(f.binary, f.bundle, f.settings, f.connection)).rejects.toThrow('已恢复旧服务');
   expect(restored).toEqual([root]);
   expect(f.background.installedService).toEqual(f.previous);

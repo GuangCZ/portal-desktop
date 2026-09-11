@@ -9,7 +9,7 @@ import { SettingsStore } from './settings';
 import { PortalSupervisor } from './portal';
 import { ExternalPortalObserver } from './external-portal';
 import { PortalTakeover } from './portal-takeover';
-import { RuntimeUpdater, loadRuntimeBundle, type RuntimeUpdateResult } from './runtime-update';
+import { RuntimeUpdater, loadRuntimeBundle, restoreRuntimeMode, type RuntimeUpdateResult } from './runtime-update';
 import { UpdateChecker } from './updates';
 import { ClientInstall } from './client-install';
 import { stageInstaller } from './manual-installer';
@@ -248,12 +248,12 @@ async function ready() {
         buttons: state.phase === 'available' && app.isPackaged ? ['稍后', '下载并升级', '打开发布页'] : ['关闭', '打开发布页'], defaultId: 0, cancelId: 0 });
       if (state.phase === 'available' && app.isPackaged && answer.response === 1) {
         window?.setProgressBar(2);
-        let handoff: () => Promise<void>;
+        let handoff: Awaited<ReturnType<typeof stageInstaller>>;
         try { handoff = await stageInstaller(directory, state.latestVersion!, PORTAL_DESKTOP_UPDATE_REPOSITORY, process.execPath, net.fetch.bind(net) as typeof fetch); }
         finally { window?.setProgressBar(-1); }
-        if (!window || quitting) return;
+        if (!window || quitting) { await handoff.discard(); return; }
         const confirmed = await dialog.showMessageBox(window, { type: 'info', title: '安装包已就绪', message: `安装 ${CLIENT_NAME} ${state.latestVersion}`, detail: '已完成下载和校验。继续将停止 Portal 及守护、关闭客户端，安装成功后自动打开新版并恢复运行。执行中的本机任务会中断，请先保存草稿。', buttons: ['稍后', '停止 Portal 并安装'], defaultId: 0, cancelId: 0 });
-        if (confirmed.response !== 1) return;
+        if (confirmed.response !== 1) { await handoff.discard(); return; }
         await exclusive(async () => {
           if (recoveryBlocked) throw new Error('请先完成上次升级恢复。');
           const intent = await clientInstall.prepare(app.getVersion(), state.latestVersion!, store.connection, portal.managing);
@@ -340,7 +340,7 @@ async function ready() {
         throw error;
       }
       await publishBackground();
-    } else await portal.start(store.settings, store.connection);
+    } else await portal.start(store.settings, store.connection, background.installedService?.environment);
   };
   const publishCurrentPortal = async () => { if (takeover.holdMessage || !portal.managing) await publishBackground(); };
   handle('beings:connection-defaults', async (input: Pick<SaveSettings, 'connectionLink'>) => {
@@ -543,7 +543,7 @@ async function ready() {
             : { phase: 'error', message: '客户端安装未完成，已恢复安装前的 Portal。' };
           return;
         }
-        const updater = new RuntimeUpdater(directory, background, process.platform, undefined, undefined,
+        const updater = new RuntimeUpdater(directory, background, process.platform, undefined,
           async () => {
             const saved = installIntent?.services.map(s => s.service).filter(s => s.kind === 'portable') || [];
             // New external services must go through the confirmation above.
@@ -562,12 +562,16 @@ async function ready() {
           if (runtimeUpdate.phase !== 'skipped') {
             if (runtimeUpdate.phase === 'current' || runtimeUpdate.phase === 'updated') {
               const service = background.installedService!;
-              if (installIntent && runtimeUpdate.phase === 'current') await background.load(service);
               await store.save({ ...store.settings, portalBinary: path.join(service.root, process.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal'), portalConfigPath: service.configPath, workspace: service.cwd || store.settings.workspace, portalEnvironmentPath: service.environment?.PATH || store.settings.portalEnvironmentPath, portalName: service.name || store.settings.portalName });
+              await restoreRuntimeMode(background, store.settings, async () => {
+                await portal.start(store.settings, connection, service.environment);
+                await portal.waitReady();
+              },
+                runtimeUpdate.phase === 'updated' || Boolean(installIntent));
               if (installIntent) await clientInstall.finish();
             }
-            await publishBackground();
-            // The completed upgrade owns and starts the replacement service.
+            await publishCurrentPortal();
+            // The replacement follows the existing background/foreground preference.
             return;
           }
           if (await observeExternal()) {
@@ -579,9 +583,12 @@ async function ready() {
         }
         if (installIntent || store.settings.backgroundEnabled || store.settings.autoStart) {
           if (await observeExternal()) { /* Only identity-verified supervision is migrated. */ }
-          else if (installIntent || store.settings.backgroundEnabled) {
+          else if (store.settings.backgroundEnabled) {
             await background.enable(store.settings, connection); await publishBackground();
-          } else await portal.start(store.settings, connection);
+          } else {
+            await portal.start(store.settings, connection);
+            if (installIntent) await portal.waitReady();
+          }
         }
         if (installIntent) await clientInstall.finish();
       });

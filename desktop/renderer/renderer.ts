@@ -105,6 +105,12 @@ function renderPortal(state: PortalState) {
   $('portal-message').textContent = state.message;
   $('portal-pid').textContent = state.pid ? `PID ${state.pid}${state.managed === false ? ' · 外部管理' : ''}` : '—';
   $('portal-pid').title = state.runtimePath || '';
+  // A saved but unloaded background service does not describe a Portal managed by the client.
+  $('background-status').textContent = state.managed === false
+    ? `${state.runtimePath ? `当前运行目录：${state.runtimePath}。` : ''}客户端仅观察；自启与守护状态以原管理方式为准。`
+    : snapshot?.background?.enabled
+      ? `${snapshot.background.message}。点击“停止”会同时停用登录自启。`
+      : '后台常驻与登录自启未开启；退出客户端时 Portal 会停止。';
   const stopped = ['stopped', 'error', 'external'].includes(state.phase);
   $<HTMLButtonElement>('start-portal').disabled = Boolean(portalAction) || !snapshot?.settings.hasToken || (!stopped && state.managed !== false);
   $('start-portal').textContent = portalAction === 'start' ? '正在启动…' : state.managed === false ? '使用客户端 Portal' : '启动 Portal';
@@ -122,7 +128,6 @@ function applySnapshot(next: Snapshot, reload = false) {
   $('startup-notice').textContent = next.notice || '';
   $('startup-notice').hidden = !next.notice;
   document.querySelectorAll<HTMLButtonElement>('[data-chat-action], #toggle-chat-search').forEach(button => { button.disabled = !settings.hasToken; });
-  $('background-status').textContent = next.portal.managed === false ? `当前运行目录：${next.portal.runtimePath}。客户端仅观察；自启与守护状态以原管理方式为准。` : next.background?.enabled ? `${next.background.message}。点击“停止”会同时停用登录自启。` : next.background?.message || '后台服务未启用；临时启动的 Portal 随客户端退出。';
   $('conversation-name').textContent = settings.being || 'Being';
   $('workspace-label').textContent = settings.workspace;
   $<HTMLButtonElement>('open-loom').disabled = !settings.hasToken;

@@ -22,7 +22,8 @@ export class PortalSupervisor extends EventEmitter {
   private crashes = 0;
   private secrets: string[] = [];
   private stopPromise: Promise<void> | null = null;
-  private run: { settings: Settings; connection: Connection; configPath: string } | null = null;
+  private run: { settings: Settings; connection: Connection; configPath: string; environment: Record<string, string> } | null = null;
+  private launchNonce = '';
   state: PortalState = { phase: 'stopped', message: '本机 Portal 尚未启动', logs: [] };
 
   get managing() { return Boolean(this.child || this.wanted); }
@@ -37,7 +38,7 @@ export class PortalSupervisor extends EventEmitter {
     this.state.logs = [...this.state.logs.slice(-299), line];
     this.publish({});
   }
-  async start(settings: Settings, connection: Connection) {
+  async start(settings: Settings, connection: Connection, environment: Record<string, string> = {}) {
     if (this.stopPromise) await this.stopPromise;
     if (this.wanted || this.child) return this.state;
     await access(settings.portalBinary, process.platform === 'win32' ? constants.F_OK : constants.X_OK);
@@ -46,25 +47,44 @@ export class PortalSupervisor extends EventEmitter {
     if (settings.portalConfigPath) await access(configPath, constants.R_OK);
     else await writeFile(configPath, portalConfig(settings), { mode: 0o600 });
     this.secrets = [connection.token, connection.relaySecret];
-    this.run = { settings: { ...settings }, connection: { ...connection }, configPath };
+    this.run = { settings: { ...settings }, connection: { ...connection }, configPath, environment: { ...environment } };
     this.wanted = true;
     this.crashes = 0;
     this.launch();
     return this.state;
   }
+  async waitReady(timeoutMs = 25_000) {
+    const child = this.child, nonce = this.launchNonce;
+    const deadline = Date.now() + timeoutMs;
+    let readySince = 0;
+    try {
+      while (Date.now() < deadline) {
+        if (!child?.pid || this.child !== child || !this.wanted || child.exitCode !== null || child.signalCode !== null) {
+          throw new Error('配套 Portal 在启动检查期间退出。');
+        }
+        if (await readPortalReady(path.join(this.directory, '.portal-ready.json'), child.pid, nonce)) {
+          if (!readySince) readySince = Date.now();
+          if (Date.now() - readySince >= 2000) return;
+        } else readySince = 0;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      throw new Error('配套 Portal 未通过本地启动检查。');
+    } catch (error) { await this.stop(); throw error; }
+  }
   private launch() {
     if (!this.wanted || !this.run) return;
-    const { settings, connection, configPath } = this.run;
+    const { settings, connection, configPath, environment } = this.run;
     this.publish({ phase: 'starting', message: '正在启动本机 Portal…', pid: undefined, managed: true, runtimePath: undefined, conflict: false });
     const startedAt = Date.now();
     const nonce = randomUUID();
+    this.launchNonce = nonce;
     const root = this.directory;
     const statusPath = path.join(root, '.portal-connection-status.json');
     const child = this.spawnProcess(settings.portalBinary, ['--config', configPath, '--name', settings.portalName], {
       cwd: settings.workspace,
       shell: false, windowsHide: true, detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...(settings.portalEnvironmentPath ? { PATH: settings.portalEnvironmentPath } : {}), PORTAL_CONNECT_LINK: connection.link, HEART_PORTAL_SUPERVISED: '1', HEART_PORTAL_CLIENT_MANAGED: '1', HEART_PORTAL_STATUS_FILE: statusPath, HEART_PORTAL_STATUS_NONCE: nonce,
+      env: { ...process.env, ...environment, ...(settings.portalEnvironmentPath ? { PATH: settings.portalEnvironmentPath } : {}), PORTAL_CONNECT_LINK: connection.link, HEART_PORTAL_SUPERVISED: '1', HEART_PORTAL_CLIENT_MANAGED: '1', HEART_PORTAL_STATUS_FILE: statusPath, HEART_PORTAL_STATUS_NONCE: nonce,
         HEART_PORTAL_READY_FILE: path.join(root, '.portal-ready.json'), HEART_PORTAL_READY_NONCE: nonce,
         RUST_LOG: 'info', NO_COLOR: '1' },
     });

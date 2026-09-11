@@ -50,7 +50,7 @@ The event stream subscribes to activity after confirming identity. It reconnects
 
 ### Portal and Kits
 
-Portal runs as a separate Rust process. Its source is pinned through a Git submodule and built and distributed with the client. File tools and search use the selected workspace. Command execution is enabled by default, matching native Portal, and can be disabled in connection settings. Kits remain disabled by default and can be enabled as needed. Existing configurations retain their tool settings.
+Portal runs as a separate Rust process. Its source is pinned through a Git submodule and built and distributed with the client. File tools and search use the selected workspace. Command execution, Kits, and custom tools are enabled by default, matching native Portal, and can be disabled in connection settings. Existing configurations retain their tool settings.
 
 Kit tools use Portal's existing MCP call path. The installer currently supports Grove / GitHub-hosted `tar.gz` packages, stdio Kits, and dependency installation from `package.json` or `requirements.txt`. Prepare Node, Python, or other required runtimes separately. Installation presents configuration and dependencies, then checks MCP `initialize` / `tools/list` before completing. Local directory import does not run installation scripts or overwrite a Kit with the same name. Custom `provision.install` / `post_install` commands are not run automatically.
 
@@ -64,12 +64,14 @@ Check [Releases](https://github.com/baiye0/Town-Client/releases) for packages an
 
 | Platform | Support and validation scope |
 | --- | --- |
-| macOS Apple Silicon | Built and run locally; `.app` / ZIP, tray behavior, and client and Portal login startup are implemented |
+| macOS Apple Silicon | DMG installation and ZIP updates from GitHub Releases; tray behavior and client and Portal login startup |
 | macOS Intel | Requires a build on the matching architecture; not yet validated |
 | Windows | ZIP / Squirrel packaging, login tasks, and CI are configured; installation, upgrades, and the full lifecycle still require validation on Windows |
 | Linux | ZIP packaging and temporary Portal operation are configured; desktop behavior is not yet validated, and client login startup and background Portal mode are not supported |
 
-macOS Developer ID signing, notarization, and Windows Authenticode are not configured. See [Building and distribution](desktop/BUILDING.md) for platform prerequisites, output locations, and installation steps.
+macOS releases follow Heart Portal's signing policy: the same D5 Developer ID, stable identifiers, hardened runtime, and secure timestamps for the entire app and bundled Portal. Notarization is deferred, as in the upstream project; Windows Authenticode is not configured. See [Building and distribution](desktop/BUILDING.md) for signing prerequisites, contributor test builds, and installation steps.
+
+On macOS, download `portal-desktop-<version>-macos-arm64.dmg`, open it, and drag **Portal Desktop** to **Applications**. Eject the disk image and launch the installed app. For later versions, choose **Check for updates / 检查更新 → Download and upgrade / 下载并升级**. The client downloads the matching ZIP and checksum from the latest stable GitHub Release, validates the signed app, and restarts with the bundled Portal and your existing configuration. Do not run updates from inside the disk image. See [Updating](desktop/UPDATING.md) for recovery and validation limits.
 
 ### Connect for the first time
 
@@ -137,7 +139,7 @@ npm run test:browser
 
 The full suite uses isolated profiles, local service fixtures, and a real Portal, and writes reports to `test-results/`. On macOS, local tests may also register temporary LaunchAgents. Electron E2E tests open windows, permit one test instance at a time, and clean up their own processes. They do not use real Being credentials or post to the live Town.
 
-The [CI workflow](.github/workflows/desktop-tests.yml) configures macOS / Windows checks, packaging, and report uploads. Hosted runners skip real login-service tests; a configured workflow is not evidence that every platform has been validated. Recent UI changes passed type checks, unit tests, and selected headless renderer checks. A full native Electron regression run remains pending; see [Testing](desktop/TESTING.md) for the recorded scope.
+The [CI workflow](.github/workflows/desktop-tests.yml) runs macOS / Windows checks and uploads reports. Version tags trigger distribution builds; the Mac release also mounts and verifies the signed DMG, its copied application, and the matching ZIP update preflight. Hosted runners skip real login-service tests; a configured workflow is not evidence that every platform has been validated. See [Testing](desktop/TESTING.md) for the recorded scope.
 
 ### Repository layout
 

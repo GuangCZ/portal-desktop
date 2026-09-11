@@ -29,10 +29,13 @@ describe('Portal supervision', () => {
     const config = path.join(f.dir, 'existing.toml');
     const source = 'workspace = "/existing"\n[tools]\nscreenshot = true\n[security]\nexec_allowlist = ["git"]\n';
     await writeFile(config, source);
-    await f.portal.start({ ...settings, portalConfigPath: config, portalEnvironmentPath: '/custom/bin:/usr/bin' }, connection);
+    await f.portal.start({ ...settings, portalConfigPath: config, portalEnvironmentPath: '/custom/bin:/usr/bin' }, connection,
+      { TOOL_FIXTURE_SETTING: 'preserved', HEART_PORTAL_SUPERVISED: '0' });
     const call = f.spawn.mock.calls[0] as unknown as [string, string[], any];
     expect(call[1]).toContain(config);
     expect(call[2].env.PATH).toBe('/custom/bin:/usr/bin');
+    expect(call[2].env.TOOL_FIXTURE_SETTING).toBe('preserved');
+    expect(call[2].env.HEART_PORTAL_SUPERVISED).toBe('1');
     expect(await readFile(config, 'utf8')).toBe(source);
     await expect(readFile(path.join(f.dir, 'desktop-portal.toml'))).rejects.toThrow();
     f.children[0].emit('exit', 0); await f.portal.stop();
@@ -71,6 +74,14 @@ describe('Portal supervision', () => {
     await vi.advanceTimersByTimeAsync(5000); expect(f.spawn).toHaveBeenCalledTimes(2);
     f.children[1].emit('exit', 0); await f.portal.stop();
     await vi.advanceTimersByTimeAsync(10000); expect(f.spawn).toHaveBeenCalledTimes(2);
+  });
+  it('fails an upgrade startup check after the first exit and cancels its pending restart', async () => {
+    const f = await fixture(); await f.portal.start(settings, connection);
+    f.children[0].emit('exit', 1);
+    await expect(f.portal.waitReady()).rejects.toThrow('启动检查期间退出');
+    expect(f.portal.managing).toBe(false);
+    expect(f.portal.state.phase).toBe('stopped');
+    expect(f.spawn).toHaveBeenCalledTimes(1);
   });
   it.each([1, 73])('does not retry an instance conflict returned with exit code %s', async code => {
     const f = await fixture(); await f.portal.start(settings, connection); vi.useFakeTimers();

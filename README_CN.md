@@ -50,7 +50,7 @@ Town 使用独立配对身份，不从 Loom 连接推测授权。可用 Being �
 
 ### Portal 与 Kit
 
-Portal 作为独立 Rust 进程运行，源码通过 Git 子模块锁定，与客户端一起构建和发布。文件工具与搜索使用所选工作目录；命令执行默认开启，与原生 Portal 一致，可在连接设置中关闭。Kits 默认关闭，按需开启。已有配置沿用原来的工具设置。
+Portal 作为独立 Rust 进程运行，源码通过 Git 子模块锁定，与客户端一起构建和发布。文件工具与搜索使用所选工作目录；命令执行、Kits 和自定义工具默认开启，与原生 Portal 一致，可在连接设置中关闭。已有配置沿用原来的工具设置。
 
 Kit 工具沿用 Portal 的 MCP 调用链。当前安装器支持 Grove / GitHub 托管的 `tar.gz`、stdio Kit，以及 `package.json` / `requirements.txt` 依赖安装；Node、Python 或其他运行时需预先准备。安装前展示配置和依赖，经过 MCP `initialize` / `tools/list` 检查后完成安装。本地目录导入不运行安装脚本、不覆盖同名 Kit；自定义 `provision.install` / `post_install` 不自动执行。
 
@@ -64,12 +64,14 @@ Portal 支持刷新 Kit 清单。清单存在、进程运行与第三方服务�
 
 | 平台 | 当前支持与验证范围 |
 | --- | --- |
-| macOS Apple Silicon | 已完成本机构建和运行；支持 `.app` / ZIP、托盘、客户端及 Portal 登录自启 |
+| macOS Apple Silicon | 支持 DMG 安装、从 GitHub Release 获取 ZIP 升级、托盘、客户端及 Portal 登录自启 |
 | macOS Intel | 需在对应架构机器构建；尚未完成验收 |
 | Windows | 已配置 ZIP / Squirrel 安装包、登录任务和 CI；安装、升级与完整生命周期仍需实机验收 |
 | Linux | 已配置 ZIP 与临时 Portal；尚未完成桌面验收，不支持当前的客户端登录自启和 Portal 后台常驻 |
 
-当前未配置 macOS Developer ID、公证和 Windows Authenticode。各平台前置条件、产物位置与安装方式见 [构建与交付说明](desktop/BUILDING.md)。
+macOS 发布与 Portal 源仓的签发策略一致：整个客户端及内置 Portal 使用同一 D5 Developer ID、固定标识、Hardened Runtime 和安全时间戳。公证与源仓一样暂缓；Windows Authenticode 尚未配置。签名前置条件、贡献者测试构建与安装方式见 [构建与交付说明](desktop/BUILDING.md)。
+
+macOS 下载 `portal-desktop-<版本>-macos-arm64.dmg`，打开后将 **Portal Desktop** 拖入 **Applications（应用程序）**，推出磁盘映像，再从应用程序打开。以后通过「检查更新 → 下载并升级」，客户端从最新正式 GitHub Release 下载对应 ZIP 和校验清单，验证完整应用签名后替换并重启，沿用原配置启动随包 Portal。不要在 DMG 内直接升级。恢复方式与验证边界见 [升级说明](desktop/UPDATING.md)。
 
 ### 首次连接
 
@@ -137,7 +139,7 @@ npm run test:browser
 
 完整流程使用隔离的配置目录、本地服务 fixture 和真实 Portal，生成 `test-results/` 报告；macOS 本地流程还可能注册临时 LaunchAgent。Electron E2E 会打开测试窗口，同一时间只允许一个测试实例，结束后清理自身进程。测试不使用真实 Being 凭据或向真实 Town 发消息。
 
-[CI 工作流](.github/workflows/desktop-tests.yml) 配置了 macOS / Windows 检查、打包与报告上传。托管 runner 跳过真实登录服务测试；配置存在不代表所有平台都已验收。最新界面改动完成了类型、单元及部分无窗口渲染检查，原生 Electron 全量回归仍待补齐，具体记录见 [测试说明](desktop/TESTING.md)。
+[CI 工作流](.github/workflows/desktop-tests.yml) 运行 macOS / Windows 检查并上传报告，只有版本 tag 触发分发包构建；Mac 发布还会实际挂载并验证签名 DMG、复制后的应用及配套 ZIP 升级预检。托管 runner 跳过真实登录服务测试；配置存在不代表所有平台都已验收。具体记录见 [测试说明](desktop/TESTING.md)。
 
 ### 仓库结构
 

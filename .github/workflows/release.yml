@@ -24,6 +24,29 @@ jobs:
           node-version: '22'
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      - name: Import Apple Developer ID certificate (same secrets as Heart Portal)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_CERTIFICATE_BASE64:?Configure the Heart Portal signing certificate in this repository}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?Configure the Heart Portal certificate password in this repository}"
+          KEYCHAIN_PATH="$RUNNER_TEMP/portal-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          trap 'rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/DeveloperIDG2CA.cer"' EXIT
+          umask 077
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -t cert -f pkcs12 -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "PORTAL_DESKTOP_MAC_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
@@ -43,6 +66,14 @@ jobs:
           PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS: '1'
         run: npx vitest run tests/runtime-update-native.test.ts
       - run: npm run make
+      - name: Verify signed macOS DMG installation and Release ZIP upgrade preflight
+        if: runner.os == 'macOS'
+        run: npm run test:macos-package
+      - name: Clean up Apple signing material
+        if: runner.os == 'macOS' && always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/portal-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/DeveloperIDG2CA.cer"
       - name: Verify Windows installer launches the new client
         if: runner.os == 'Windows'
         env:

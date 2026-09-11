@@ -2,6 +2,7 @@ name: Desktop and Portal tests
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
     inputs:
@@ -33,6 +34,8 @@ jobs:
       # Hosted runners do not guarantee an interactive login/session manager.
       # Real launchd lifecycle remains enabled by default for local Mac runs.
       PORTAL_DESKTOP_TEST_BACKGROUND: '0'
+      # Fork PRs have no signing key. These packages are test-only and never published.
+      PORTAL_DESKTOP_MAC_LOCAL_TEST: '1'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,6 +79,7 @@ jobs:
         working-directory: client
     env:
       PORTAL_DESKTOP_TEST_BACKGROUND: '1'
+      PORTAL_DESKTOP_MAC_LOCAL_TEST: '1'
     steps:
       - uses: actions/checkout@v4
         with:

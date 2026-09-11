@@ -5,6 +5,7 @@ import os from 'node:os';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { SettingsStore } from '../desktop/settings';
 import { portalConfig } from '../desktop/portal';
+import { parse } from 'smol-toml';
 
 it('persists credentials encrypted, reloads and preserves them on workspace-only changes', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'beings-settings-'));
@@ -18,7 +19,8 @@ it('persists credentials encrypted, reloads and preserves them on workspace-only
     const store = new SettingsStore(dir, storage, process.execPath);
     await store.load(); expect(store.connection).toBeNull();
     expect(store.settings.allowExec).toBe(true);
-    expect(portalConfig(store.settings)).toContain('exec = true');
+    expect(store.settings.kitsEnabled).toBe(true);
+    expect(parse(portalConfig(store.settings))).toMatchObject({ kits_enabled: true, tools: { exec: true, custom_tools_enabled: true } });
     await store.save({ ...store.settings, workspace: path.join(dir, '中文 workspace'), connectionLink: 'https://echo.example/alice/?token=private-test-credential&secret=relay-secret' });
     expect(JSON.stringify(store.settings)).not.toContain('private-test-credential');
     const disk = await readFile(path.join(dir, 'connection.json'), 'utf8');
@@ -26,6 +28,7 @@ it('persists credentials encrypted, reloads and preserves them on workspace-only
     const reopened = new SettingsStore(dir, storage, process.execPath); await reopened.load();
     expect(reopened.connection?.relaySecret).toBe('relay-secret');
     expect(reopened.settings.allowExec).toBe(true);
+    expect(reopened.settings.kitsEnabled).toBe(true);
     await reopened.save({ ...reopened.settings, portalName: 'new-name' });
     expect(reopened.connection?.token).toBe('private-test-credential');
     expect(reopened.settings).toMatchObject({ being: 'alice', endpoint: 'https://echo.example/alice', portalName: 'new-name' });
@@ -34,10 +37,11 @@ it('persists credentials encrypted, reloads and preserves them on workspace-only
     await reopened.save({ ...reopened.settings, connectionLink: 'https://other.example/another_being/?token=new-credential&secret=new-relay-secret', portalName: 'my-laptop' });
     expect(reopened.settings).toMatchObject({ being: 'another_being', endpoint: 'https://other.example/another_being', portalName: 'my-laptop' });
     expect(reopened.connection).toMatchObject({ relaySecret: 'new-relay-secret', token: 'new-credential', link: 'https://other.example/another_being/?token=new-credential' });
-    await reopened.save({ ...reopened.settings, allowExec: false });
+    await reopened.save({ ...reopened.settings, allowExec: false, kitsEnabled: false });
     const optedOut = new SettingsStore(dir, storage, process.execPath); await optedOut.load();
     expect(optedOut.settings.allowExec).toBe(false);
-    expect(portalConfig(optedOut.settings)).toContain('exec = false');
+    expect(optedOut.settings.kitsEnabled).toBe(false);
+    expect(parse(portalConfig(optedOut.settings))).toMatchObject({ kits_enabled: false, tools: { exec: false, custom_tools_enabled: false } });
     const unavailable = new SettingsStore(dir, { ...storage, isEncryptionAvailable: () => false }, process.execPath);
     await expect(unavailable.save({ ...store.settings, connectionLink: 'https://echo.example/alice/?token=test' })).rejects.toThrow('密钥库');
     await expect(store.save({ ...store.settings, portalName: 'bad\nname' })).rejects.toThrow();
