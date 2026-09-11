@@ -7,7 +7,7 @@
 | 环境 | 前置条件 | 当前交付状态 |
 | --- | --- | --- |
 | macOS | Git、Node.js 22.12+、npm、Rust stable、Xcode Command Line Tools | Apple Silicon 支持 `.app` / DMG / ZIP；Intel 需对应 x64 机器另行构建 |
-| Windows | Git、Node.js 22.12+、npm、Rust stable MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK | 使用 Electron Forge 默认 Squirrel Setup；打包前将 Portal 主分支合并到兼容分支；Windows 原生构建、安装和后台任务仍需实机验收 |
+| Windows | Git、Node.js 22.12+、npm、Rust stable MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK | 使用 Electron Forge 默认 Squirrel Setup；Portal 兼容分支由本地维护并合并主分支；Windows 原生构建、安装和后台任务仍需实机验收 |
 | Linux | Git、Node.js 22.12+、npm、Rust stable、本机 C/C++ 链接工具及 Electron 桌面运行依赖、密钥库 | 配置了 ZIP；后台常驻未实现，未完成 Linux 桌面验收 |
 
 这些是源码构建条件。使用已打包客户端进行聊天、运行内置 Portal 不需要另装 Node 或 Rust。特定 Kit 可能另需 Node/Python、账号凭据或外部 CLI，安装窗口会说明依赖。
@@ -16,7 +16,7 @@ Electron 与 Portal 必须来自同一目标操作系统和架构。目前脚本
 
 ## 从全新克隆开始
 
-Portal 源码通过 `heart-portal/` 子模块的客户端兼容分支引用。打包前会合并远程 `main` 分支。以下命令可在 macOS/Linux shell 或 Windows PowerShell 中逐行执行。
+Portal 源码通过 `heart-portal/` 子模块的客户端兼容分支引用。CI 和打包只使用已提交的子模块版本；更新兼容分支后再提交主仓库的子模块指针。以下命令可在 macOS/Linux shell 或 Windows PowerShell 中逐行执行。
 
 ```text
 git clone --recurse-submodules https://github.com/d5z/portal-desktop.git portal-desktop
@@ -30,7 +30,7 @@ npm start
 
 ### 更新 Portal
 
-运行 `npm run build:portal` 会先执行 `git fetch origin main`，再将远程 `main` 合并到当前兼容分支；冲突文件自动采用远程 `main` 版本，最后编译 Portal。需要使用其他源码时可设置 `HEART_PORTAL_SOURCE`；Portal 的编译、安装包与发布均跟随客户端。
+更新 Portal 时在 `heart-portal/` 中拉取并合并远程 `main`，解决冲突后提交并推送兼容分支，再更新主仓库的子模块指针。`npm run build:portal` 只编译当前已提交源码；需要使用其他源码时可设置 `HEART_PORTAL_SOURCE`。
 
 仓库不提交 `node_modules/`、Portal 二进制、生成的网页资产或 `out/`。`npm ci` 根据 `package-lock.json` 安装依赖；首次构建需要联网下载 Electron、npm 包和 Cargo 依赖。`npm start` 先生成离线网页资产，再启动开发模式。
 
@@ -50,7 +50,7 @@ $env:HEART_PORTAL_SOURCE = 'C:\code\heart-portal'
 npm run build:portal
 ```
 
-`build:portal` 先将子模块远程 `main` 合并到当前兼容分支，再执行 `cargo build --release --locked -p heart-portal`，复制结果到 `resources/heart-portal`（Windows 为 `heart-portal.exe`）。`HEART_PORTAL_SOURCE` 可用于指定本地源码并跳过自动同步。
+`build:portal` 执行 `cargo build --release --locked -p heart-portal`，复制结果到 `resources/heart-portal`（Windows 为 `heart-portal.exe`）。
 
 ## 构建命令与产物
 

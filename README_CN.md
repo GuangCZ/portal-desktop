@@ -50,7 +50,7 @@ Town 使用独立配对身份，不从 Loom 连接推测授权。可用 Being �
 
 ### Portal 与 Kit
 
-Portal 作为独立 Rust 进程运行，源码通过 Git 子模块的客户端兼容分支获取；每次打包前合并远程 `main` 分支的最新提交，再与客户端一起构建和发布。文件工具与搜索使用所选工作目录；命令执行、Kits 和自定义工具默认开启，与原生 Portal 一致，可在连接设置中关闭。已有配置沿用原来的工具设置。
+Portal 作为独立 Rust 进程运行，源码通过 Git 子模块的客户端兼容分支获取；维护者在本地将远程 `main` 的最新提交合并到兼容分支并提交后，再与客户端一起构建和发布。文件工具与搜索使用所选工作目录；命令执行、Kits 和自定义工具默认开启，与原生 Portal 一致，可在连接设置中关闭。已有配置沿用原来的工具设置。
 
 Kit 工具沿用 Portal 的 MCP 调用链。当前安装器支持 Grove / GitHub 托管的 `tar.gz`、stdio Kit，以及 `package.json` / `requirements.txt` 依赖安装；Node、Python 或其他运行时需预先准备。安装前展示配置和依赖，经过 MCP `initialize` / `tools/list` 检查后完成安装。本地目录导入不运行安装脚本、不覆盖同名 Kit；自定义 `provision.install` / `post_install` 不自动执行。
 
@@ -111,7 +111,7 @@ npm run build:portal
 npm start
 ```
 
-已有克隆或拉取更新后，运行 `git submodule update --init --recursive` 取得引擎源码。GitHub 的源码 ZIP 不包含子模块内容。执行打包命令时会自动将 Portal 远程 `main` 的最新提交合并到客户端兼容分支，再使用合并后的源码构建。
+已有克隆或拉取更新后，运行 `git submodule update --init --recursive` 取得已提交的引擎源码。GitHub 的源码 ZIP 不包含子模块内容。更新 Portal 后需先提交主仓库的子模块指针，再执行打包命令。
 
 ### 检查与打包
 

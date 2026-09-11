@@ -1,16 +1,9 @@
 import { spawn } from 'node:child_process';
-import { execFileSync } from 'node:child_process';
 import { mkdir, copyFile, chmod, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { requirePortalSource } from './portal-source.mjs';
 const source = await requirePortalSource();
-if (!process.env.HEART_PORTAL_SOURCE) {
-  execFileSync('git', ['-C', source, 'fetch', 'origin', 'main'], { stdio: 'inherit' });
-  // The compatibility branch may have diverged from upstream. Join histories
-  // explicitly and prefer upstream main for any conflicting file.
-  execFileSync('git', ['-C', source, 'merge', '--no-edit', '--allow-unrelated-histories', '-X', 'theirs', 'origin/main'], { stdio: 'inherit' });
-}
 const child = spawn('cargo', ['build', '--release', '--locked', '-p', 'heart-portal'], { cwd: source, stdio: 'inherit', shell: false });
 await new Promise((resolve, reject) => { child.on('error', reject); child.on('exit', code => code === 0 ? resolve() : reject(new Error(`cargo exited with ${code}`))); });
 const name = process.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal';
