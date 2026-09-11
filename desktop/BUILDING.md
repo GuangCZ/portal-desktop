@@ -30,7 +30,7 @@ npm start
 
 ### 更新 Portal
 
-运行 `npm run build:portal` 会先执行 `git fetch origin main`，再将远程 `main` 合并到当前兼容分支（即使两个分支没有共同历史），最后编译 Portal。需要使用其他源码时可设置 `HEART_PORTAL_SOURCE`；Portal 的编译、安装包与发布均跟随客户端。
+运行 `npm run build:portal` 会先执行 `git fetch origin main`，再将远程 `main` 合并到当前兼容分支；冲突文件自动采用远程 `main` 版本，最后编译 Portal。需要使用其他源码时可设置 `HEART_PORTAL_SOURCE`；Portal 的编译、安装包与发布均跟随客户端。
 
 仓库不提交 `node_modules/`、Portal 二进制、生成的网页资产或 `out/`。`npm ci` 根据 `package-lock.json` 安装依赖；首次构建需要联网下载 Electron、npm 包和 Cargo 依赖。`npm start` 先生成离线网页资产，再启动开发模式。
 
