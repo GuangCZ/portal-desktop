@@ -1,6 +1,6 @@
-Portal Desktop 0.1.4：完整的手动配套升级
+Portal Desktop 0.1.0：首个正式发布版
 
-- Portal 通过 Git 子模块引用原仓库源码，随客户端编译、打包与发布。源码锁定至 383d915396aef8f7bc1e91e2127271d704288217，内置 Portal 0.8.2。
+- Portal 通过 Git 子模块引用 `d5z/heart-portal` 的客户端兼容分支，随客户端编译、打包与发布。源码锁定至 383d915396aef8f7bc1e91e2127271d704288217，内置 Portal 0.8.2。
 - macOS 提供签名 DMG，可将 Portal Desktop 拖入 Applications 安装；同一 GitHub Release 同时发布升级用 ZIP 和两种格式的 SHA-256 校验值。
 - “检查更新 → 下载并升级”：先下载并校验，再点击“停止 Portal 并安装”。确认旧 Portal 和对应守护全部退出后，才关闭和替换客户端。
 - macOS 自动备份并替换应用，Windows 使用 Setup；安装完成自动打开新版客户端，使用原配置、凭据、工作目录与 Kits 启动新引擎和守护。
