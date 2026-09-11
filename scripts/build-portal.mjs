@@ -7,7 +7,7 @@ import { requirePortalSource } from './portal-source.mjs';
 const source = await requirePortalSource();
 if (!process.env.HEART_PORTAL_SOURCE) {
   execFileSync('git', ['-C', source, 'fetch', 'origin', 'main'], { stdio: 'inherit' });
-  execFileSync('git', ['-C', source, 'checkout', '--detach', 'origin/main'], { stdio: 'inherit' });
+  execFileSync('git', ['-C', source, 'merge', '--no-edit', 'origin/main'], { stdio: 'inherit' });
 }
 const child = spawn('cargo', ['build', '--release', '--locked', '-p', 'heart-portal'], { cwd: source, stdio: 'inherit', shell: false });
 await new Promise((resolve, reject) => { child.on('error', reject); child.on('exit', code => code === 0 ? resolve() : reject(new Error(`cargo exited with ${code}`))); });

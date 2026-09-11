@@ -50,7 +50,7 @@ Town 使用独立配对身份，不从 Loom 连接推测授权。可用 Being �
 
 ### Portal 与 Kit
 
-Portal 作为独立 Rust 进程运行，源码通过 Git 子模块获取；每次打包前同步其远程 `main` 分支，再与客户端一起构建和发布。文件工具与搜索使用所选工作目录；命令执行、Kits 和自定义工具默认开启，与原生 Portal 一致，可在连接设置中关闭。已有配置沿用原来的工具设置。
+Portal 作为独立 Rust 进程运行，源码通过 Git 子模块的客户端兼容分支获取；每次打包前合并远程 `main` 分支的最新提交，再与客户端一起构建和发布。文件工具与搜索使用所选工作目录；命令执行、Kits 和自定义工具默认开启，与原生 Portal 一致，可在连接设置中关闭。已有配置沿用原来的工具设置。
 
 Kit 工具沿用 Portal 的 MCP 调用链。当前安装器支持 Grove / GitHub 托管的 `tar.gz`、stdio Kit，以及 `package.json` / `requirements.txt` 依赖安装；Node、Python 或其他运行时需预先准备。安装前展示配置和依赖，经过 MCP `initialize` / `tools/list` 检查后完成安装。本地目录导入不运行安装脚本、不覆盖同名 Kit；自定义 `provision.install` / `post_install` 不自动执行。
 
@@ -111,7 +111,7 @@ npm run build:portal
 npm start
 ```
 
-已有克隆或拉取更新后，运行 `git submodule update --init --recursive` 取得引擎源码。GitHub 的源码 ZIP 不包含子模块内容。执行打包命令时会自动同步 Portal 远程 `main` 分支，再使用最新源码构建。
+已有克隆或拉取更新后，运行 `git submodule update --init --recursive` 取得引擎源码。GitHub 的源码 ZIP 不包含子模块内容。执行打包命令时会自动将 Portal 远程 `main` 的最新提交合并到客户端兼容分支，再使用合并后的源码构建。
 
 ### 检查与打包
 
@@ -145,7 +145,7 @@ npm run test:browser
 
 ```text
 desktop/           Electron 主进程、preload、界面与设计文档
-heart-portal/      Rust Portal 子模块（打包时同步远程 main）
+heart-portal/      Rust Portal 客户端兼容分支子模块（打包时合并远程 main）
 scripts/           资源准备、构建、测试与发布脚本
 tests/             客户端单元测试与集成测试
 resources/         品牌资源、上游许可及本地构建产物
@@ -223,7 +223,7 @@ Loom 与 Town 凭据分别通过系统密钥库加密保存，配对码不落盘
 3. 代码改动运行类型检查和相关测试；界面改动附截图或录屏及验证环境。纯文档改动检查链接、命令与示例即可。
 4. PR 说明问题、行为变化、验证结果与未覆盖的平台；同步更新受影响文档，保持中英文 README 一致，不将计划写成已完成。
 
-报告问题请包含客户端版本/构建标识、操作系统与架构、复现步骤、预期和实际结果，可附脱敏诊断报告。不要提交真实连接链接、token、私人对话、个人 Portal 配置、Kit 密钥或构建产物。Portal 构建使用远程 `main` 的最新源码；如需固定版本，请通过 `HEART_PORTAL_SOURCE` 指定源码目录。
+报告问题请包含客户端版本/构建标识、操作系统与架构、复现步骤、预期和实际结果，可附脱敏诊断报告。不要提交真实连接链接、token、私人对话、个人 Portal 配置、Kit 密钥或构建产物。Portal 构建使用兼容分支合并远程 `main` 后的源码；如需固定版本，请通过 `HEART_PORTAL_SOURCE` 指定源码目录。
 
 ## 许可与致谢
 
