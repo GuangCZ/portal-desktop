@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { command, windowsModulePath } from '../desktop/background';
 import { windowsInstallerScript } from '../desktop/manual-installer';
 
-it.skipIf(process.platform !== 'win32' || process.env.PORTAL_DESKTOP_NATIVE_INSTALLER_TESTS !== '1')('installs, launches, closes the running client through Setup, and relaunches it', async () => {
+it.skipIf(process.platform !== 'win32' || process.env.PORTAL_DESKTOP_NATIVE_INSTALLER_TESTS !== '1')('installs and starts the client through the standard Squirrel handoff', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'town-setup-'));
   const make = path.resolve('out/make/squirrel.windows/x64');
   const setups = (await readdir(make)).filter(name => /setup\.exe$/i.test(name));
@@ -44,20 +44,30 @@ it.skipIf(process.platform !== 'win32' || process.env.PORTAL_DESKTOP_NATIVE_INST
     expect(pid, 'New installed client should launch automatically').toBeGreaterThan(0);
     await new Promise(resolve => setTimeout(resolve, 3000));
     expect(() => process.kill(pid!, 0)).not.toThrow();
-    const previousPid = pid!;
     const reinstall = spawn(setup, ['--silent'], { env: environment, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let reinstallErrors = ''; reinstall.stderr.on('data', chunk => { reinstallErrors += chunk.toString(); });
     const reinstalled = new Promise<number | null>((resolve, reject) => { reinstall.once('exit', resolve); reinstall.once('error', reject); });
     expect(await reinstalled, reinstallErrors).toBe(0);
+    // Squirrel Setup installs and emits its lifecycle events; it does not
+    // promise to launch the application after a silent install. Starting via
+    // Update.exe is the supported launcher path and may reuse the existing
+    // single instance or create a new one after an obsolete event.
+    const launcher = path.join(localAppData, 'portal-desktop', 'Update.exe');
+    const start = spawn(launcher, ['--processStart', 'portal-desktop.exe'], { env: environment, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let startErrors = ''; start.stderr.on('data', chunk => { startErrors += chunk.toString(); });
+    const started = new Promise<number | null>((resolve, reject) => { start.once('exit', resolve); start.once('error', reject); });
+    expect(await started, startErrors).toBe(0);
     pid = undefined;
     const relaunchDeadline = Date.now() + 30_000;
     while (!pid && Date.now() < relaunchDeadline) {
       const output = await command('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(inspect, 'utf16le').toString('base64')]);
       const ids = output.trim() ? JSON.parse(output) : [];
-      pid = (Array.isArray(ids) ? ids : [ids]).find((id: number) => id !== previousPid);
+      // The launcher may reuse the existing single instance or start a new
+      // process after Setup retires the previous version.
+      pid = Array.isArray(ids) ? ids[0] : ids;
       if (!pid) await new Promise(resolve => setTimeout(resolve, 500));
     }
-    expect(pid, 'Setup should relaunch the installed client after closing the previous process tree').toBeGreaterThan(0);
+    expect(pid, 'Update.exe should start the installed client after Setup completes').toBeGreaterThan(0);
   } finally {
     old.kill(); helper.kill();
     if (pid) await command('taskkill', ['/PID', String(pid), '/T', '/F']).catch(() => {});

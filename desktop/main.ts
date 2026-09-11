@@ -1,7 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, net, nativeTheme, nativeImage, protocol, safeStorage, session, shell, Menu, Tray } from 'electron';
+import { app, dialog, ipcMain, net, nativeTheme, protocol, safeStorage, shell, type BrowserWindow, type Tray } from 'electron';
 import { clientStartup } from './client-startup';
 import { clientUserData } from './client-profile';
-import { ClientBrowser } from './browser';
+import type { ClientBrowser } from './browser';
+import { createMainWindow } from './window-manager';
+import { configureLocalSession, registerLocalProtocol } from './local-protocol';
+import { createApplicationTray, installApplicationMenu } from './tray';
 import path from 'node:path';
 import os from 'node:os';
 import { access, mkdir, readFile, writeFile, rename } from 'node:fs/promises';
@@ -19,10 +22,11 @@ import { KitInstaller } from './kit-install';
 import { ChatProxy } from './proxy';
 import { verifyBeingConnection } from './being-ready';
 import { redact } from './connection';
-import type { SaveSettings, TownPost, TownQuery, KitInstallInput } from './shared';
+import type { SaveSettings } from './shared';
 import { TownLive } from './town-live';
 import { TownClient, TownCredentials, TOWN_ORIGIN } from './town';
-import { localKits, kitLocation, readKit, importLocalKit } from './kits';
+import { registerTownIpc } from './town-ipc';
+import { registerKitsIpc } from './kits-ipc';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -64,8 +68,6 @@ const exclusive = <T>(operation: () => Promise<T>): Promise<T> => {
   return next;
 };
 const shellURL = () => new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL || 'beings://desktop/').href;
-const mime: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
-const chatCSP = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src https: data: blob:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-src 'none'";
 
 async function openExternal(url: string) {
   try {
@@ -81,39 +83,17 @@ function showWindow() {
   window.focus();
 }
 function createWindow() {
-  const acrylic = process.platform === 'win32' && Number(os.release().split('.')[2]) >= 22621;
-  window = new BrowserWindow({
-    width: 1280, height: 860, minWidth: 920, minHeight: 640, title: CLIENT_NAME,
-    icon: path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), app.isPackaged ? 'branding/app.png' : 'resources/branding/app.png'),
-    backgroundColor: process.platform === 'darwin' || acrylic ? '#00000000' : nativeTheme.shouldUseDarkColors ? '#212121' : '#ffffff',
-    ...(process.platform === 'darwin' ? { vibrancy: 'sidebar' as const, visualEffectState: 'active' as const } : {}),
-    ...(acrylic ? { backgroundMaterial: 'acrylic' as const } : {}),
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    autoHideMenuBar: process.platform === 'win32',
-    trafficLightPosition: { x: 18, y: 20 },
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true,
-      nodeIntegration: false, nodeIntegrationInSubFrames: false, webSecurity: true },
+  const created = createMainWindow({
+    shellURL,
+    isQuitting: () => quitting,
+    isSessionEnding: () => sessionEnding,
+    markSessionEnding: () => { sessionEnding = true; },
+    openExternal: url => { void openExternal(url); },
+    onBrowser: value => { browser = value; },
+    onClosed: value => { if (window === value) window = null; },
   });
-  if (process.platform === 'win32') window.setMenuBarVisibility(false);
-  window.webContents.setWindowOpenHandler(({ url }) => { void openExternal(url); return { action: 'deny' }; });
-  window.webContents.on('will-navigate', event => event.preventDefault());
-  window.webContents.on('will-frame-navigate', event => {
-    const url = event.url;
-    const parsed = new URL(url);
-    const chatDocument = parsed.protocol === 'beings:' && parsed.hostname === 'chat' && parsed.pathname === '/';
-    if (!chatDocument && url !== shellURL()) { event.preventDefault(); void openExternal(url); }
-  });
-  const created = window;
-  browser = new ClientBrowser(created, state => { if (!created.isDestroyed() && !created.webContents.isDestroyed()) created.webContents.send('beings:browser-state', state); });
-  created.on('close', event => {
-    if (quitting || sessionEnding) return;
-    event.preventDefault();
-    created.hide();
-  });
-  // Let Windows logoff/shutdown close the app rather than hide the window.
-  created.on('query-session-end', () => { sessionEnding = true; });
-  created.on('closed', () => { if (window === created) window = null; });
-  void window.loadURL(shellURL());
+  window = created.window;
+  browser = created.browser;
 }
 
 async function ready() {
@@ -145,24 +125,8 @@ async function ready() {
   if (!background.state.supported) store.settings.backgroundEnabled = false;
   proxy = new ChatProxy(() => store.connection, net.fetch.bind(net) as typeof fetch);
   const assets = app.isPackaged ? path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`) : path.resolve('desktop/generated');
-  protocol.handle('beings', async request => {
-    const url = new URL(request.url);
-    if (url.hostname === 'chat' && (url.pathname.startsWith('/api/') || url.pathname === '/health')) return proxy.handle(request);
-    if (!['desktop', 'chat'].includes(url.hostname) || request.method !== 'GET') return new Response('Not found', { status: 404 });
-    const relative = url.hostname === 'chat'
-      ? (url.pathname === '/' ? 'loom.html' : url.pathname.slice(1))
-      : (url.pathname === '/' ? 'index.html' : url.pathname.slice(1));
-    if (url.hostname === 'chat' && !['loom.html', 'vendor.js', 'highlight.css', 'chat.css', 'chat-index.js', 'chat-activity.js', 'chat-scene.js'].includes(relative)) return new Response('Not found', { status: 404 });
-    const file = path.resolve(assets, relative);
-    if (!file.startsWith(assets + path.sep)) return new Response('Forbidden', { status: 403 });
-    try {
-      const headers: Record<string, string> = { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' };
-      if (url.hostname === 'chat') headers['Content-Security-Policy'] = chatCSP;
-      return new Response(await readFile(file), { headers });
-    } catch { return new Response('Not found', { status: 404 }); }
-  });
-  session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  session.defaultSession.setPermissionCheckHandler(() => false);
+  registerLocalProtocol(assets, proxy);
+  configureLocalSession();
   let recoveryBlocked = false;
   const clientInstall = new ClientInstall(directory, background);
   const installIntent = await clientInstall.read();
@@ -364,62 +328,13 @@ async function ready() {
     if (process.platform !== 'darwin' && !(process.platform === 'win32' && Number(os.release().split('.')[2]) >= 22621)) window?.setBackgroundColor(theme === 'dark' ? '#212121' : '#ffffff');
     return appearance;
   }));
-  handle('beings:town', async (query: TownQuery) => {
-    const generation = townLive.state.generation;
-    const result = await town.query(query);
-    if (generation !== townLive.state.generation) return { ok: false, code: 'auth', message: 'Town 身份已变更，请刷新。' };
-    if (result.ok) townLive.remember(query, result.data);
-    else if (result.code === 'auth' && townCredentials.token && query.kind !== 'my-scrolls') townLive.rejectAuth();
-    return result;
+  registerTownIpc({
+    handle, exclusive, town, townLive, townCredentials, store, secretStorage,
+    getWarning: () => townWarning,
+    clearWarning: () => { townWarning = undefined; },
+    open: url => browser?.open(url),
   });
-  handle('beings:town-live', () => townLive.state);
-  handle('beings:town-reconnect', () => townLive.restart());
-  handle('beings:town-send', (input: TownPost) => {
-    const generation = townLive.state.generation;
-    return exclusive(async () => {
-      if (generation !== townLive.state.generation || townLive.state.phase !== 'connected' || !townLive.state.beingId) return { ok: false, code: 'auth', message: 'Town 身份尚未确认或已变更，请重新打开发送窗口。' };
-      const result = await town.send(input);
-      if (!result.ok && result.code === 'auth') townLive.rejectAuth();
-      return result;
-    });
-  });
-  handle('beings:town-auth', () => ({ configured: Boolean(townCredentials.token), beingId: townLive.state.beingId, suggestedBeingId: store.settings.being, warning: townWarning }));
-  handle('beings:town-pair', (input: { beingId: string; code: string }) => exclusive(async () => {
-    if (!secretStorage.isEncryptionAvailable()) throw new Error('系统密钥库不可用，无法安全保存配对凭据。');
-    const paired = await town.pair(input);
-    await townCredentials.save(paired.token, paired.beingId);
-    townWarning = undefined; townLive.restart();
-  }));
-  handle('beings:town-token', (token: string) => exclusive(async () => { await townCredentials.save(token); townWarning = undefined; townLive.restart(); }));
-  handle('beings:town-open', async (route: string) => {
-    if (typeof route !== 'string' || !/^\/(?:api\/(?:[a-z]+\/help|grove\/[a-zA-Z0-9_-]+\/download)|embers)?$/.test(route)) throw new Error('不支持的 Town 链接。');
-    browser?.open(TOWN_ORIGIN + route);
-  });
-  handle('beings:kits', () => localKits(store.settings));
-  handle('beings:kit-prepare', (id: string) => exclusive(async () => {
-    if (!store.connection) throw new Error('请先连接 Being，再安装本机 Kit。');
-    return kitInstaller.prepare(id, store.settings);
-  }));
-  handle('beings:kit-install', (input: KitInstallInput) => exclusive(() => kitInstaller.install(input, store.settings)));
-  handle('beings:kit-discard', (ticket: string) => exclusive(() => kitInstaller.discard(ticket)));
-  handle('beings:kits-open', async () => {
-    const { directory } = await kitLocation(store.settings); await mkdir(directory, { recursive: true });
-    const error = await shell.openPath(directory); if (error) throw new Error(error);
-  });
-  handle('beings:kit-import', () => exclusive(async () => {
-    const choice = await dialog.showOpenDialog(window!, { title: '选择包含 manifest.json 的 Kit 目录', properties: ['openDirectory'] });
-    if (choice.canceled) return { installed: false };
-    const kit = await readKit(choice.filePaths[0]);
-    const { directory } = await kitLocation(store.settings);
-    if (!kit.compatible) throw new Error('这个 Kit 不支持当前系统。');
-    const review = await dialog.showMessageBox(window!, { type: 'question', title: '导入 Kit',
-      message: `将 ${kit.name} ${kit.version} 导入本机 Portal？`,
-      detail: `${kit.description}\n\n${kit.tools.length} 个工具 · 启动命令：${kit.command.join(' ')}\n目标：${directory}\n\n导入会复制文件；依赖和密钥需要自行配置。Portal 会自动刷新清单。${kit.eager ? '此 Kit 会在 Portal 启动时预热。' : 'Being 调用工具时将以当前用户身份运行此 Kit。'}`,
-      buttons: ['取消', '导入'], defaultId: 0, cancelId: 0 });
-    if (review.response !== 1) return { installed: false };
-    const installed = await importLocalKit(choice.filePaths[0], directory);
-    return { installed: true, name: installed.name };
-  }));
+  registerKitsIpc({ handle, exclusive, window: () => window, store, kitInstaller });
   handle('beings:save', (input: SaveSettings) => exclusive(async () => {
     const previous = { ...store.settings }; const previousConnection = store.connection;
     await store.save(input);
@@ -485,34 +400,8 @@ async function ready() {
       }).finally(() => { handlingConflict = false; });
     }
   });
-  const applicationMenu = Menu.buildFromTemplate([
-    ...(process.platform === 'darwin' ? [{ label: CLIENT_NAME, submenu: [
-      { role: 'about' as const, label: `关于 ${CLIENT_NAME}` },
-      { type: 'separator' as const }, { role: 'services' as const, label: '服务' },
-      { type: 'separator' as const },
-      { role: 'hide' as const, label: `隐藏 ${CLIENT_NAME}` },
-      { role: 'hideOthers' as const, label: '隐藏其他应用' },
-      { role: 'unhide' as const, label: '显示全部' },
-      { type: 'separator' as const }, { role: 'quit' as const, label: `退出 ${CLIENT_NAME}` },
-    ] }] : []),
-    { label: '客户端', submenu: [{ label: '显示主窗口', click: showWindow }, { label: '退出客户端', click: () => app.quit() }] },
-    { role: 'editMenu' }, { label: '视图', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
-    { role: 'windowMenu' }, { label: '帮助', submenu: [{ label: '检查更新…', click: () => { void showUpdates(); } }] },
-  ]);
-  // Windows keeps every command in the in-app options or tray. Removing the
-  // native application menu avoids a second, visually unrelated top bar.
-  Menu.setApplicationMenu(process.platform === 'win32' ? null : applicationMenu);
-  const trayIcon = nativeImage.createFromPath(path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(),
-    app.isPackaged ? 'branding/app.png' : 'resources/branding/app.png'));
-  tray = new Tray(trayIcon.resize({ width: process.platform === 'darwin' ? 18 : 24, height: process.platform === 'darwin' ? 18 : 24 }));
-  tray.setToolTip(CLIENT_NAME);
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '显示主窗口', click: showWindow },
-    { type: 'separator' },
-    { label: '退出客户端', click: () => app.quit() },
-  ]));
-  tray.on('click', showWindow);
-  tray.on('double-click', showWindow);
+  installApplicationMenu(showWindow, () => { void showUpdates(); });
+  tray = createApplicationTray(showWindow, app.isPackaged);
   async function restoreStartup(intent: 'manual' | 'automatic' = 'automatic') {
     if (!store.connection) {
       if (installIntent) {
