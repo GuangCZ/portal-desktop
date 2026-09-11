@@ -7,7 +7,7 @@
 | 环境 | 前置条件 | 当前交付状态 |
 | --- | --- | --- |
 | macOS | Git、Node.js 22.12+、npm、Rust stable、Xcode Command Line Tools | Apple Silicon 支持 `.app` / DMG / ZIP；Intel 需对应 x64 机器另行构建 |
-| Windows | Git、Node.js 22.12+、npm、Rust stable MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK | 使用 Electron Forge 默认 Squirrel Setup；Windows 原生构建、安装和后台任务仍需实机验收 |
+| Windows | Git、Node.js 22.12+、npm、Rust stable MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK | 使用 Electron Forge 默认 Squirrel Setup；打包前同步 Portal 主分支；Windows 原生构建、安装和后台任务仍需实机验收 |
 | Linux | Git、Node.js 22.12+、npm、Rust stable、本机 C/C++ 链接工具及 Electron 桌面运行依赖、密钥库 | 配置了 ZIP；后台常驻未实现，未完成 Linux 桌面验收 |
 
 这些是源码构建条件。使用已打包客户端进行聊天、运行内置 Portal 不需要另装 Node 或 Rust。特定 Kit 可能另需 Node/Python、账号凭据或外部 CLI，安装窗口会说明依赖。
@@ -16,7 +16,7 @@ Electron 与 Portal 必须来自同一目标操作系统和架构。目前脚本
 
 ## 从全新克隆开始
 
-Portal 源码通过 `heart-portal/` 子模块引用，由客户端提交锁定版本。以下命令可在 macOS/Linux shell 或 Windows PowerShell 中逐行执行。
+Portal 源码通过 `heart-portal/` 子模块引用。打包前会同步远程 `main` 分支。以下命令可在 macOS/Linux shell 或 Windows PowerShell 中逐行执行。
 
 ```text
 git clone --recurse-submodules https://github.com/d5z/portal-desktop.git portal-desktop
@@ -26,11 +26,11 @@ npm run build:portal
 npm start
 ```
 
-已有克隆或拉取客户端更新后，运行 `git submodule update --init --recursive`，取得客户端锁定的 Portal 提交。GitHub Download ZIP 不包含子模块源码，源码构建请使用 Git 克隆。
+已有克隆或拉取客户端更新后，运行 `git submodule update --init --recursive`，取得 Portal 源码。GitHub Download ZIP 不包含子模块源码，源码构建请使用 Git 克隆。
 
 ### 更新 Portal
 
-运行 `git submodule update --remote heart-portal` 显式取得兼容分支 `codex/portal-desktop-compat` 的最新提交。兼容分支合入原仓库 `main` 的更新，仅保留客户端必要的生命周期适配。验证客户端和引擎后，在 Portal Desktop 中提交子模块引用并更新 `UPSTREAM.md`。构建只使用锁定提交，不自动拉取远端代码；Portal 的编译、安装包与发布均跟随客户端。
+运行 `npm run build:portal` 会先执行 `git fetch origin main` 并切换到远程 `main` 的最新提交，再编译 Portal。需要使用其他源码时可设置 `HEART_PORTAL_SOURCE`；Portal 的编译、安装包与发布均跟随客户端。
 
 仓库不提交 `node_modules/`、Portal 二进制、生成的网页资产或 `out/`。`npm ci` 根据 `package-lock.json` 安装依赖；首次构建需要联网下载 Electron、npm 包和 Cargo 依赖。`npm start` 先生成离线网页资产，再启动开发模式。
 
@@ -50,7 +50,7 @@ $env:HEART_PORTAL_SOURCE = 'C:\code\heart-portal'
 npm run build:portal
 ```
 
-`build:portal` 执行 `cargo build --release --locked -p heart-portal`，复制结果到 `resources/heart-portal`（Windows 为 `heart-portal.exe`）。准备步骤只在该资源**不存在**时自动复制子模块源码的 release 引擎，不会自动替换已有引擎；Portal 源码更新后应显式重跑 `npm run build:portal`。`HEART_PORTAL_SOURCE` 同时影响构建、准备和完整测试流程，正式交付时应使用主仓库锁定的子模块版本。
+`build:portal` 先同步子模块远程 `main`，再执行 `cargo build --release --locked -p heart-portal`，复制结果到 `resources/heart-portal`（Windows 为 `heart-portal.exe`）。`HEART_PORTAL_SOURCE` 可用于指定本地源码并跳过自动同步。
 
 ## 构建命令与产物
 
