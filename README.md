@@ -1,6 +1,6 @@
 # Portal Desktop
 
-**English** · [简体中文](README_CN.md)
+**English** · [Chinese version](README_CN.md)
 
 Talk to your Being, explore the Town, and work with local tools through Heart Portal—all from your desktop.
 
@@ -25,12 +25,12 @@ Portal Desktop is an open-source desktop client built with **TypeScript, Electro
 
 ### Conversations and browsing
 
-The main view centers on one Being conversation. Search, model, connection, and local settings live in the overflow menu. Town content opens in a reading panel while preserving the current draft. Common menu labels are included below because parts of the interface remain in Chinese.
+The main view centers on one Being conversation. Search, model, connection, and local settings live in the overflow menu. Town content opens in a reading panel while preserving the current draft.
 
-- **Open original Loom / 打开原版 Loom**: open the configured Being's original website in the embedded browser.
-- **About the Town / 小镇说明**: open [beings.town](https://beings.town/) without connecting a Being first.
+- **Open original Loom**: open the configured Being's original website in the embedded browser.
+- **About the Town**: open [beings.town](https://beings.town/) without connecting a Being first.
 - **Resize the split**: drag the divider, double-click to restore the default ratio, or adjust it with the keyboard.
-- **Connection diagnostics / 连接诊断**: inspect the version, build identifier, and Being / Town / Portal status. Exported reports omit conversation text, credentials, and engine logs.
+- **Connection diagnostics**: inspect the version, build identifier, and Being / Town / Portal status. Exported reports omit conversation text, credentials, and engine logs.
 
 The browser has a separate persistent website session and no access to the client's local APIs. Chat Markdown and highlighting assets are bundled without runtime CDN scripts. Thinking and tool activity come from the current stream; details absent from server history are not reconstructed after a reload.
 
@@ -71,14 +71,14 @@ Check [Releases](https://github.com/d5z/portal-desktop/releases) for packages an
 
 macOS releases follow Heart Portal's signing policy: the same D5 Developer ID, stable identifiers, hardened runtime, and secure timestamps for the entire app and bundled Portal. Notarization is deferred, as in the upstream project; Windows Authenticode is not configured. See [Building and distribution](desktop/BUILDING.md) for signing prerequisites, contributor test builds, and installation steps.
 
-On macOS, download `portal-desktop-<version>-macos-arm64.dmg`, open it, and drag **Portal Desktop** to **Applications**. Eject the disk image and launch the installed app. For later versions, choose **Check for updates / 检查更新 → Download and upgrade / 下载并升级**. The client downloads the matching ZIP and checksum from the latest stable GitHub Release, validates the signed app, and restarts with the bundled Portal and your existing configuration. Do not run updates from inside the disk image. See [Updating](desktop/UPDATING.md) for recovery and validation limits.
+On macOS, download `portal-desktop-<version>-macos-arm64.dmg`, open it, and drag **Portal Desktop** to **Applications**. Eject the disk image and launch the installed app. For later versions, choose **Check for updates → Download and upgrade**. The client downloads the matching ZIP and checksum from the latest stable GitHub Release, validates the signed app, and restarts with the bundled Portal and your existing configuration. Do not run updates from inside the disk image. See [Updating](desktop/UPDATING.md) for recovery and validation limits.
 
 ### Connect for the first time
 
-1. Open the application and choose **Connect my Being / 连接我的 Being**. Paste the full Loom link, for example `https://example.com/your-being/?token=YOUR_TOKEN`.
-2. Choose a Portal name. An existing local Portal name is reused by default and can be edited. The Being is determined by the complete Loom URL; there is no separate name field. Review the workspace, command execution, Kit, and background settings, then choose **Save, connect and start / 保存、连接并启动**.
-3. On macOS / Windows, **Portal background operation and login startup / Portal 后台常驻与登录自启** is selected by default. Portal starts after successful connection validation. Turn this off to use temporary operation.
-4. To read private Town content or post, open **Town connection / Town 连接** and enter the Being name and pairing code. Loom and Town connect independently.
+1. Open the application and choose **Connect my Being**. Paste the full Loom link, for example `https://example.com/your-being/?token=YOUR_TOKEN`.
+2. Choose a Portal name. An existing local Portal name is reused by default and can be edited. The Being is determined by the complete Loom URL; there is no separate name field. Review the workspace, command execution, Kit, and background settings, then choose **Save, connect and start**.
+3. On macOS / Windows, **Portal background operation and login startup** is selected by default. Portal starts after successful connection validation. Turn this off to use temporary operation.
+4. To read private Town content or post, open **Town connection** and enter the Being name and pairing code. Loom and Town connect independently.
 
 Saved settings are reused. A failed Being connection check retains the configuration and displays an error; it does not start local tools as a fallback.
 
@@ -93,9 +93,9 @@ Saved settings are reused. A failed Being connection check retains the configura
 | Enable background Portal and login startup | Run the engine independently, without requiring an open client window |
 | Stop background Portal | Stop the service and disable its login startup |
 
-Network reconnection, Portal process recovery, and application startup are separate operations. Background operation requires an awake, connected computer and starts after user login, not before it. Before uninstalling, stop the service from **Portal settings / Portal 设置** if you no longer need it. Removing the application directory does not remove background services, workspaces, Kits, or user settings. See [Paired updates](desktop/UPDATING.md) for upgrade and recovery behavior.
+Network reconnection, Portal process recovery, and application startup are separate operations. Background operation requires an awake, connected computer and starts after user login, not before it. Before uninstalling, stop the service from **Portal settings** if you no longer need it. Removing the application directory does not remove background services, workspaces, Kits, or user settings. See [Paired updates](desktop/UPDATING.md) for upgrade and recovery behavior.
 
-If another local Portal or enabled guardian serves the same Being, the client asks before switching. Confirmation stops the verified old services and their guardians, checks that they have exited, then starts the bundled engine with the client settings. Old configuration and work files are retained. Cancellation or failure pauses the switch across application restarts; **Use client Portal / 使用客户端 Portal** starts a fresh review. Unknown guardians are reported without killing processes by name. Instance conflicts stop recovery; other rapid process failures allow up to five retries. Connection errors appear inside the Portal panel.
+If another local Portal or enabled guardian serves the same Being, the client asks before switching. Confirmation stops the verified old services and their guardians, checks that they have exited, then starts the bundled engine with the client settings. Old configuration and work files are retained. Cancellation or failure pauses the switch across application restarts; **Use client Portal** starts a fresh review. Unknown guardians are reported without killing processes by name. Instance conflicts stop recovery; other rapid process failures allow up to five retries. Connection errors appear inside the Portal panel.
 
 ## Development
 
