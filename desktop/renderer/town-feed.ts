@@ -4,7 +4,7 @@ import { sceneExcerpt, type SceneResource } from './scene-store';
 
 type Entry = Record<string, unknown>;
 export interface FeedFilters { relation: string; order: string; days: string; author: string }
-export interface FeedReply { id: string | number; author: string; preview: string; recipient?: string }
+export interface FeedReply { id: string | number; author: string; preview: string }
 export const newFeedFilters = (): FeedFilters => ({ relation: 'all', order: 'newest', days: 'all', author: '' });
 const text = (value: unknown): string => typeof value === 'string' || typeof value === 'number' ? String(value) : '';
 const record = (value: unknown): Entry => value && typeof value === 'object' && !Array.isArray(value) ? value as Entry : {};
@@ -133,12 +133,11 @@ export function renderTownFeed(holder: HTMLElement, entries: Entry[], options: {
         const labels: Record<string, string> = { delivered: '已送达', pending: '待送达', failed: '送达失败', read: '已读' };
         footer.textContent = labels[state] || state;
       } else footer.textContent = `#${text(message.entry.seq)}${message.entry.revised_at ? ' · 已编辑' : ''}`;
-      const replyId = options.mail ? text(message.entry.id) : Number(message.entry.seq);
-      const recipient = options.mail === 'sent' ? identity(message.entry.recipient_being_id || message.entry.recipient) : message.authorId;
-      const validReply = options.mail ? /^[a-zA-Z0-9_-]{1,160}$/.test(String(replyId)) && recipient && recipient !== me : Number.isSafeInteger(replyId) && Number(replyId) > 0;
+      const replyId = Number(message.entry.seq);
+      const validReply = !options.mail && Number.isSafeInteger(replyId) && replyId > 0;
       if (options.onReply && validReply) {
         const reply = el('button', 'scene-select', '回复'); reply.type = 'button';
-        reply.onclick = () => options.onReply!({ id: replyId, author: message.author, preview: message.content.slice(0, 500), recipient: options.mail ? recipient : undefined });
+        reply.onclick = () => options.onReply!({ id: replyId, author: message.author, preview: message.content.slice(0, 500) });
         footer.append(reply);
       }
       if (options.onSelect) {

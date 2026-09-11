@@ -182,6 +182,7 @@ export class TownViews {
     const live = this.live;
     if (live?.phase !== 'connected' || !live.beingId || !this.channel()) return;
     const kind = this.view === 'mail' ? 'dm' : this.view === 'firesides' ? 'fireside' : 'bonfire';
+    if (kind === 'dm') reply = undefined;
     const firesideId = this.directId || this.selectedRing;
     if (kind === 'fireside' && !firesideId) return;
     const next = { kind, firesideId: kind === 'fireside' ? firesideId : undefined, generation: live.generation, beingId: live.beingId, ...(reply ? { reply } : {}) } as SendTarget;
@@ -189,8 +190,8 @@ export class TownViews {
     while (this.drafts.size > 20) this.drafts.delete(this.drafts.keys().next().value!);
     const draft = this.drafts.get(JSON.stringify(next));
     $<HTMLTextAreaElement>('town-send-content').value = draft?.content || '';
-    $<HTMLInputElement>('town-recipient').value = reply?.recipient || draft?.recipient || '';
-    $<HTMLInputElement>('town-recipient').readOnly = Boolean(reply && kind === 'dm');
+    $<HTMLInputElement>('town-recipient').value = draft?.recipient || '';
+    $<HTMLInputElement>('town-recipient').readOnly = false;
     $('town-send-reply').hidden = !reply;
     $('town-reply-preview').textContent = reply ? `${reply.author}：${reply.preview}` : '';
     this.sendTarget = next;
@@ -201,7 +202,7 @@ export class TownViews {
     $<HTMLTextAreaElement>('town-send-content').maxLength = kind === 'bonfire' ? 8000 : 64000;
     $('town-send-error').textContent = ''; this.updateComposer();
     $<HTMLDialogElement>('town-send-dialog').showModal();
-    (kind === 'dm' && !reply ? $('town-recipient') : $('town-send-content')).focus();
+    (kind === 'dm' ? $('town-recipient') : $('town-send-content')).focus();
   }
   private async send() {
     const target = this.sendTarget;
@@ -209,7 +210,7 @@ export class TownViews {
     if (target.generation !== this.live.generation || target.beingId !== this.live.beingId) { $('town-send-error').textContent = 'Town 身份已改变，请重新打开发送窗口。'; return; }
     const content = $<HTMLTextAreaElement>('town-send-content').value;
     const input: TownPost = target.kind === 'dm' ? { kind: 'dm', content, recipient: $<HTMLInputElement>('town-recipient').value } : target.kind === 'fireside' ? { kind: 'fireside', content, firesideId: target.firesideId! } : { kind: 'bonfire', content };
-    if (target.reply) { if (input.kind === 'dm') input.replyTo = String(target.reply.id); else input.replyTo = Number(target.reply.id); }
+    if (target.reply && input.kind !== 'dm') input.replyTo = Number(target.reply.id);
     this.sendBusy = true; this.updateLive(); $('town-send-error').textContent = '';
     $<HTMLButtonElement>('town-reply-clear').disabled = true;
     $<HTMLButtonElement>('town-send-close').disabled = true;
@@ -412,7 +413,7 @@ export class TownViews {
       mail: this.view === 'mail' ? this.tab as 'inbox' | 'sent' : undefined,
       search: $<HTMLInputElement>('town-search').value, filters, limit: this.view === 'firesides' ? 50 : 100,
       private: this.view === 'firesides', onSelect: resource => this.choose(resource),
-      onReply: this.live?.phase === 'connected' ? reply => this.compose(reply) : undefined,
+      onReply: this.view !== 'mail' && this.live?.phase === 'connected' ? reply => this.compose(reply) : undefined,
       onFilters: (values, count) => this.scenes.update({ count, filters: { tab: this.tab, ...values }, scope: `${count} 条符合筛选 · 最近 ${this.view === 'firesides' ? 50 : 100} 条内筛选；未确认阅读` }),
     });
   }

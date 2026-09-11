@@ -87,6 +87,7 @@ try {
   await open('私信');
   await page.getByText('来自伙伴的私信', { exact: true }).waitFor();
   assert.equal(await page.locator('.via-tag').textContent(), '借 tablet');
+  assert.equal(await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).count(), 0);
   await page.locator('#town-write').click();
   await page.locator('#town-recipient').fill('willow');
   await page.locator('#town-send-content').fill('不能发给自己');
