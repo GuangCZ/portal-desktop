@@ -152,7 +152,7 @@ try {
       if (!['客户端更新', '安装包已就绪'].includes(options.title)) throw new Error('Unexpected installer dialog: ' + options.title + ': ' + options.message);
       return { response: 1, checkboxChecked: false };
     };
-  }, { version: pkg.version, asset, sums, archive, requests: path.join(root, 'release-requests.log'), repository: process.env.PORTAL_DESKTOP_UPDATE_REPOSITORY || 'baiye0/Town-Client' });
+  }, { version: pkg.version, asset, sums, archive, requests: path.join(root, 'release-requests.log'), repository: process.env.PORTAL_DESKTOP_UPDATE_REPOSITORY || 'd5z/portal-desktop' });
   const exited = new Promise(resolve => app.process().once('exit', resolve));
   await page.evaluate(() => { void window.beings.checkUpdates().catch(() => {}); });
   let exitTimeout;

@@ -46,7 +46,7 @@ it.skipIf(process.platform !== 'darwin' || process.env.PORTAL_DESKTOP_MAC_PACKAG
       for (const file of ['Info.plist', '_CodeSignature/CodeResources', 'Resources/app.asar', 'Resources/runtime-bundle.json']) {
         expect(await readFile(path.join(current, 'Contents', file))).toEqual(await readFile(path.join(packaged, 'Contents', file)));
       }
-      const handoff = await stageInstaller(path.join(root, 'profile'), version, 'baiye0/Town-Client', path.join(current, 'Contents/MacOS/Portal Desktop'),
+      const handoff = await stageInstaller(path.join(root, 'profile'), version, 'd5z/portal-desktop', path.join(current, 'Contents/MacOS/Portal Desktop'),
         (async (url: string | URL | Request) => new Response(String(url).endsWith('SHA256SUMS.txt') ? sums : Readable.toWeb(createReadStream(archive)) as ReadableStream)) as typeof fetch);
       const stage = (await readdir(path.dirname(current))).find(name => name.startsWith('.portal-desktop-update-'))!;
       const unpacked = path.join(path.dirname(current), stage, `${productName}.app`);

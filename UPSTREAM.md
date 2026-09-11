@@ -1,8 +1,9 @@
 # Source provenance
 
 - Client: https://github.com/baiye0/loom-local, original base commit `5d347107326fd754fafea1c1dc373a42986ff49f`.
-- Heart Portal: https://github.com/baiye0/heart-portal, Git submodule at `heart-portal/`, tracking `codex/town-client-compat` for explicit source updates.
-- Pinned compatibility revision: `383d915396aef8f7bc1e91e2127271d704288217` on `codex/town-client-compat`.
+- Heart Portal fork: https://github.com/d5z/heart-portal, Git submodule at `heart-portal/`, tracking `codex/portal-desktop-compat` for explicit source updates.
+- Upstream Heart Portal: https://github.com/baiye0/heart-portal.
+- Pinned compatibility revision: `383d915396aef8f7bc1e91e2127271d704288217` on `codex/portal-desktop-compat`.
 - Upstream Portal base: `70191f5` (0.8.2), merged with the existing client compatibility changes. The parent repository's gitlink is the authoritative build revision.
 
 The compatibility branch is based on upstream main. It keeps client-managed
@@ -18,7 +19,7 @@ command again to use its recorded Portal revision. Builds never follow a moving
 branch or run `git pull` automatically.
 
 Keep all Portal Desktop compatibility changes on the long-lived
-`codex/town-client-compat` branch in the Portal repository. Merge upstream updates
+`codex/portal-desktop-compat` branch in the Portal fork. Merge upstream updates
 into that branch, verify the client and engine together, and publish the Portal
 commit before updating the client gitlink. Do not point the client at a temporary
 local branch or directly at upstream main.

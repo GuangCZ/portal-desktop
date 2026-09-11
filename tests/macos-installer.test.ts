@@ -58,7 +58,7 @@ mac('stages a signed ZIP without touching the installed app or profile; cancella
   const candidate = await appFixture(path.join(root, 'download'), '0.1.4');
   await mkdir(profile); await writeFile(path.join(profile, 'connection.json'), 'unchanged encrypted fixture');
   const old = await readFile(path.join(current, 'Contents/Info.plist'));
-  const handoff = await stageInstaller(profile, '0.1.4', 'baiye0/Town-Client', path.join(current, 'Contents/MacOS/Portal Desktop'), await archiveFetcher(root, candidate, '0.1.4'));
+  const handoff = await stageInstaller(profile, '0.1.4', 'd5z/portal-desktop', path.join(current, 'Contents/MacOS/Portal Desktop'), await archiveFetcher(root, candidate, '0.1.4'));
   expect((await readdir(path.dirname(current))).some(name => name.startsWith('.portal-desktop-update-'))).toBe(true);
   expect(await readFile(path.join(current, 'Contents/Info.plist'))).toEqual(old);
   await handoff.discard();
@@ -75,7 +75,7 @@ mac('rejects corrupt downloads, modified UI, wrong versions and missing executab
     if (failure === 'ui') await writeFile(path.join(candidate, 'Contents/Resources/app.asar'), 'modified UI');
     if (failure === 'executable') await rm(path.join(candidate, 'Contents/MacOS/Portal Desktop'));
     if (failure === 'engine') await writeFile(path.join(candidate, 'Contents/Resources/heart-portal'), 'corrupted engine');
-    await expect(stageInstaller(path.join(root, 'profile'), '0.1.4', 'baiye0/Town-Client', path.join(current, 'Contents/MacOS/Portal Desktop'),
+    await expect(stageInstaller(path.join(root, 'profile'), '0.1.4', 'd5z/portal-desktop', path.join(current, 'Contents/MacOS/Portal Desktop'),
       await archiveFetcher(root, candidate, '0.1.4', failure === 'digest'))).rejects.toThrow();
     expect(await readdir(path.dirname(current))).toEqual(['Portal Desktop.app']);
     expect(await readdir(path.join(root, 'profile/client-updates'))).toEqual([]);

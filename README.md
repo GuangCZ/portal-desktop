@@ -60,7 +60,7 @@ Portal can refresh its Kit inventory. An installed manifest, a running process, 
 
 ### Get the application
 
-Check [Releases](https://github.com/baiye0/Town-Client/releases) for packages and release notes matching your operating system and architecture. Packaged builds with bundled Portal do not require a separate Node or Rust installation for chat and local tools. Individual Kits may have additional dependencies.
+Check [Releases](https://github.com/d5z/portal-desktop/releases) for packages and release notes matching your operating system and architecture. Packaged builds with bundled Portal do not require a separate Node or Rust installation for chat and local tools. Individual Kits may have additional dependencies.
 
 | Platform | Support and validation scope |
 | --- | --- |
@@ -104,7 +104,7 @@ If another local Portal or enabled guardian serves the same Being, the client as
 A full build requires Git, Node.js 22.12+, npm, Rust stable, and the target platform's linker tools. macOS needs Xcode Command Line Tools. Windows needs MSVC, Visual Studio C++ Build Tools, and the Windows SDK. You can skip the Portal build while working only on the chat interface.
 
 ```bash
-git clone --recurse-submodules https://github.com/baiye0/Town-Client.git portal-desktop
+git clone --recurse-submodules https://github.com/d5z/portal-desktop.git portal-desktop
 cd portal-desktop
 npm ci
 npm run build:portal
@@ -218,14 +218,14 @@ The detailed implementation documents below are currently primarily in Chinese. 
 
 ## Contributing
 
-Use [Issues](https://github.com/baiye0/Town-Client/issues) for bug reports and proposals, and [Pull Requests](https://github.com/baiye0/Town-Client/pulls) for changes. For new protocols, plugin APIs, or substantial scope changes, first describe the use case, server support, and compatibility approach in an issue.
+Use [Issues](https://github.com/d5z/portal-desktop/issues) for bug reports and proposals, and [Pull Requests](https://github.com/d5z/portal-desktop/pulls) for changes. For new protocols, plugin APIs, or substantial scope changes, first describe the use case, server support, and compatibility approach in an issue.
 
 1. Fork the repository, initialize submodules, and work on one focused change in a separate branch.
 2. Follow the existing TypeScript / Rust conventions. Reuse established protocols and modules, and keep changes aligned with the roadmap.
 3. For code changes, run type checks and relevant tests. For UI changes, include screenshots or a recording and the validation environment. Documentation-only changes need link, command, and example checks.
 4. Explain the problem, behavior change, validation results, and untested platforms in the PR. Update affected documentation, keep both README languages aligned, and distinguish plans from completed work.
 
-Bug reports should include the client version/build identifier, OS and architecture, reproduction steps, and expected and actual behavior. A redacted diagnostic report can help. Do not commit real connection links, tokens, private conversations, personal Portal configuration, Kit secrets, or build artifacts. Portal compatibility changes belong on `codex/town-client-compat`; follow [UPSTREAM.md](UPSTREAM.md) before updating the client submodule reference.
+Bug reports should include the client version/build identifier, OS and architecture, reproduction steps, and expected and actual behavior. A redacted diagnostic report can help. Do not commit real connection links, tokens, private conversations, personal Portal configuration, Kit secrets, or build artifacts. Portal compatibility changes belong on `codex/portal-desktop-compat`; follow [UPSTREAM.md](UPSTREAM.md) before updating the client submodule reference.
 
 ## License and acknowledgments
 

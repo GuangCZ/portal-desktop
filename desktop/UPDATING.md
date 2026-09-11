@@ -37,7 +37,7 @@ macOS 更新流程读取 GitHub `releases/latest`，使用 `vX.Y.Z` 正式 tag �
 - `npm run build:portal` 构建配套源码；`npm run make` 打包时从实际二进制读取版本、计算摘要并生成清单。不要复用未知来源或不对应源码的二进制。
 - `.github/workflows/release.yml` 只由版本 tag 触发。两个平台构建、Mac DMG 安装及 ZIP 暂存验证和 Windows 原生升级测试通过、包内引擎摘要核对后，先创建草稿并上传全部安装包、清单及摘要，最后公开为正式 Release。macOS 必须同时提供一个 DMG 和一个 ZIP，两者均写入 `SHA256SUMS.txt`；缺包或上传失败不发布正式版本。
 - 更新 `desktop/RELEASE_NOTES.md` 后再创建版本 tag；草稿和预发布不会提示用户更新。该首版不提供 Intel Mac 安装包。
-- 默认更新源为 `baiye0/Town-Client`。私有仓库无法匿名检测：应在构建时设置 `PORTAL_DESKTOP_UPDATE_REPOSITORY=owner/public-release-repo`（Actions 中使用同名 repository variable），只公开版本及二进制；不内置 GitHub token。保持私有时可在浏览器登录发布页下载。
+- 默认更新源为 `d5z/portal-desktop`。私有仓库无法匿名检测：应在构建时设置 `PORTAL_DESKTOP_UPDATE_REPOSITORY=owner/public-release-repo`（Actions 中使用同名 repository variable），只公开版本及二进制；不内置 GitHub token。保持私有时可在浏览器登录发布页下载。
 - 下载和安装由用户手动触发。macOS 与 Portal 源仓使用相同的 D5 Developer ID、固定标识、Hardened Runtime 和安全时间戳；公证同样暂缓。签发和 Secrets 配置见 [BUILDING.md](BUILDING.md)。Windows Authenticode 尚未配置。SHA-256 检查不能代替签名和来源信任。
 
 ## 验证

@@ -60,7 +60,7 @@ Portal 支持刷新 Kit 清单。清单存在、进程运行与第三方服务�
 
 ### 获取客户端
 
-从 [Releases](https://github.com/baiye0/Town-Client/releases) 查看已发布的安装包与版本说明，选择对应操作系统和架构。使用包含内置 Portal 的应用包进行聊天和本机工具调用，不需要另装 Node 或 Rust；个别 Kit 可能有额外依赖。
+从 [Releases](https://github.com/d5z/portal-desktop/releases) 查看已发布的安装包与版本说明，选择对应操作系统和架构。使用包含内置 Portal 的应用包进行聊天和本机工具调用，不需要另装 Node 或 Rust；个别 Kit 可能有额外依赖。
 
 | 平台 | 当前支持与验证范围 |
 | --- | --- |
@@ -104,7 +104,7 @@ macOS 下载 `portal-desktop-<版本>-macos-arm64.dmg`，打开后将 **Portal D
 完整构建需要 Git、Node.js 22.12+、npm、Rust stable 及目标平台的链接工具。macOS 需 Xcode Command Line Tools；Windows 需 MSVC、Visual Studio C++ Build Tools 和 Windows SDK。只开发聊天界面时可暂不构建 Portal。
 
 ```bash
-git clone --recurse-submodules https://github.com/baiye0/Town-Client.git portal-desktop
+git clone --recurse-submodules https://github.com/d5z/portal-desktop.git portal-desktop
 cd portal-desktop
 npm ci
 npm run build:portal
@@ -216,14 +216,14 @@ Loom 与 Town 凭据分别通过系统密钥库加密保存，配对码不落盘
 
 ## 参与贡献
 
-欢迎通过 [Issues](https://github.com/baiye0/Town-Client/issues) 反馈问题或提出方案，通过 [Pull Requests](https://github.com/baiye0/Town-Client/pulls) 提交改进。涉及新协议、插件接口或较大范围变更时，先在 Issue 中说明使用场景、服务端支持和兼容方式。
+欢迎通过 [Issues](https://github.com/d5z/portal-desktop/issues) 反馈问题或提出方案，通过 [Pull Requests](https://github.com/d5z/portal-desktop/pulls) 提交改进。涉及新协议、插件接口或较大范围变更时，先在 Issue 中说明使用场景、服务端支持和兼容方式。
 
 1. Fork 仓库并初始化子模块，使用独立分支完成一项明确的改动。
 2. 遵循现有 TypeScript / Rust 代码风格，优先复用已有协议与模块，避免引入与当前路线图无关的能力。
 3. 代码改动运行类型检查和相关测试；界面改动附截图或录屏及验证环境。纯文档改动检查链接、命令与示例即可。
 4. PR 说明问题、行为变化、验证结果与未覆盖的平台；同步更新受影响文档，保持中英文 README 一致，不将计划写成已完成。
 
-报告问题请包含客户端版本/构建标识、操作系统与架构、复现步骤、预期和实际结果，可附脱敏诊断报告。不要提交真实连接链接、token、私人对话、个人 Portal 配置、Kit 密钥或构建产物。Portal 兼容变更固定维护在 `codex/town-client-compat`，提交客户端子模块引用前按 [UPSTREAM.md](UPSTREAM.md) 完成配套验证。
+报告问题请包含客户端版本/构建标识、操作系统与架构、复现步骤、预期和实际结果，可附脱敏诊断报告。不要提交真实连接链接、token、私人对话、个人 Portal 配置、Kit 密钥或构建产物。Portal 兼容变更固定维护在 `codex/portal-desktop-compat`，提交客户端子模块引用前按 [UPSTREAM.md](UPSTREAM.md) 完成配套验证。
 
 ## 许可与致谢
 

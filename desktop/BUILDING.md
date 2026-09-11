@@ -19,7 +19,7 @@ Electron 与 Portal 必须来自同一目标操作系统和架构。目前脚本
 Portal 源码通过 `heart-portal/` 子模块引用，由客户端提交锁定版本。以下命令可在 macOS/Linux shell 或 Windows PowerShell 中逐行执行。
 
 ```text
-git clone --recurse-submodules https://github.com/baiye0/Town-Client.git portal-desktop
+git clone --recurse-submodules https://github.com/d5z/portal-desktop.git portal-desktop
 cd portal-desktop
 npm ci
 npm run build:portal
@@ -30,7 +30,7 @@ npm start
 
 ### 更新 Portal
 
-运行 `git submodule update --remote heart-portal` 显式取得兼容分支 `codex/town-client-compat` 的最新提交。兼容分支合入原仓库 `main` 的更新，仅保留客户端必要的生命周期适配。验证客户端和引擎后，在 Portal Desktop 中提交子模块引用并更新 `UPSTREAM.md`。构建只使用锁定提交，不自动拉取远端代码；Portal 的编译、安装包与发布均跟随客户端。
+运行 `git submodule update --remote heart-portal` 显式取得兼容分支 `codex/portal-desktop-compat` 的最新提交。兼容分支合入原仓库 `main` 的更新，仅保留客户端必要的生命周期适配。验证客户端和引擎后，在 Portal Desktop 中提交子模块引用并更新 `UPSTREAM.md`。构建只使用锁定提交，不自动拉取远端代码；Portal 的编译、安装包与发布均跟随客户端。
 
 仓库不提交 `node_modules/`、Portal 二进制、生成的网页资产或 `out/`。`npm ci` 根据 `package-lock.json` 安装依赖；首次构建需要联网下载 Electron、npm 包和 Cargo 依赖。`npm start` 先生成离线网页资产，再启动开发模式。
 
@@ -81,7 +81,7 @@ macOS 打开 DMG，将 `Portal Desktop.app` 拖到其中的 Applications 快捷�
 
 客户端已处理 Squirrel 安装、更新和卸载事件，由安装程序创建或移除快捷方式；这些短进程不会启动 Portal。Windows Setup 升级及后台任务仍需实机验收。
 
-macOS 签发与 [Portal 源仓](https://github.com/baiye0/heart-portal/blob/main/scripts/package-portal-macos.py) 保持一致：使用 `Developer ID Application: D5 Inc. (7N8XHQWCNN)`、固定标识、Hardened Runtime 和安全时间戳。客户端及 Electron Helpers/Frameworks 由同一证书签名；客户端标识为 `town.beings.portal-desktop`，内置 Portal 保留源仓的 `com.aspect.heart-portal`。签名身份和标识记录在 `desktop/macos-signing.json`，升级时保持稳定。
+macOS 签发与 [Portal 源仓](https://github.com/d5z/heart-portal/blob/main/scripts/package-portal-macos.py) 保持一致：使用 `Developer ID Application: D5 Inc. (7N8XHQWCNN)`、固定标识、Hardened Runtime 和安全时间戳。客户端及 Electron Helpers/Frameworks 由同一证书签名；客户端标识为 `town.beings.portal-desktop`，内置 Portal 保留源仓的 `com.aspect.heart-portal`。签名身份和标识记录在 `desktop/macos-signing.json`，升级时保持稳定。
 
 内置 Portal 直接复用锁定子模块的 `scripts/package-portal-macos.py` 签发并验证，之后才生成 `runtime-bundle.json`。应用签名阶段保留该二进制的签名，确保发布清单描述最终包内字节。`package` / `make` 默认要求该 Developer ID 的证书和私钥位于当前钥匙串；可用 `PORTAL_DESKTOP_MAC_KEYCHAIN` 指定专用钥匙串路径。证书缺失、时间戳或签名验证失败会终止出包，不自动降级。
 
