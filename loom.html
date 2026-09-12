@@ -1718,6 +1718,7 @@ function applyDotClass() {
   if (sbsTransition) classes.push(sbsTransition);
   else if (!sbsEnabled && base !== 'thinking') classes.push('sbs-off');
   $dot.className = classes.join(' ');
+  window.__loomSbsEnabled = sbsEnabled;
   $dot.title = sbsEnabled
     ? '并肩基底开着：心跳自己跳（点一下让它睡）'
     : '并肩基底关着：只在你说话时醒（点一下叫醒它）';

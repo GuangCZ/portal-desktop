@@ -18,6 +18,8 @@ export class AppModel extends Store {
   chatSource = "";
   chatLoading = false;
   connection = "";
+  sbsEnabled = true;
+  sbsKnown = false;
   toastMessage = "";
   settingsOpen = false;
   clientSettingsOpen = false;
@@ -184,8 +186,20 @@ export class AppModel extends Store {
     this.searchEntries = [];
     this.workspace.frameLoaded();
     this.postAppearance();
+    this.post({ type: "beings:sbs-request" });
     this.town.updateLive();
     this.post({ type: "beings:search-request" });
+    this.changed();
+  }
+  toggleSbs() {
+    if (!this.snapshot?.settings.hasToken) return;
+    this.sbsEnabled = !this.sbsEnabled;
+    this.post({ type: "beings:sbs-toggle" });
+    this.changed();
+  }
+  setSbsEnabled(enabled: boolean) {
+    this.sbsEnabled = enabled;
+    this.sbsKnown = true;
     this.changed();
   }
   postAppearance() {

@@ -44,6 +44,10 @@ export function useChatBridge(
       }
       if (message.revision !== new URL(target.src).searchParams.get("revision"))
         return;
+      if (message.type === "beings:sbs-state" && typeof message.enabled === "boolean") {
+        app.setSbsEnabled(message.enabled);
+        return;
+      }
       if (
         message.type === "beings:open-settings" &&
         !document.querySelector("dialog[open]")
