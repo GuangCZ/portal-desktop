@@ -63,7 +63,8 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
     if (['town', 'kits', 'portal'].includes(name)) {
       const options = page.locator('#conversation-options');
       if ((await options.getAttribute('open')) === null) await options.locator('summary').click();
-      await options.locator(`[data-view="${name}"]`).click();
+      if (name === 'portal') { await options.locator('#client-settings-button').click(); await page.locator('#client-settings-dialog [data-view="portal"]').click(); }
+      else await options.locator(`[data-view="${name}"]`).click();
     } else {
       const frame = page.frameLocator('#chat-frame');
       await frame.locator('#chat-places-trigger').click();

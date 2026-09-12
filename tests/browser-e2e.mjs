@@ -41,6 +41,7 @@ try {
   await page.waitForFunction(() => document.querySelector('#browser-title').textContent === '第二页');
   await page.locator('#options-trigger').click();
   await page.locator('#client-settings-button').click();
+  await page.locator('#settings-tab-general').click();
   await page.waitForTimeout(100);
   assert.equal(await visible(), false);
   await page.locator('#close-client-settings').click();

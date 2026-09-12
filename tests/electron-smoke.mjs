@@ -88,7 +88,7 @@ let backgroundTest = false;
 let cleanupPromise;
 async function openOptions(page) {
   const options = page.locator('#conversation-options');
-  if ((await options.getAttribute('open')) === null) await options.locator('summary').click();
+  if (await page.locator('#options-trigger').getAttribute('aria-expanded') !== 'true') await options.locator('summary').click();
   return options;
 }
 async function openChatSearch(page) {
@@ -98,7 +98,8 @@ async function openChatSearch(page) {
 async function openPlace(page, view) {
   if (view === 'chat') { await page.locator('#back-to-chat').click(); return; }
   const options = await openOptions(page);
-  await options.locator(`[data-view="${view}"]`).click();
+  if (view === 'portal') { await options.locator('#client-settings-button').click(); await page.locator('#client-settings-dialog [data-view="portal"]').click(); }
+  else await options.locator(`[data-view="${view}"]`).click();
 }
 function cleanup() {
   return cleanupPromise ??= (async () => {
@@ -252,7 +253,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   await mkdir('test-results', { recursive: true });
   await page.screenshot({ path: 'test-results/chat.png' });
   // Model settings and the compact options menu preserve the draft.
-  await (await openOptions(page)).locator('[data-chat-action="model"]').click();
+  await (await openOptions(page)).locator('#client-settings-button').click();
+  await page.locator('[data-chat-action="model"]').click();
   await frame.locator('#settings-panel.active').waitFor();
   await frame.locator('#settings-panel .btn-close').dispatchEvent('click');
   await frame.locator('#settings-panel.active').waitFor({ state: 'hidden' });
@@ -262,7 +264,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   assert.equal(await frame.locator('#input').inputValue(), 'unsent draft');
   await options.locator('summary').click();
   assert.equal(await frame.locator('#input').inputValue(), 'unsent draft');
-  await (await openOptions(page)).locator('#theme-toggle').click();
+  await (await openOptions(page)).locator('#client-settings-button').click();
+  await page.locator('#settings-tab-appearance').click();
+  await page.locator('#theme-toggle').click();
+  await page.locator('#close-client-settings').click();
   await childFrame.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
   assert.equal(await app.evaluate(({ nativeTheme }) => nativeTheme.themeSource), 'dark');
   await page.screenshot({ path: 'test-results/chat-dark.png' });

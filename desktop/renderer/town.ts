@@ -413,7 +413,7 @@ export class TownViews {
       mail: this.view === 'mail' ? this.tab as 'inbox' | 'sent' : undefined,
       search: $<HTMLInputElement>('town-search').value, filters, limit: this.view === 'firesides' ? 50 : 100,
       private: this.view === 'firesides', onSelect: resource => this.choose(resource),
-      onReply: this.view !== 'mail' && this.live?.phase === 'connected' ? reply => this.compose(reply) : undefined,
+      onReply: this.view === 'firesides' && this.live?.phase === 'connected' ? reply => this.compose(reply) : undefined,
       onFilters: (values, count) => this.scenes.update({ count, filters: { tab: this.tab, ...values }, scope: `${count} 条符合筛选 · 最近 ${this.view === 'firesides' ? 50 : 100} 条内筛选；未确认阅读` }),
     });
   }

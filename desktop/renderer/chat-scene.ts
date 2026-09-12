@@ -8,6 +8,7 @@ import { mountChatLinks } from './chat-links';
   const composer = document.getElementById('input') as HTMLTextAreaElement | null;
   if (composer) composer.placeholder = '说点什么…';
   document.addEventListener('keydown', event => {
+    if ((event.metaKey || event.ctrlKey) && event.key === ',') { event.preventDefault(); send({ type: 'beings:open-settings' }); }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
       event.preventDefault(); send({ type: 'beings:chat-search' });
     }

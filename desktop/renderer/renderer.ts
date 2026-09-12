@@ -8,6 +8,7 @@ import { TownViews } from './town';
 import { Workspace } from './workspace';
 import './quiet.css';
 import { mountChatSearch } from './chat-search';
+import { mountOptions } from './options';
 import { validPlaceTarget } from './place-target';
 import type { PortalState, Snapshot } from '../shared';
 
@@ -39,7 +40,7 @@ function connectionStatus(state: string) {
 }
 function applyTheme(next: 'light' | 'dark') {
   theme = next; document.documentElement.dataset.theme = next;
-  $('theme-toggle').setAttribute('title', next === 'light' ? '切换到深色' : '切换到浅色');
+  $('theme-toggle').textContent = next === 'light' ? '配色 · 浅色，点击切换' : '配色 · 深色，点击切换';
   const frame = $<HTMLIFrameElement>('chat-frame');
   if (frame.getAttribute('src')) frame.contentWindow?.postMessage({ type: 'beings:appearance', theme: next }, 'beings://chat');
 }
@@ -84,10 +85,8 @@ function setView(view: string, resourceId?: string) {
   });
 }
 const chatSearch = mountChatSearch($<HTMLIFrameElement>('chat-frame'), () => setView('chat'));
-const options = $<HTMLDetailsElement>('conversation-options');
-options.addEventListener('click', event => { if ((event.target as Element).closest('button')) options.open = false; });
-document.addEventListener('pointerdown', event => { if (!options.contains(event.target as Node)) options.open = false; });
-options.addEventListener('keydown', event => { if (event.key === 'Escape') { options.open = false; $('options-trigger').focus(); } });
+mountOptions();
+$('town-settings-button').addEventListener('click', () => $('town-auth-button').click());
 $('back-to-chat').addEventListener('click', () => setView('chat'));
 $('place-sheet').addEventListener('cancel', event => { event.preventDefault(); setView('chat'); });
 $('place-sheet').addEventListener('click', event => {
@@ -280,6 +279,9 @@ $('settings-form').addEventListener('submit', async event => {
 window.addEventListener('message', event => {
   const frame = $<HTMLIFrameElement>('chat-frame');
   if (event.origin === 'beings://chat' && event.source === frame.contentWindow &&
+      event.data?.type === 'beings:open-settings' && frame.getAttribute('src') &&
+      event.data.revision === new URL(frame.src).searchParams.get('revision') && !document.querySelector('dialog[open]')) { $('client-settings-button').click(); return; }
+  if (event.origin === 'beings://chat' && event.source === frame.contentWindow &&
       event.data?.type === 'beings:chat-search' && frame.getAttribute('src') &&
       event.data.revision === new URL(frame.src).searchParams.get('revision')) { chatSearch.open(); return; }
   if (event.origin === 'beings://chat' && event.source === frame.contentWindow &&
@@ -297,7 +299,7 @@ window.addEventListener('message', event => {
 document.addEventListener('keydown', event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f' && !document.querySelector('dialog[open]')) { event.preventDefault(); chatSearch.open(); }
   if ((event.metaKey || event.ctrlKey) && event.key === '1') { event.preventDefault(); setView('chat'); }
-  if ((event.metaKey || event.ctrlKey) && event.key === ',') { event.preventDefault(); showSettings(); }
+  if ((event.metaKey || event.ctrlKey) && event.key === ',' && !document.querySelector('dialog[open]')) { event.preventDefault(); $('client-settings-button').click(); }
 });
 if (navigator.userAgent.includes('Windows')) document.querySelector('#toggle-chat-search small')!.textContent = 'Ctrl F';
 if (!api) toast('请通过 Portal Desktop 桌面客户端打开此页面。');

@@ -75,6 +75,7 @@ try {
   });
   await page.locator('#options-trigger').click();
   await page.screenshot({ path: path.join(os.tmpdir(), 'beings-open-loom.png') });
+  await page.locator('#options-help').click();
   await page.locator('#open-loom').click();
   assert.equal((await page.evaluate(() => window.beings.browserState())).open, true);
   await page.evaluate(() => window.beings.browserAction('external'));

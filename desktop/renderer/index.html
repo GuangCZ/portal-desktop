@@ -21,18 +21,26 @@
     <div class="workspace-stage">
     <header class="topbar">
       <div class="pair-name"><span class="pair-human">你</span><span class="pair-link" aria-hidden="true">·</span><span id="conversation-name">Being</span><span id="connection-light" class="connection-light" role="img" aria-label="尚未连接"></span></div>
-      <details id="conversation-options"><summary id="options-trigger" aria-label="更多选项" title="更多选项"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></summary>
+      <div class="topbar-actions"><button id="refresh-chat" class="topbar-icon-button" aria-label="刷新 Being 对话" title="刷新 Being 对话" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-3.9L3 9m0 0V4m0 5h5M4 13a8 8 0 0 0 14.9 3.9L21 15m0 0v5m0-5h-5"/></svg></button><details id="conversation-options"><summary id="options-trigger" aria-label="更多选项" title="更多选项"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></summary>
         <div class="options-menu">
-          <button id="toggle-chat-search" aria-controls="chat-search-panel" aria-expanded="false">查找对话 <small>⌘ F</small></button>
-          <button id="refresh-chat" disabled>刷新对话</button>
-          <button id="open-loom" disabled>打开原版 Loom</button>
-          <button data-chat-action="model">模型设置</button><button data-chat-action="being">关于 Being</button>
-          <div class="options-divider"></div>
-          <button data-view="town">小镇</button><button data-view="kits">工具</button><button data-view="portal">Portal 设置</button><button id="open-workspace">工作目录</button>
-          <button id="open-browser">浏览器</button><button id="open-town-guide">小镇说明</button>
-          <div class="options-divider"></div>
-          <button id="open-diagnostics">连接诊断</button><button id="check-updates">检查更新</button><button id="settings-button">连接设置</button><button id="client-settings-button">客户端设置</button><button id="theme-toggle">切换配色</button><button data-chat-action="privacy">隐私说明</button><button id="quit-client">退出客户端</button>
-          <span id="cloud-status">尚未连接</span>
+          <div id="options-home">
+            <button id="toggle-chat-search" aria-controls="chat-search-panel" aria-expanded="false">查找对话 <small>⌘ F</small></button>
+            <div class="options-divider"></div>
+            <button data-view="town">小镇</button><button data-view="kits">工具</button><button id="open-browser">浏览器</button>
+            <div class="options-divider"></div>
+            <button id="client-settings-button">设置 <small>⌘ ,</small></button>
+            <button id="options-help" aria-controls="options-secondary" aria-expanded="false">对话与帮助 <span aria-hidden="true">›</span></button>
+            <button id="quit-client">退出客户端</button>
+            <span id="cloud-status">尚未连接</span>
+          </div>
+          <div id="options-secondary" hidden>
+            <button id="options-back">‹ 返回</button>
+            <div class="options-divider"></div>
+            <button id="open-loom" disabled>打开原版 Loom</button>
+            <button data-chat-action="being">关于 Being</button>
+            <button id="open-town-guide">小镇说明</button>
+            <button data-chat-action="privacy">隐私说明</button>
+          </div>
         </div>
       </details>
     </header>
@@ -50,7 +58,7 @@
     <aside id="companion-panel" aria-label="一起看" hidden>
       <div class="companion-heading"><div><h2>一起看</h2></div><button id="close-companion" class="icon-button close" aria-label="收起话题"></button></div>
       <div class="shared-object"><h3 id="scene-object-title"></h3><p id="scene-object-source"></p><blockquote id="scene-object-text"></blockquote></div>
-      <button id="scene-compose" class="primary" disabled>放入对话 <span aria-hidden="true">↗</span></button><p class="scene-disclosure">保留出处，放入草稿，由你发送。</p>
+      <button id="scene-compose" class="primary" disabled>放入对话 <span aria-hidden="true">↗</span></button><p class="scene-disclosure">仅放入引用与出处，由你发送。</p>
       <div class="object-actions"><button id="scene-return">回到来源</button><button id="scene-clear">结束这个话题</button></div>
     </aside>
     <div id="browser-divider" role="separator" tabindex="0" aria-label="调整浏览器宽度" aria-orientation="vertical" aria-controls="browser-panel" aria-valuemin="25" aria-valuemax="75" aria-valuenow="49" title="拖动调整宽度，双击恢复默认" hidden></div>
@@ -124,13 +132,40 @@
   </dialog>
   <dialog id="client-settings-dialog" aria-labelledby="client-settings-title">
     <div class="client-settings-content">
-      <div class="dialog-heading"><h2 id="client-settings-title">客户端设置</h2><button type="button" id="close-client-settings" class="close" aria-label="关闭客户端设置"></button></div>
+      <div class="dialog-heading"><h2 id="client-settings-title">设置</h2><button type="button" id="close-client-settings" class="close" aria-label="关闭客户端设置"></button></div>
+      <div class="settings-tabs" role="tablist" aria-label="设置分类">
+        <button id="settings-tab-connections" role="tab" aria-selected="true" aria-controls="settings-panel-connections">连接与 Being</button>
+        <button id="settings-tab-appearance" role="tab" aria-selected="false" aria-controls="settings-panel-appearance" tabindex="-1">外观与阅读</button>
+        <button id="settings-tab-general" role="tab" aria-selected="false" aria-controls="settings-panel-general" tabindex="-1">通用</button>
+      </div>
+      <div id="settings-panel-connections" role="tabpanel" aria-labelledby="settings-tab-connections">
+      <section class="settings-group" aria-labelledby="settings-connections"><h3 id="settings-connections">连接与 Being</h3>
+        <button id="settings-button" data-settings-route>Being 连接与本机配置 <span>›</span></button>
+        <button id="town-settings-button" data-settings-route>Town 配对与身份 <span>›</span></button>
+        <button data-chat-action="model" data-settings-route>模型设置 <span>›</span></button>
+        <button data-view="portal" data-settings-route>Portal 运行状态 <span>›</span></button>
+        <button id="open-workspace">打开工作目录 <span>↗</span></button>
+      </section>
+      </div>
+      <div id="settings-panel-appearance" role="tabpanel" aria-labelledby="settings-tab-appearance" hidden>
+      <section class="settings-group" aria-labelledby="settings-appearance"><h3 id="settings-appearance">外观与阅读</h3>
+        <button id="theme-toggle">切换配色</button>
+      <div class="reading-setting"><label for="reading-size">阅读字号 <output id="reading-size-value" for="reading-size">15 px</output></label><input id="reading-size" type="range" min="13" max="21" step="1" value="15"><button id="reading-reset" type="button">恢复默认</button><p class="field-help">调整对话与 Town 正文字号，立即预览并记住设置。</p></div>
+      </section>
+      </div>
+      <div id="settings-panel-general" role="tabpanel" aria-labelledby="settings-tab-general" hidden>
+      <section class="settings-group" aria-labelledby="settings-startup"><h3 id="settings-startup">启动与后台</h3>
       <p class="field-help">关闭窗口后，客户端继续运行。点击托盘图标或重新打开应用可恢复窗口；选择「退出客户端」才会结束运行。</p>
       <div class="switch-list">
         <label><span><strong>开机自启客户端</strong><small id="client-startup-help">正在读取系统设置…</small></span><input id="client-startup-input" type="checkbox" role="switch" disabled></label>
       </div>
       <p class="form-error" id="client-settings-error" role="alert"></p>
-      <div class="reading-setting"><label for="reading-size">阅读字号 <output id="reading-size-value" for="reading-size">15 px</output></label><input id="reading-size" type="range" min="13" max="21" step="1" value="15"><button id="reading-reset" type="button">恢复默认</button><p class="field-help">调整对话与 Town 正文字号，立即预览并记住设置。</p></div>
+      </section>
+
+      <section class="settings-group" aria-labelledby="settings-maintenance"><h3 id="settings-maintenance">维护</h3>
+        <button id="open-diagnostics" data-settings-route>连接诊断 <span>›</span></button><button id="check-updates">检查更新</button>
+      </section>
+      </div>
     </div>
   </dialog>
   <dialog id="settings-dialog">

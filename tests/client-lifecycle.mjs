@@ -40,6 +40,7 @@ try {
   });
   await page.locator('#options-trigger').click();
   await page.screenshot({ path: path.join(os.tmpdir(), 'beings-town-guide.png') });
+  await page.locator('#options-help').click();
   await page.locator('#open-town-guide').click();
   await page.waitForFunction(() => !document.querySelector('#conversation-options').open);
   assert.equal((await page.evaluate(() => window.beings.browserState())).address, 'https://beings.town/');
@@ -52,6 +53,7 @@ try {
   });
   await page.locator('#options-trigger').click();
   await page.locator('#client-settings-button').click();
+  await page.locator('#settings-tab-general').click();
   const toggle = page.locator('#client-startup-input');
   if (process.platform === 'darwin' || process.platform === 'win32') {
     await toggle.check();
@@ -60,6 +62,7 @@ try {
     await page.locator('#close-client-settings').click();
     await page.locator('#options-trigger').click();
     await page.locator('#client-settings-button').click();
+  await page.locator('#settings-tab-general').click();
     await page.waitForFunction(() => !document.querySelector('#client-startup-input').disabled);
     assert.equal(await toggle.isChecked(), true);
     await page.screenshot({ path: path.join(os.tmpdir(), 'beings-client-settings.png') });

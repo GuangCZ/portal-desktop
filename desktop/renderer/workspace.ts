@@ -86,7 +86,7 @@ export class Workspace {
     if (scene.selection.private && (!scene.identity || scene.identity !== this.scenes.being)) { this.toast('该内容的 Town 身份与对话 Being 不一致，不能跨身份放入草稿。'); return; }
     this.scenes.reference = structuredClone(scene);
     const resource = scene.selection;
-    const draft = `我想与你一起看这段内容。\n\n来源：${scene.title}\n对象：${resource.title}\n引用：${scene.sceneId} / ${resource.id}\n观察时间：${scene.observedAt}\n以下是引用内容：\n${resource.excerpt.split('\n').map(line => '> ' + line).join('\n')}`;
+    const draft = `一起看看${scene.title}里的这段${resource.author ? `（${resource.author}）` : ''}：\n\n${resource.excerpt.split('\n').map(line => '> ' + line).join('\n')}`;
     this.pendingDraft = structuredClone(scene); this.draftRequest = crypto.randomUUID(); this.render();
     this.frame.contentWindow?.postMessage({ type: 'beings:scene-draft', id: this.draftRequest, text: draft, expiresAt: Date.now() + 2500 }, 'beings://chat');
     clearTimeout(this.draftTimer); this.draftTimer = setTimeout(() => { if (this.draftRequest) { this.draftRequest = ''; this.pendingDraft = null; this.render(); this.toast('对话页面尚未准备好，请稍后重试。'); } }, 3000);

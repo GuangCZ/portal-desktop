@@ -52,6 +52,18 @@ try {
       return Response.json({ error: 'fixture only' }, { status: 404 });
     });
   });
+  await app.evaluate(({ protocol }) => {
+    protocol.handle('http', request => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith('/api/stream/active')) return new Response(null, { status: 204 });
+      return Response.json({ being_name: 'willow', messages: [], status: 'ok' });
+    });
+  });
+  await page.evaluate(async dir => {
+    const { settings } = await window.beings.snapshot();
+    await window.beings.save({ ...settings, connectionLink: 'http://127.0.0.1:1/willow/?token=local-ui-fixture', workspace: dir, backgroundEnabled: false, autoStart: false });
+  }, dir);
+  await page.frameLocator('#chat-frame').locator('#input').waitFor();
   const home = async () => {
     if (await page.locator('#place-sheet').evaluate(el => el.open)) await page.locator('#back-to-chat').click();
     await page.locator('#options-trigger').click();
@@ -62,6 +74,42 @@ try {
     await home();
     await page.locator('.service-card').filter({ has: page.getByRole('heading', { name: title, exact: true }) }).getByRole('button', { name: '打开', exact: true }).click();
   };
+  // Compact menu: nested navigation, interrupted motion, keyboard and merged settings.
+  await page.locator('#options-trigger').click();
+  assert.equal(await page.locator('#options-home > button').count(), 7);
+  await page.locator('#options-help').click();
+  assert.equal(await page.locator('#conversation-options').getAttribute('open'), '');
+  await page.keyboard.press('Escape');
+  await page.locator('#options-home').waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#conversation-options').open);
+  assert.equal(await page.locator('#options-trigger').evaluate(el => el === document.activeElement), true);
+  await page.locator('#options-trigger').dispatchEvent('click');
+  await page.locator('#options-trigger').dispatchEvent('click');
+  await page.locator('#options-trigger').dispatchEvent('click');
+  await page.locator('#client-settings-button').click();
+  await page.locator('#client-settings-dialog[open]').waitFor();
+  await page.locator('#settings-tab-appearance').click();
+  assert.equal(await page.locator('#theme-toggle').isVisible(), true);
+  await page.locator('#settings-tab-connections').click();
+  assert.equal(await page.locator('#settings-button').isVisible(), true);
+  await page.screenshot({ path: path.join(os.tmpdir(), 'town-settings-review.png') });
+  await page.locator('#settings-button').click();
+  assert.equal(await page.locator('#client-settings-dialog').evaluate(el => el.open), false);
+  await page.locator('#settings-dialog[open]').waitFor();
+  await page.locator('#close-settings').click();
+  await page.locator('#options-trigger').click();
+  await page.waitForFunction(() => document.querySelector('.options-menu').getAnimations().length === 0);
+  await page.screenshot({ path: path.join(os.tmpdir(), 'town-menu-review.png') });
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#conversation-options').open);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.locator('#options-trigger').focus();
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.locator('#toggle-chat-search').evaluate(el => el === document.activeElement), true);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#conversation-options').open);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await home();
   await page.locator('#town-auth-button').click();
   await page.locator('#town-being').fill('willow');
@@ -70,7 +118,7 @@ try {
   await page.waitForFunction(() => !document.querySelector('#town-auth-dialog').open);
   await page.waitForFunction(async () => (await window.beings.townLive()).phase === 'connected');
   await open('篝火');
-  await page.getByText('伙伴代发消息', { exact: true }).waitFor();
+  await page.locator('.social-message').getByText('伙伴代发消息', { exact: true }).waitFor();
   const partner = page.locator('.social-message').filter({ hasText: '伙伴代发消息' });
   assert.equal(await partner.locator('.via-tag').textContent(), '借 my-phone');
   assert.equal(await partner.locator('.social-author').textContent(), '服务端展示名');
@@ -78,6 +126,22 @@ try {
   assert.equal(await page.locator('.via-tag img').count(), 0);
   assert((await page.locator('.via-tag').allTextContents()).includes('借 <img src=x onerror=alert(1)>'));
   await page.screenshot({ path: path.join(os.tmpdir(), 'town-sdk-via.png') });
+  assert.equal(await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).count(), 0);
+  await partner.getByRole('button', { name: '一起看', exact: true }).click();
+  await page.locator('#scene-compose').click();
+  const chatInput = page.frameLocator('#chat-frame').locator('#input');
+  await page.waitForFunction(() => document.querySelector('#companion-panel').hidden);
+  assert.equal(await chatInput.inputValue(), '一起看看篝火里的这段（willow）：\n\n> 伙伴代发消息');
+  // An existing draft is preserved, and inserting a quote never sends it.
+  await chatInput.fill('保留我的草稿');
+  await open('篝火');
+  await page.locator('.social-message').filter({ hasText: '伙伴代发消息' }).getByRole('button', { name: '一起看', exact: true }).click();
+  await page.locator('#scene-compose').click();
+  await page.getByText('对话输入框已有草稿，请先处理原草稿，再放入引用。', { exact: true }).waitFor();
+  assert.equal(await chatInput.inputValue(), '保留我的草稿');
+  await page.locator('#close-companion').click();
+  await chatInput.fill('');
+  await open('篝火');
   await page.locator('#town-write').click();
   assert((await page.locator('#town-send-context').textContent()).includes('以 @willow 的身份代发'));
   await page.locator('#town-send-content').fill('SDK 测试消息');
@@ -96,10 +160,10 @@ try {
   assert.equal(await app.evaluate(() => globalThis.sdkWrites.length), 1);
   await page.locator('#town-send-close').click();
   await open('围炉');
-  await page.getByText('伙伴代发消息', { exact: true }).waitFor();
+  await page.locator('.social-message').getByText('伙伴代发消息', { exact: true }).waitFor();
   assert.equal(await page.locator('.via-tag').textContent(), '借 my-phone');
   assert.deepEqual(errors, []);
-  console.log('PASS: SDK pairing + SSE hello, server display names, via badges in all three feeds, inert via text, explicit author context, fixture-only send, self-DM blocked before network');
+  console.log('PASS: compact menu, interrupted motion, keyboard/reduced motion, grouped settings, clean quote draft and existing-draft preservation; SDK pairing + SSE hello, server display names, via badges in all three feeds, inert via text, explicit author context, fixture-only send, self-DM blocked before network');
 } finally {
   if (app) await app.close();
   await rm(dir, { recursive: true, force: true });
