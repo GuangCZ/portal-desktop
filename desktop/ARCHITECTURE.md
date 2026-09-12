@@ -6,7 +6,7 @@
 
 ```text
 Electron BrowserWindow
-├─ 本地 TypeScript shell：Being 入口、Portal 面板、设置
+├─ 本地 React + TypeScript shell：Being 入口、Portal 面板、设置
 │   └─ 隔离 preload：固定的、经过顶层 frame 校验的 IPC
 └─ beings://chat/：本地 Loom iframe，无 preload / Node / 本机 IPC
     └─ beings://chat/api/*：受限路由的主进程流式代理
@@ -19,6 +19,26 @@ Electron main
     └─ heart-portal → WSS /_relay → 云端 Being
         └─ tools/call → Rust 文件/搜索/命令/Kits → 结果回传
 ```
+
+## React 界面
+
+`renderer/main.tsx` 使用 React 19 的 `createRoot` 挂载应用，Vite 编译 TSX 并提供组件热更新。
+`app.tsx` 组合对话、Town、Portal、浏览器和设置组件；`components/` 持有声明式 JSX，
+沿用既有 CSS、节点 ID、原生 dialog、文案和布局。
+
+`models/app.ts`、`models/town.ts` 和 `models/workspace.ts` 管理连接、异步读取、身份、
+发送草稿及引用，组件通过 `useSyncExternalStore` 订阅稳定的版本快照。网络读取保留请求
+序号校验；Town 身份变化时清空私密内容并作废旧请求。`useEffect` 统一注册与释放 IPC
+订阅、窗口监听和计时器，开发模式启用 StrictMode 验证重挂载。
+
+DOM 引用仅用于焦点、原生 dialog、动画、滚动、浏览器边界与 iframe 协议。Town 的 Markdown
+在唯一的 `components/markdown.tsx` 中先经 DOMPurify 净化，再由 React 渲染。浏览器原生
+视图继续由主进程管理，新增的动态 Kit 弹窗也会使其暂时隐藏。
+
+Loom 作为既有独立协议页面保留在隔离 iframe 内；`hooks/use-chat-bridge.ts` 校验来源、
+frame 和 revision，传递设置、搜索、导航与引用事件。`loom.html` 和聊天适配脚本继续按
+原有流程打包，不共享 React shell 的 preload。主进程、preload、Rust 引擎不依赖 React。
+详见 [渲染器维护说明](renderer/README.md)。
 
 ## 与现有项目的适配
 
@@ -103,7 +123,7 @@ Portal 自身按 60 秒周期刷新 Kit；用户还可以从客户端重启识�
 
 ## Town 消息阅读
 
-`town-feed.ts` 为篝火、私信和围炉提供统一的紧凑阅读组件：纯文本作者/关系标签、净化 Markdown、长文展开、时间和作者筛选及双向时间排序。关于我基于 Town 配对身份或接口当前 Being，以及精确作者/收件人/mentions/@标识判断，不使用模糊子串匹配。筛选仅覆盖本次接口加载范围，明确展示结果数和范围；围炉按需加载选中房间，缓存当前房间内容供筛选重绘，刷新及身份切换时失效。
+`components/town-feed.tsx` 为篝火、私信和围炉提供统一的紧凑阅读组件，`town-feed.ts` 负责纯数据筛选：纯文本作者/关系标签、净化 Markdown、长文展开、时间和作者筛选及双向时间排序。关于我基于 Town 配对身份或接口当前 Being，以及精确作者/收件人/mentions/@标识判断，不使用模糊子串匹配。筛选仅覆盖本次接口加载范围，明确展示结果数和范围；围炉按需加载选中房间，缓存当前房间内容供筛选重绘，刷新及身份切换时失效。
 
 书架（`embers`）与卷轴（`scrolls`）独立导航；书架保持公开故事语义。卷轴公开列表固定 `visibility=public`，个人列表由主进程从配对凭据中取得 Being 标识，附加 `being_id` 查询，渲染器不能任意指定个人身份；类型参数仅接受官方六种类型。详情展示类型、可见性、生命周期、适用场景和预期结果，不提供写入与公开操作。
 

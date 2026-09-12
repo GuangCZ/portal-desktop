@@ -1,0 +1,927 @@
+import { Store, errorText } from "./store";
+import { type SceneStore, type SceneResource } from "../scene-store";
+import type { FeedFilters, FeedReply } from "../town-feed";
+import type {
+  DesktopAPI,
+  KitLibrary,
+  LocalKit,
+  TownChannel,
+  TownLiveState,
+  TownPost,
+  TownKind,
+  TownQuery,
+  KitInstallPlan,
+} from "../../shared";
+
+export type Data = Record<string, unknown>;
+export const record = (value: unknown): Data =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Data)
+    : {};
+export const str = (value: unknown, fallback = "") =>
+  typeof value === "string" || typeof value === "number"
+    ? String(value)
+    : fallback;
+export const list = (data: Data, key: string): Data[] => {
+  if (!Array.isArray(data[key]))
+    throw new Error("Town 返回的列表格式不正确，请稍后刷新。");
+  return (data[key] as unknown[]).map(record);
+};
+export const date = (value: unknown) => {
+  const parsed = new Date(str(value));
+  return Number.isNaN(parsed.getTime())
+    ? str(value)
+    : parsed.toLocaleString("zh-CN", {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+};
+export const definitions: Record<
+  string,
+  {
+    title: string;
+    eyebrow: string;
+    description: string;
+    tabs: [string, string][];
+  }
+> = {
+  town: {
+    title: "小镇广场",
+    eyebrow: "BEINGS TOWN",
+    description: "浏览小镇服务，了解最近更新。",
+    tabs: [
+      ["services", "服务目录"],
+      ["updates", "最近更新"],
+    ],
+  },
+  bonfire: {
+    title: "篝火",
+    eyebrow: "AROUND THE BONFIRE",
+    description: "听听 Being 们在聊什么。在这里，声音会被彼此听见。",
+    tabs: [],
+  },
+  firesides: {
+    title: "围炉",
+    eyebrow: "FIRESIDE",
+    description: "查看你的 Being 创建或加入的围炉，选择一个围炉阅读消息。",
+    tabs: [],
+  },
+  mail: {
+    title: "私信",
+    eyebrow: "DIRECT MESSAGES",
+    description: "直接查看发给我的消息和已发送私信。",
+    tabs: [
+      ["all", "全部"],
+      ["inbox", "收件箱"],
+      ["sent", "已发送"],
+    ],
+  },
+  embers: {
+    title: "书架",
+    eyebrow: "EMBERS",
+    description:
+      "Being 与人类伙伴共同经历的故事。由 Being 选择讲述，任何人都能阅读。",
+    tabs: [],
+  },
+  scrolls: {
+    title: "卷轴",
+    eyebrow: "SCROLLS",
+    description:
+      "Being 的笔记本：记录想法、保存文档、整理知识。默认私有，由作者选择是否分享。",
+    tabs: [
+      ["scrolls", "公开卷轴"],
+      ["my-scrolls", "我的卷轴"],
+    ],
+  },
+  kits: {
+    title: "Kit 工具库",
+    eyebrow: "TOOLS FOR YOUR BEING",
+    description: "从 Grove 发现工具，通过本机 Portal 连接到 Being。",
+    tabs: [
+      ["grove", "Grove 市集"],
+      ["local", "本机 Kits"],
+    ],
+  },
+};
+type SendTarget = {
+  kind: TownPost["kind"];
+  firesideId?: string;
+  generation: number;
+  beingId: string;
+  reply?: FeedReply;
+};
+export class TownModel extends Store {
+  view = "";
+  tab = "";
+  tabs: Record<string, string> = {};
+  offset = 0;
+  search = "";
+  scrollKind = "";
+  data: Data | null = null;
+  library: KitLibrary | null = null;
+  loading = false;
+  status = "";
+  error?: { message: string; auth: boolean };
+  me = "";
+  authLabel = "Town 连接";
+  feedFilters: Record<string, FeedFilters> = {};
+  selectedRing = "";
+  ringSearch = "";
+  ringTitle = "";
+  ringData: { id: string; data: Data } | null = null;
+  directId?: string;
+  selectedId = "";
+  localKit?: LocalKit;
+  detail?: { query: TownQuery; fragments: Data[] };
+  detailLoading = false;
+  detailError?: { message: string; auth?: boolean; retry: () => void };
+  live?: TownLiveState;
+  authOpen = false;
+  authBusy = false;
+  authConfigured = false;
+  authBeing = "";
+  pairCode = "";
+  token = "";
+  authState = "";
+  authError = "";
+  sendOpen = false;
+  sendBusy = false;
+  sendTarget?: SendTarget;
+  content = "";
+  recipient = "";
+  sendError = "";
+  plan?: KitInstallPlan;
+  prepareBusy = false;
+  installBusy = false;
+  installError = "";
+  installRetried = false;
+  environment: Record<string, string> = {};
+  private request = 0;
+  private detailRequest = 0;
+  private authRequest = 0;
+  private lifecycleRevision = 0;
+  private seen = { bonfire: 0, mail: 0, firesides: 0 };
+  private changedChannels = new Set<TownChannel>();
+  private reconcileTimer?: ReturnType<typeof setTimeout>;
+  private reconciling = false;
+  private drafts = new Map<string, { content: string; recipient: string }>();
+  constructor(
+    readonly api: DesktopAPI,
+    readonly toast: (error: unknown) => void,
+    readonly navigate: (view: string) => void,
+    readonly scenes: SceneStore,
+    private showCompanion: () => void,
+    private post: (data: unknown) => void,
+  ) {
+    super();
+  }
+  start() {
+    let active = true;
+    const stop = this.api.onTownLive((state) => this.receiveLive(state));
+    void this.api
+      .townLive()
+      .then((state) => {
+        if (active) this.receiveLive(state);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+      ++this.lifecycleRevision;
+      stop();
+      clearTimeout(this.reconcileTimer);
+      this.request++;
+      this.detailRequest++;
+      this.authRequest++;
+      this.drafts.clear();
+      this.content = "";
+      this.token = "";
+      this.pairCode = "";
+      if (this.plan && !this.installBusy)
+        void this.api.discardKit(this.plan.ticket).catch(() => {});
+    };
+  }
+  channel(): TownChannel | undefined {
+    return ["bonfire", "mail", "firesides"].includes(this.view)
+      ? (this.view as TownChannel)
+      : undefined;
+  }
+  unread(name: TownChannel) {
+    return (
+      this.changedChannels.has(name) ||
+      (this.live?.versions[name] || 0) > this.seen[name]
+    );
+  }
+  updateLive() {
+    this.post({
+      type: "beings:town-activity",
+      channels: (["bonfire", "mail", "firesides"] as TownChannel[]).filter(
+        (name) => this.unread(name),
+      ),
+    });
+    this.changed();
+  }
+  private resetIdentity() {
+    clearTimeout(this.reconcileTimer);
+    this.seen = { bonfire: 0, mail: 0, firesides: 0 };
+    this.changedChannels.clear();
+    this.request++;
+    this.detailRequest++;
+    this.data = null;
+    this.library = null;
+    this.detail = undefined;
+    this.detailLoading = false;
+    this.detailError = undefined;
+    this.localKit = undefined;
+    this.ringData = null;
+    this.me = "";
+    this.selectedRing = "";
+    this.selectedId = "";
+    this.feedFilters = {};
+    this.scenes.resetIdentity();
+    this.drafts.clear();
+    this.sendTarget = undefined;
+    this.content = "";
+    this.recipient = "";
+    this.sendOpen = false;
+    this.changed();
+  }
+  receiveLive(state: TownLiveState) {
+    if (this.live && state.revision <= this.live.revision) return;
+    const previous = this.live;
+    this.live = state;
+    const identityChanged =
+      previous &&
+      state.phase !== "auth-error" &&
+      (previous.generation !== state.generation ||
+        (previous.beingId && previous.beingId !== state.beingId));
+    const rejected =
+      state.phase === "auth-error" && previous?.phase !== "auth-error";
+    if (identityChanged) {
+      this.resetIdentity();
+      if (definitions[this.view]) {
+        void this.load();
+      }
+    }
+    if (rejected) {
+      // A stream may lose authorization while the last REST response is still
+      // perfectly readable. Keep that snapshot visible and only gate writes.
+      const hasReadableData = Boolean(this.data || this.ringData || this.detail);
+      this.error = hasReadableData ? undefined : { message: state.message, auth: true };
+      this.status = hasReadableData
+        ? `${state.message} · 已加载内容仍可阅读`
+        : "需要 Town 授权";
+      this.scenes.update({
+        status: hasReadableData ? "ready" : "error",
+        scope: hasReadableData ? "连接未确认；当前内容来自最近一次读取" : "尚未获得 Town 授权",
+      });
+      this.changed();
+    }
+    if (state.phase === "connected") {
+      if (this.me !== state.beingId) {
+        this.me = state.beingId || "";
+        if (definitions[this.view]) void this.load();
+      } else if (
+        state.sync !== previous?.sync ||
+        (this.channel() &&
+          state.versions[this.channel()!] !==
+            previous?.versions[this.channel()!])
+      )
+        this.scheduleReconcile();
+    }
+    this.updateLive();
+  }
+  private scheduleReconcile() {
+    clearTimeout(this.reconcileTimer);
+    if (this.channel())
+      this.reconcileTimer = setTimeout(() => void this.reconcile(), 700);
+  }
+  private async reconcile() {
+    if (this.reconciling) {
+      this.scheduleReconcile();
+      return;
+    }
+    const channel = this.channel(),
+      generation = this.request,
+      identity = this.live?.generation;
+    if (!channel || this.live?.phase !== "connected") return;
+    this.reconciling = true;
+    try {
+      const id = this.directId || this.selectedRing;
+      const query: TownQuery =
+        channel === "firesides" && id
+          ? { kind: "fireside", id }
+          : this.view === "mail" && this.tab === "all"
+            ? { kind: "inbox" }
+            : this.query();
+      const before =
+        query.kind === "fireside" ? this.ringData?.data : this.data;
+      if (!before) return;
+      const result =
+        this.view === "mail" && this.tab === "all"
+          ? await this.queryMail("all")
+          : await this.api.town(query);
+      if (
+        generation !== this.request ||
+        identity !== this.live?.generation ||
+        !result.ok
+      )
+        return;
+      if (
+        JSON.stringify(result.data.messages) !== JSON.stringify(before.messages)
+      )
+        this.changedChannels.add(channel);
+      this.updateLive();
+    } catch {
+      /* Keep the content being read until the next reconciliation. */
+    } finally {
+      this.reconciling = false;
+    }
+  }
+  private acknowledge(
+    channel: TownChannel | undefined,
+    start: TownLiveState | undefined,
+  ) {
+    if (!channel || !start || start.generation !== this.live?.generation)
+      return;
+    this.seen[channel] = start.versions[channel];
+    this.changedChannels.delete(channel);
+    this.updateLive();
+  }
+  show(view: string, id?: string) {
+    this.view = view;
+    this.request++;
+    this.detailRequest++;
+    this.directId = id;
+    clearTimeout(this.reconcileTimer);
+    this.updateLive();
+    if (!definitions[view]) return;
+    this.tab = this.tabs[view] || definitions[view].tabs[0]?.[0] || view;
+    this.offset = 0;
+    this.search = "";
+    void this.load();
+  }
+  selectTab(tab: string) {
+    this.tab = tab;
+    this.tabs[this.view] = tab;
+    this.offset = 0;
+    this.search = "";
+    void this.load();
+  }
+  setSearch(search: string) {
+    this.search = search;
+    this.scenes.update({
+      selection: undefined,
+      filters: {
+        tab: this.tab,
+        offset: String(this.offset),
+        search,
+        kind: this.scrollKind,
+      },
+    });
+    this.changed();
+  }
+  matches(...values: unknown[]) {
+    const query = this.search.toLocaleLowerCase().trim();
+    return (
+      !query ||
+      values
+        .map((v) => str(v))
+        .join(" ")
+        .toLocaleLowerCase()
+        .includes(query)
+    );
+  }
+  private query(): TownQuery {
+    return {
+      kind: (this.view === "town" ? "home" : this.tab) as TownKind,
+      offset: this.offset,
+      ...(this.view === "scrolls" ? { scrollKind: this.scrollKind } : {}),
+    };
+  }
+  private async queryMail(tab: "all" | "inbox" | "sent") {
+    if (tab !== "all") return this.api.town({ kind: tab });
+    const [inbox, sent] = await Promise.all([
+      this.api.town({ kind: "inbox" }),
+      this.api.town({ kind: "sent" }),
+    ]);
+    if (!inbox.ok) return inbox;
+    if (!sent.ok) return sent;
+    const messages = [
+      ...list(inbox.data, "messages"),
+      ...list(sent.data, "messages"),
+    ];
+    const seen = new Set<string>();
+    const unique = messages.filter((message) => {
+      const key = str(
+        message.id ||
+          message.message_id ||
+          message.seq ||
+          `${message.sender}:${message.recipient}:${message.created_at || message.at}:${message.content || message.message}`,
+      );
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return {
+      ok: true as const,
+      data: { ...inbox.data, messages: unique },
+      fetchedAt: sent.fetchedAt > inbox.fetchedAt ? sent.fetchedAt : inbox.fetchedAt,
+    };
+  }
+  async load() {
+    if (!definitions[this.view]) return;
+    const generation = ++this.request;
+    ++this.detailRequest;
+    const liveAtStart = this.live,
+      channel = this.channel();
+    this.scenes.update({
+      sceneId: `town:https://beings.town:${this.view}:${this.tab}`,
+      title: definitions[this.view].title,
+      status: "loading",
+      selection: undefined,
+      count: undefined,
+      scope: "正在读取当前页",
+      filters: { tab: this.tab, offset: String(this.offset) },
+    });
+    this.data = null;
+    this.library = null;
+    this.ringData = null;
+    this.detail = undefined;
+    this.localKit = undefined;
+    this.selectedId = "";
+    this.detailError = undefined;
+    this.error = undefined;
+    this.loading = true;
+    this.status = "";
+    this.changed();
+    try {
+      if (this.directId) {
+        const id = this.directId;
+        const auth = await this.api
+          .townAuth()
+          .catch(() => ({ configured: false, beingId: "" }));
+        if (generation !== this.request) return;
+        this.me = auth.configured ? auth.beingId || "" : "";
+        this.authLabel = this.me ? "@" + this.me : "配对 Being";
+        this.scenes.update({ identity: this.me });
+        this.status = "来自对话中的内容链接";
+        if (this.view === "firesides")
+          await this.loadFireside(id, `围炉 #${id}`);
+        else
+          await this.loadDetail({
+            kind:
+              this.view === "kits"
+                ? "kit"
+                : this.view === "embers"
+                  ? "ember"
+                  : "scroll",
+            id,
+          });
+        return;
+      }
+      if (this.tab === "local") {
+        const library = await this.api.localKits();
+        if (generation !== this.request) return;
+        this.library = library;
+        this.status = `${library.kits.length} 个本机 Kit · ${library.enabled ? "Portal 已启用 Kits" : "Portal 尚未启用 Kits"} · 清单来自磁盘，加载情况请查看 Portal 日志`;
+      } else {
+        const [result, auth] = await Promise.all([
+          this.view === "mail"
+            ? this.queryMail(this.tab as "all" | "inbox" | "sent")
+            : this.api.town(this.query()),
+          this.api.townAuth().catch(() => ({ configured: false, beingId: "" })),
+        ]);
+        if (generation !== this.request) return;
+        this.me = auth.configured ? auth.beingId || "" : "";
+        this.authLabel = this.me
+          ? "@" + this.me
+          : auth.configured
+            ? "Town 连接"
+            : "配对 Being";
+        if (!result.ok) {
+          this.fail(result.message, result.code === "auth");
+          return;
+        }
+        this.data = result.data;
+        this.validateData();
+        if (channel !== "firesides" && this.tab !== "sent")
+          this.acknowledge(channel, liveAtStart);
+        this.status = `来自 beings.town · ${date(result.fetchedAt)} 已刷新${this.view === "bonfire" ? " · 最近 100 条" : this.view === "mail" ? " · 最近 100 封" : ""}`;
+      }
+      this.scenes.update({
+        identity: this.library ? this.scenes.being : this.me,
+        status: "ready",
+        scope: this.library
+          ? "本机 Kit 清单；不代表工具已可调用"
+          : "已加载当前页；不代表全部内容或已阅读",
+      });
+      if (this.view === "firesides" && this.data) {
+        const entries = this.rooms();
+        if (!entries.some((entry) => str(entry.id) === this.selectedRing))
+          this.selectedRing = str(entries[0]?.id);
+        const entry = entries.find(
+          (entry) => str(entry.id) === this.selectedRing,
+        );
+        if (entry)
+          void this.loadFireside(
+            this.selectedRing,
+            str(entry.name, `围炉 #${this.selectedRing}`),
+          );
+      }
+    } catch (error) {
+      if (generation === this.request) this.fail(errorText(error));
+    } finally {
+      if (generation === this.request) {
+        this.loading = false;
+        this.changed();
+      }
+    }
+  }
+  private validateData() {
+    if (!this.data) return;
+    if (this.view === "town") {
+      if (this.tab === "updates") list(this.data, "whats_new");
+    } else if (this.channel() === "firesides") {
+      list(this.data, "owned");
+      list(this.data, "joined");
+    } else
+      list(
+        this.data,
+        this.channel() ? "messages" : this.tab === "grove" ? "kits" : "scrolls",
+      );
+  }
+  rooms() {
+    return this.data
+      ? [
+          ...new Map(
+            [...list(this.data, "owned"), ...list(this.data, "joined")].map(
+              (entry) => [str(entry.id), entry],
+            ),
+          ).values(),
+        ]
+      : [];
+  }
+  fail(message: string, auth = false) {
+    this.error = { message, auth };
+    this.loading = false;
+    this.status = auth ? "需要 Town 授权" : "读取失败";
+    this.scenes.update({
+      status: "error",
+      selection: undefined,
+      scope: auth ? "尚未获得 Town 授权" : "当前页读取失败",
+    });
+    this.changed();
+  }
+  choose = (resource: SceneResource) => {
+    this.scenes.select(resource);
+    this.scenes.pin();
+    this.showCompanion();
+  };
+  selectLocal(kit: LocalKit) {
+    this.localKit = kit;
+    this.selectedId = kit.name;
+    this.scenes.update({
+      sceneId: `desktop:${this.scenes.instanceId}:kit:${kit.name}`,
+      title: `工具间 · ${kit.name}`,
+      identity: this.scenes.being,
+      status: "ready",
+      scope: "本机 manifest；未确认工具运行能力",
+      selection: undefined,
+    });
+    this.changed();
+  }
+  async loadFireside(id: string, title: string, refresh = false) {
+    const generation = ++this.detailRequest,
+      liveAtStart = this.live;
+    this.selectedRing = id;
+    this.ringTitle = title;
+    this.detailLoading = true;
+    this.detailError = undefined;
+    this.scenes.update({
+      sceneId: `town:https://beings.town:fireside:${id}`,
+      title: `围炉 · ${title}`,
+      identity: this.me,
+      status: "loading",
+      selection: undefined,
+      count: undefined,
+      scope: "正在读取围炉消息",
+    });
+    this.updateLive();
+    try {
+      if (refresh || this.ringData?.id !== id) {
+        const result = await this.api.town({ kind: "fireside", id });
+        if (generation !== this.detailRequest) return;
+        if (!result.ok) {
+          this.detailError = {
+            message: result.message,
+            auth: result.code === "auth",
+            retry: () => void this.loadFireside(id, title, true),
+          };
+          this.scenes.update({ status: "error", scope: "围炉消息读取失败" });
+          return;
+        }
+        list(result.data, "messages");
+        this.ringData = { id, data: result.data };
+        this.acknowledge("firesides", liveAtStart);
+      }
+      this.scenes.update({ status: "ready" });
+    } catch {
+      if (generation === this.detailRequest) {
+        this.detailError = {
+          message: "未能读取围炉消息。",
+          retry: () => void this.loadFireside(id, title, true),
+        };
+        this.scenes.update({ status: "error", scope: "围炉消息读取失败" });
+      }
+    } finally {
+      if (generation === this.detailRequest) {
+        this.detailLoading = false;
+        this.changed();
+      }
+    }
+  }
+  async loadDetail(query: TownQuery, append = false) {
+    const generation = ++this.detailRequest;
+    this.selectedId = query.id || "";
+    this.detailLoading = true;
+    this.detailError = undefined;
+    if (!append) this.detail = undefined;
+    this.scenes.update({
+      sceneId: `town:https://beings.town:${query.kind}:${query.id}`,
+      status: "loading",
+      selection: undefined,
+      scope: "正在读取详情",
+    });
+    this.changed();
+    try {
+      const result = await this.api.town(query);
+      if (generation !== this.detailRequest) return;
+      if (!result.ok) {
+        this.detailError = {
+          message: result.message,
+          retry: () => void this.loadDetail(query, append),
+        };
+        this.scenes.update({ status: "error", scope: "详情读取失败" });
+        return;
+      }
+      this.scenes.update({
+        title: str(
+          result.data.title,
+          str(result.data.name, definitions[this.view].title),
+        ),
+        status: "ready",
+        scope: "已加载的详情片段；不代表已阅读",
+      });
+      this.detail = {
+        query,
+        fragments: [
+          ...(append ? this.detail?.fragments || [] : []),
+          { ...result.data, id: query.id },
+        ],
+      };
+    } catch (error) {
+      if (generation === this.detailRequest) {
+        this.detailError = {
+          message: errorText(error),
+          retry: () => void this.loadDetail(query, append),
+        };
+        this.scenes.update({ status: "error", scope: "详情读取失败" });
+      }
+    } finally {
+      if (generation === this.detailRequest) {
+        this.detailLoading = false;
+        this.changed();
+      }
+    }
+  }
+  async auth() {
+    const revision = ++this.authRequest;
+    this.authOpen = true;
+    this.token = "";
+    this.pairCode = "";
+    this.authError = "";
+    this.changed();
+    try {
+      const state = await this.api.townAuth();
+      if (revision !== this.authRequest) return;
+      this.authBeing = state.beingId || state.suggestedBeingId || "";
+      this.authConfigured = state.configured;
+      this.authState =
+        state.warning ||
+        (state.configured
+          ? this.live?.message || "已保存 Town 凭据，等待身份确认。"
+          : "尚未配对。");
+    } catch (error) {
+      if (revision === this.authRequest) this.authError = errorText(error);
+    }
+    this.changed();
+  }
+  closeAuth() {
+    if (this.authBusy) return;
+    ++this.authRequest;
+    this.authOpen = false;
+    this.token = "";
+    this.pairCode = "";
+    this.changed();
+  }
+  async saveToken(clear: boolean, pair = false) {
+    if (this.authBusy) return;
+    this.authBusy = true;
+    this.authError = "";
+    this.changed();
+    try {
+      if (pair)
+        await this.api.pairTown({
+          beingId: this.authBeing.trim(),
+          code: this.pairCode.trim(),
+        });
+      else {
+        if (!clear && !this.token.trim()) throw new Error("请输入 Town 凭据。");
+        await this.api.saveTownToken(clear ? "" : this.token.trim());
+      }
+      this.resetIdentity();
+      this.authLabel = clear ? "配对 Being" : "Town 连接";
+      this.token = "";
+      this.pairCode = "";
+      this.authOpen = false;
+      if (definitions[this.view]) await this.load();
+    } catch (error) {
+      this.authError = errorText(error);
+    } finally {
+      this.authBusy = false;
+      this.changed();
+    }
+  }
+  compose(reply?: FeedReply) {
+    const live = this.live;
+    if (
+      this.sendBusy ||
+      live?.phase !== "connected" ||
+      !live.beingId ||
+      !this.channel()
+    )
+      return;
+    const kind =
+      this.view === "mail"
+        ? "dm"
+        : this.view === "firesides"
+          ? "fireside"
+          : "bonfire";
+    const firesideId = this.directId || this.selectedRing;
+    if (kind === "fireside" && !firesideId) return;
+    const next: SendTarget = {
+      kind,
+      firesideId: kind === "fireside" ? firesideId : undefined,
+      generation: live.generation,
+      beingId: live.beingId,
+      ...(reply ? { reply } : {}),
+    };
+    if (this.sendTarget)
+      this.drafts.set(JSON.stringify(this.sendTarget), {
+        content: this.content,
+        recipient: this.recipient,
+      });
+    while (this.drafts.size > 20)
+      this.drafts.delete(this.drafts.keys().next().value!);
+    const draft = this.drafts.get(JSON.stringify(next));
+    this.content = draft?.content || "";
+    this.recipient = draft?.recipient || reply?.recipient || "";
+    this.sendTarget = next;
+    this.sendError = "";
+    this.sendOpen = true;
+    this.changed();
+  }
+  get sendLimit() {
+    return this.sendTarget?.kind === "bonfire" ? 4000 : 32000;
+  }
+  get canSend() {
+    return (
+      !this.sendBusy &&
+      this.live?.phase === "connected" &&
+      Boolean(this.content.trim()) &&
+      [...this.content].length <= this.sendLimit
+    );
+  }
+  async send() {
+    const target = this.sendTarget;
+    if (!target || !this.canSend) return;
+    if (
+      target.generation !== this.live?.generation ||
+      target.beingId !== this.live.beingId
+    ) {
+      this.sendError = "Town 身份已改变，请重新打开发送窗口。";
+      this.changed();
+      return;
+    }
+    const input: TownPost =
+      target.kind === "dm"
+        ? { kind: "dm", content: this.content, recipient: this.recipient }
+        : target.kind === "fireside"
+          ? {
+              kind: "fireside",
+              content: this.content,
+              firesideId: target.firesideId!,
+            }
+          : { kind: "bonfire", content: this.content };
+    if (target.reply)
+      input.replyTo =
+        input.kind === "dm" ? String(target.reply.id) : Number(target.reply.id);
+    this.sendBusy = true;
+    this.sendError = "";
+    this.changed();
+    try {
+      const result = await this.api.sendTown(input);
+      if (target !== this.sendTarget) return;
+      if (!result.ok) {
+        this.sendError = result.message;
+        return;
+      }
+      this.drafts.delete(JSON.stringify(target));
+      this.content = "";
+      this.sendOpen = false;
+      if (target.kind === "dm") {
+        this.tab = "sent";
+        this.tabs.mail = "sent";
+      }
+      await this.load();
+    } catch (error) {
+      if (target === this.sendTarget) this.sendError = errorText(error);
+    } finally {
+      this.sendBusy = false;
+      this.changed();
+    }
+  }
+  async prepareKit(id: string) {
+    if (this.prepareBusy || this.plan) return;
+    this.prepareBusy = true;
+    this.changed();
+    try {
+      const revision = this.lifecycleRevision;
+      const plan = await this.api.prepareKit(id);
+      if (revision !== this.lifecycleRevision) {
+        await this.api.discardKit(plan.ticket);
+        return;
+      }
+      this.plan = plan;
+      this.environment = {};
+      this.installError = "";
+      this.installRetried = false;
+    } catch (error) {
+      this.toast(error);
+    } finally {
+      this.prepareBusy = false;
+      this.changed();
+    }
+  }
+  closeInstall() {
+    if (this.installBusy) return;
+    const plan = this.plan;
+    this.plan = undefined;
+    this.environment = {};
+    this.changed();
+    if (plan) void this.api.discardKit(plan.ticket).catch(() => {});
+  }
+  async install() {
+    if (!this.plan || this.installBusy) return;
+    this.installBusy = true;
+    this.installError = "";
+    this.changed();
+    try {
+      const result = await this.api.installKit({
+        ticket: this.plan.ticket,
+        environment: { ...this.environment },
+      });
+      this.plan = undefined;
+      this.environment = {};
+      this.toast(`${result.name}：${result.message}`);
+      this.tab = "local";
+      this.tabs.kits = "local";
+      this.search = "";
+      if (this.view === "kits") await this.load();
+    } catch (error) {
+      this.installError = errorText(error);
+    } finally {
+      this.installBusy = false;
+      this.installRetried = true;
+      this.changed();
+    }
+  }
+  async importKit() {
+    await this.run(async () => {
+      const result = await this.api.importKit();
+      if (result.installed) {
+        this.toast(`${result.name} 已导入。Portal 将自动刷新清单。`);
+        if (this.tab === "local") await this.load();
+      }
+    });
+  }
+  async run(operation: () => Promise<unknown>) {
+    try {
+      await operation();
+    } catch (error) {
+      this.toast(error);
+    }
+  }
+}

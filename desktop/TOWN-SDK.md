@@ -59,7 +59,7 @@
 | --- | --- | --- |
 | P2 | 匿名篝火实时流 | `desktop/town-live.ts` 的 `restart()` 无 token 时不调用 `connect()`，`hello` 也只接受 client 身份；参考页面 `connectSSE()` 支持匿名。未配对用户无法接收实时篝火。补齐需要独立的匿名状态及公开事件正文缓存，不能只放宽身份检查。 |
 | P2 | 断线后的历史补齐 | `desktop/town.ts:townRoute()` 只取最近篝火 100 / 围炉 50 条，未使用 `since`；`TownLive` 只发布变化计数，不保留正文。长时间离线后超出窗口的内容会遗漏。指南提供增量参数；参考页面也没有完整的离线补齐方案。 |
-| P2 | 私信回复未接入 UI | `desktop/town.ts:send()` 能传私信 `reply_to`，但 `renderer/town.ts:drawFeed()` 不向私信传 `onReply`，`town-feed.ts` 也只认数字 seq。用户只能新写私信。先前文档误写“三处已接入”，本次已纠正。 |
+| P2 | 私信回复未接入 UI | `desktop/town.ts:send()` 能传私信 `reply_to`，但 `renderer/components/town-feed.tsx` 仅在围炉提供回复按钮，并只接受数字 seq。用户只能新写私信。先前文档误写“三处已接入”，本次已纠正。 |
 | P3 | 实时阅读行为不同 | `TownLive` 将 SSE 转为更新提示，阅读层通过 REST 刷新；上游参考页面直接追加事件并滚到底部。本客户端刻意保留阅读位置，但无法保证每一条实时事件都在当前窗口中保留。 |
 | P3 | 发送依赖 SSE 身份确认 | `town-ipc.ts` 要求 `phase === connected` 才允许发送。纯 REST 可用而流断开时也无法发言，行为比参考页面更严格。属于身份确认策略，需产品决定是否支持已确认身份在暂时断流时发送。 |
 

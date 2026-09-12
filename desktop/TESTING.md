@@ -50,3 +50,11 @@
 桌面 E2E 统一通过 `tests/support/electron-lifecycle.mjs` 启动：同一时间仅允许一个测试实例，单个测试设 5 分钟上限，退出等待最多 8 秒；超时仅清理该次 launch 返回的子进程。原生桌面 E2E 会显示窗口，不在日常使用客户端时自动运行。浏览器生命周期单元测试使用替身验证销毁窗口后不再访问 shell。
 
 macOS 安装包与完整升级测试需要实际 Developer ID 签名包，签发条件见 [BUILDING.md](BUILDING.md)。完整升级测试会打开真实客户端窗口，运行前需退出日常客户端；它使用签名包构造较低版本基线，不代表覆盖所有历史发布版本。签名和升级通过也不代表 Apple 公证或首次下载的 Gatekeeper 检查通过，详见 [UPDATING.md](UPDATING.md#验证)。
+
+## React 迁移回归
+
+`tests/renderer-state.test.ts` 随 `npm test` 运行，覆盖组件重挂载时 IPC 订阅清理、旧启动请求失效、
+连接表单异步默认值、Town 页面与身份切换、重复发送拦截、断线核对不替换阅读内容、精确身份
+筛选及私密引用的跨身份限制。组件的键盘、焦点、菜单动画、原生弹窗、配对、引用草稿、
+Markdown、分页、安装和浏览器隔离由现有 Electron `test:town-sdk`、`test:town-ui`、
+`test:browser` 和 `test:e2e` 使用新构建的包验证。

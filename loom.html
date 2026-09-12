@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="loom-version" content="1.3.0">
+<meta name="loom-version" content="1.8.0">
 <title>Loom</title>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
@@ -536,6 +536,13 @@ html, body {
   text-align: center; color: var(--text-ghost);
   font-size: 10px; padding: 16px 0 8px; font-family: var(--mono);
   letter-spacing: 2px; text-transform: uppercase; opacity: 0.5;
+}
+
+/* Autonomous SBS breath markers are separators, not chat bubbles. */
+.breath-marker {
+  text-align: center; color: var(--text-ghost);
+  font-size: 10px; padding: 12px 0 8px; font-family: var(--mono);
+  letter-spacing: 1px; opacity: 0.65;
 }
 
 .message.system .retry-btn {
@@ -1179,7 +1186,7 @@ async function takePrefetch(key) {
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/shell.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css">
 <script>
-const LOOM_VERSION = "1.3.0";
+const LOOM_VERSION = "1.8.0";
 const $ = s => document.querySelector(s);
 const $msgs = $('#messages');
 const $input = $('#input');
@@ -2116,6 +2123,31 @@ function addTimeGap(text) {
   $msgs.appendChild(div);
 }
 
+// History markers describe an autonomous breath transition; render them as a
+// separator so SBS activity is visible without pretending it was a chat bubble.
+function isHistoryMarker(m) {
+  return !!m && (m.from === 'system' || m.type === 'marker');
+}
+const BREATH_MARKER_LABELS = [
+  [/^\[breath yielded/i, '放下手头的事，转向你'],
+  [/^\[breath interrupted/i, '已停止'],
+  [/^\[breath superseded/i, '被新的对话取代'],
+];
+function breathMarkerLabel(text) {
+  const raw = (text || '').trim();
+  for (const [re, label] of BREATH_MARKER_LABELS) if (re.test(raw)) return label;
+  return raw.replace(/^\[|\]$/g, '');
+}
+function addBreathMarker(text, timestamp = null) {
+  const div = document.createElement('div');
+  div.className = 'breath-marker';
+  div.textContent = `· ${breathMarkerLabel(text)} · ${timestamp || formatTime()} ·`;
+  $msgs.appendChild(div);
+  lastRole = 'system';
+  scrollToBottom();
+  return div;
+}
+
 function showThinkingIndicator() {
   removeThinkingIndicator();
   const div = document.createElement('div');
@@ -3029,6 +3061,7 @@ async function spliceSend(text) {
   }
   if (res.status === 202) {
     addMessage('system', '✅ 消息已送达，being 会在思考间隙看到');
+    startCatchUpWatcher();
     return;
   }
   if (res.ok && res.body) {
@@ -3069,6 +3102,7 @@ async function send(text, filesOverride=null, sendOptions={}) {
   tuiSet('thinking');
   showThinkingIndicator();
   isStreaming = true;
+  stopAutonomousWatch();
   updateSendButton();
 
   const body = { message: msg || `[Sent ${filesToSend.length} file(s)]` };
@@ -3120,6 +3154,7 @@ async function send(text, filesOverride=null, sendOptions={}) {
     if (spliced) {
       addMessage('system', '消息已送达，being 正在思考中');
       setStatus('thinking');
+      startCatchUpWatcher();
     } else {
       addMessage('system', '消息已送达');
       setStatus('connected');
@@ -3329,6 +3364,16 @@ function abandonLiveStream() {
   updateSendButton();
 }
 
+let lastRefreshAt = 0;
+async function refreshOnRegainedAttention() {
+  if (isStreaming || pendingRecovery) return;
+  const now = Date.now();
+  if (now - lastRefreshAt < 1500) return;
+  lastRefreshAt = now;
+  await reconcileHistory();
+  if (!isStreaming) await checkActiveStream();
+}
+
 // 生命周期钩子：把"什么时候该重新探一次"这件事交给浏览器告诉我们，
 // 而不是靠一个 15s 的定时器猜。
 function installLifecycleHooks() {
@@ -3336,6 +3381,7 @@ function installLifecycleHooks() {
     if (document.visibilityState !== 'visible') { clearTimeout(healthTimer); return; }
     healthBackoff = 0;
     checkHealth({ force: true });
+    refreshOnRegainedAttention().catch(err => console.warn('refresh on visible failed:', err));
   });
   window.addEventListener('online', () => {
     healthBackoff = 0;
@@ -3349,6 +3395,7 @@ function installLifecycleHooks() {
   });
   window.addEventListener('focus', () => {
     if (connState !== 'online') checkHealth({ force: true });
+    refreshOnRegainedAttention().catch(err => console.warn('refresh on focus failed:', err));
   });
 }
 
@@ -3520,6 +3567,8 @@ function resetMessages() {
 // 滚动位置跳变、正在流的 streamEl 被抹掉、移动端每次切 tab 回来都闪一下。
 // /api/history 的 HistoryMessage 是带 seq 的（http.rs:419-425），有 seq 就能增量对账。
 let lastHistorySeq = 0;
+let lastReconcileSawBeing = false;
+let reconcileInFlight = null;
 
 // 本地已经渲染、但还没被历史游标覆盖的消息。用于避免"本地回显 + 历史对账"渲染两遍。
 let localEchoes = [];
@@ -3553,6 +3602,7 @@ function renderHistoryBatched(messages) {
       for (; i < end; i++) {
         const msg = messages[i];
         const ts = formatHistoryTime(msg.at);
+        if (isHistoryMarker(msg)) { addBreathMarker(msg.content, ts); continue; }
         addMessage(msg.role === 'user' ? 'user' : 'being', msg.content, false, ts, msg.at);
       }
       if (i < messages.length) {
@@ -3573,7 +3623,14 @@ function renderHistoryBatched(messages) {
 }
 
 // 返回新追加的消息条数。full=true 才清屏（首次加载 / 服务端重启）。
-async function reconcileHistory({ full = false } = {}) {
+function reconcileHistory(opts = {}) {
+  if (reconcileInFlight) return reconcileInFlight;
+  reconcileInFlight = reconcileHistoryOnce(opts).finally(() => { reconcileInFlight = null; });
+  return reconcileInFlight;
+}
+
+async function reconcileHistoryOnce({ full = false } = {}) {
+  lastReconcileSawBeing = false;
   try {
     // 首次调用直接吃顶部预取的结果（已经在 CDN 下载期间跑完了）
     const res = (await takePrefetch('history'))
@@ -3588,12 +3645,15 @@ async function reconcileHistory({ full = false } = {}) {
       localEchoes = [];
       await renderHistoryBatched(msgs);
       added = msgs.length;
+      lastReconcileSawBeing = msgs.some(m => !isHistoryMarker(m) && m.role !== 'user');
     } else {
       const fresh = msgs.filter(m => (Number(m.seq) || 0) > lastHistorySeq);
       for (const m of fresh) {
+        if (isHistoryMarker(m)) { addBreathMarker(m.content, formatHistoryTime(m.at)); added++; continue; }
         const role = m.role === 'user' ? 'user' : 'being';
         if (consumeLocalEcho(role, m.content)) continue;   // 本地已经渲染过了
         addMessage(role, m.content, false, formatHistoryTime(m.at), m.at);
+        if (role === 'being') lastReconcileSawBeing = true;
         added++;
       }
       if (added) scrollToBottom();
@@ -3622,7 +3682,92 @@ async function syncHistoryCursor() {
   } catch (_) {}
 }
 
-async function checkActiveStream() {
+// A 202 response means the message was queued for a later SBS breath. Poll
+// history until that autonomous reply is persisted and render it incrementally.
+const CATCH_UP_INITIAL_MS = 2000;
+const CATCH_UP_MAX_INTERVAL_MS = 30000;
+const CATCH_UP_ABSOLUTE_MAX_MS = 5 * 60 * 1000;
+let catchUpTimer = null;
+function stopCatchUpWatcher() {
+  if (catchUpTimer) { clearTimeout(catchUpTimer); catchUpTimer = null; }
+}
+function startCatchUpWatcher() {
+  stopCatchUpWatcher();
+  const startedAt = Date.now();
+  const deadline = startedAt + CATCH_UP_ABSOLUTE_MAX_MS;
+  let delay = CATCH_UP_INITIAL_MS;
+  const tick = async () => {
+    catchUpTimer = null;
+    if (isStreaming) return;
+    await reconcileHistory();
+    if (lastReconcileSawBeing) return;
+    if (isStreaming || catchUpTimer || Date.now() >= deadline) return;
+    delay = Math.min(delay * 2, CATCH_UP_MAX_INTERVAL_MS);
+    catchUpTimer = setTimeout(tick, delay);
+  };
+  catchUpTimer = setTimeout(tick, delay);
+  checkActiveStream({ autonomousOnly: true });
+}
+
+const AUTONOMOUS_ORIGIN_LABELS = {
+  beating: 'being 正在自己想事情…',
+  callback: 'being 正在处理一条回调…',
+  leftover: 'being 正在回答排队的消息…',
+};
+let autonomousWatch = null;
+function stopAutonomousWatch() {
+  if (!autonomousWatch) return;
+  if (autonomousWatch.timer) clearTimeout(autonomousWatch.timer);
+  autonomousWatch = null;
+  clearTuiHint();
+}
+function watchAutonomousStream(data) {
+  if (isStreaming || !data?.stream_id) return;
+  if (autonomousWatch?.streamId === data.stream_id) return;
+  stopAutonomousWatch();
+  const watch = { streamId: data.stream_id, timer: null };
+  autonomousWatch = watch;
+  let interval = 2000;
+  const deadline = Date.now() + POLL_ABSOLUTE_MAX_MS;
+  setStatus('thinking');
+  setTuiHint(AUTONOMOUS_ORIGIN_LABELS[data.origin] || 'being 正在呼吸…');
+  const release = () => {
+    if (autonomousWatch !== watch) return false;
+    autonomousWatch = null;
+    clearTuiHint();
+    if (!isStreaming) setStatus('connected');
+    return true;
+  };
+  const finish = async () => {
+    if (!release()) return;
+    await reconcileHistory();
+    if (lastReconcileSawBeing) stopCatchUpWatcher();
+  };
+  const poll = async () => {
+    watch.timer = null;
+    if (autonomousWatch !== watch) return;
+    if (isStreaming) { release(); return; }
+    if (Date.now() > deadline) { await finish(); return; }
+    try {
+      const r = await fetch(apiUrl('/api/stream/active'), { cache: 'no-store', signal: timeoutSignal(8000) });
+      if (r.status === 204) { await finish(); return; }
+      if (r.ok) {
+        const next = await r.json();
+        if (next.stream_id !== watch.streamId) {
+          await finish();
+          if (next.origin && next.origin !== 'human' && !next.finished) watchAutonomousStream(next);
+          return;
+        }
+        if (next.finished) { await finish(); return; }
+      }
+    } catch (e) { console.warn('autonomous stream watch failed:', e); }
+    interval = Math.min(interval * 1.5, 5000);
+    if (autonomousWatch === watch) watch.timer = setTimeout(poll, interval);
+  };
+  watch.timer = setTimeout(poll, interval);
+}
+
+async function checkActiveStream({ autonomousOnly = false } = {}) {
   try {
     const res = (await takePrefetch('active'))
       || (await fetch(apiUrl('/api/stream/active'), {
@@ -3630,7 +3775,15 @@ async function checkActiveStream() {
         signal: timeoutSignal(8000),
       }));
     if (!res || res.status === 204 || !res.ok) return;
-    replayStream(await res.json());
+    const data = await res.json();
+    if (data.origin && data.origin !== 'human') {
+      if (isStreaming) return;
+      if (data.finished) { reconcileHistory(); return; }
+      watchAutonomousStream(data);
+      return;
+    }
+    if (autonomousOnly) return;
+    replayStream(data);
   } catch (e) {
     console.warn('checkActiveStream failed:', e);
   }
@@ -3646,6 +3799,7 @@ function replayStream(data) {
   }
 
   isStreaming = true;
+  stopAutonomousWatch();
   currentStreamId = data.stream_id || null;
   if (currentStreamId) lastStreamId = currentStreamId;
   writerEpoch++;   // F2: 接管写权

@@ -21,9 +21,12 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
   const page = await app.firstWindow();
   await app.context().tracing.start({ screenshots: true, snapshots: true });
   await app.evaluate(({ protocol }) => {
-    protocol.handle('http', request => new URL(request.url).host === '127.0.0.1:1'
-      ? Response.json({ being_name: 'willow', messages: [] })
-      : new Response('fixture only', { status: 404 }));
+    protocol.handle('http', request => {
+      const url = new URL(request.url);
+      if (url.host !== '127.0.0.1:1') return new Response('fixture only', { status: 404 });
+      if (url.pathname.endsWith('/api/stream/active')) return new Response(null, { status: 204 });
+      return Response.json({ being_name: 'willow', messages: [] });
+    });
   });
   const config = path.join(dir, 'portal.toml');
   await writeFile(config, `workspace = ${JSON.stringify(dir)}\nkits_dir = ${JSON.stringify(path.join(dir, 'kits'))}\nkits_enabled = true\n`);
@@ -58,6 +61,9 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
       return json({ error: 'not found' }, 404);
     });
   }, (await readFile(bundle)).toString('base64'));
+  // Wait for the chat document to finish initial focus before opening shell menus.
+  await page.frameLocator('#chat-frame').locator('#input').waitFor();
+  await page.waitForFunction(() => document.querySelector('#connection-light').dataset.state === 'online');
   const nav = async name => {
     if (await page.locator('#place-sheet').evaluate(element => element.open)) await page.locator('#back-to-chat').click();
     if (['town', 'kits', 'portal'].includes(name)) {

@@ -4,7 +4,7 @@
 
 连接你的 Being，在桌面上对话、阅读小镇，并通过 Heart Portal 使用本机工作区。
 
-Portal Desktop 是基于 **TypeScript、Electron、Vite 和 Rust** 的开源桌面客户端。它将 Loom 对话、Town 社区内容和 Portal 本机工具整合在一个窗口中，沿用已有服务协议。使用前需要已有的 Being 和 Loom 连接；Being 的身份、记忆与运行时仍由原服务管理。
+Portal Desktop 是基于 **React、TypeScript、Electron、Vite 和 Rust** 的开源桌面客户端。它将 Loom 对话、Town 社区内容和 Portal 本机工具整合在一个窗口中，沿用已有服务协议。使用前需要已有的 Being 和 Loom 连接；Being 的身份、记忆与运行时仍由原服务管理。
 
 [开始使用](#开始使用) · [功能](#现有功能) · [路线图](#路线图) · [开发文档](#文档导航) · [参与贡献](#参与贡献) · [MIT License](LICENSE)
 

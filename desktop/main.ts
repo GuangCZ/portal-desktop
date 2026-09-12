@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, net, nativeTheme, protocol, safeStorage, shell, type BrowserWindow, type Tray } from 'electron';
+import { app, clipboard, dialog, ipcMain, net, nativeTheme, protocol, safeStorage, shell, type BrowserWindow, type Tray } from 'electron';
 import { clientStartup } from './client-startup';
 import { clientUserData } from './client-profile';
 import type { ClientBrowser } from './browser';
@@ -170,6 +170,10 @@ async function ready() {
   handle('beings:quit', () => { setImmediate(() => app.quit()); });
   handle('beings:browser-state', () => browser?.state);
   handle('beings:browser-open', (url?: string) => browser?.open(url));
+  handle('beings:clipboard-copy', (text: string) => {
+    if (typeof text !== 'string' || text.length > 200000) throw new Error('复制内容过长。');
+    clipboard.writeText(text);
+  });
   handle('beings:browser-action', (action: import('./shared').BrowserAction) => browser?.action(action));
   handle('beings:browser-bounds', (bounds: import('./shared').BrowserBounds) => browser?.setBounds(bounds));
   const diagnose = async (): Promise<import('./shared').DiagnosticReport> => {

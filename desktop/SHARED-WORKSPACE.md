@@ -33,7 +33,7 @@ Town SDK 补齐：主进程验证实时连接身份，订阅篝火、私信与�
 
 ## 改造前的实现与缺口
 
-- `renderer/renderer.ts` 通过 `setView` 切换页面；`renderer/town.ts` 持有标签、选中围炉、筛选和局部缓存，尚未形成统一、可订阅的场景状态。
+- `renderer/models/app.ts` 通过 `navigate` 切换页面；`renderer/models/town.ts` 持有标签、选中围炉、筛选和局部缓存，React 组件通过 `useSyncExternalStore` 订阅模型，场景及引用由 `scene-store.ts` 管理。
 - `portal.ts` 与 `background.ts` 主要从进程状态及日志文字推断 Relay 连接。进程存活、连接成功、工具就绪、Heart 收到场景不能混作一个状态。
 - Loom 的发送路径提交消息与会话标识，尚无桌面环境封套，也没有发送瞬间绑定的页面版本。
 - 配对的 Town 身份与对话 Being 可以不同。不能用 Loom 名称猜测 Town 私信的“我”，更不能据此将私密内容发给另一身份。

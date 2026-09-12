@@ -36,6 +36,7 @@ it.each([{ being_id: 'other', token_kind: 'client', anonymous: false }, { being_
       live.restart();
       await vi.waitFor(() => expect(live.state.phase).toBe('auth-error'));
       expect(live.state.beingId).toBeUndefined();
+      expect(live.state.message).toContain('凭据无效或已失效');
       expect(fetcher).toHaveBeenCalledTimes(1);
     } finally { live.dispose(); }
   });

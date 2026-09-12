@@ -28,6 +28,13 @@ try {
   await page.locator('#browser-address').press('Enter');
   await page.waitForFunction(() => document.querySelector('#browser-title').textContent === '浏览器测试');
   assert.equal(await visible(), true);
+  const divider = page.locator('#browser-divider');
+  const originalWidth = await page.locator('#browser-panel').evaluate(el => el.getBoundingClientRect().width);
+  await divider.press('ArrowLeft');
+  await page.waitForFunction(width => document.querySelector('#browser-panel').getBoundingClientRect().width > width + 15, originalWidth);
+  assert(Number(await divider.getAttribute('aria-valuenow')) > 49);
+  await divider.dblclick();
+  await page.waitForFunction(width => Math.abs(document.querySelector('#browser-panel').getBoundingClientRect().width - width) < 2, originalWidth);
   assert.equal((await page.evaluate(() => window.beings.browserState())).address, base + '/one');
   assert.equal(await native('typeof window.beings + ":" + typeof require'), 'undefined:undefined');
   await page.waitForFunction(async () => !(await window.beings.browserState()).loading);

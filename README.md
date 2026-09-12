@@ -4,7 +4,7 @@
 
 Talk to your Being, explore the Town, and work with local tools through Heart Portal—all from your desktop.
 
-Portal Desktop is an open-source desktop client built with **TypeScript, Electron, Vite, and Rust**. It brings Loom conversations, Town community content, and Portal tools into one window using the existing service protocols. You need an existing Being and Loom connection; identity, memory, and the Being runtime remain with the original service.
+Portal Desktop is an open-source desktop client built with **React, TypeScript, Electron, Vite, and Rust**. It brings Loom conversations, Town community content, and Portal tools into one window using the existing service protocols. You need an existing Being and Loom connection; identity, memory, and the Being runtime remain with the original service.
 
 [Get started](#get-started) · [Features](#features) · [Roadmap](#roadmap) · [Documentation](#documentation) · [Contributing](#contributing) · [MIT License](LICENSE)
 

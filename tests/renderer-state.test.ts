@@ -1,0 +1,440 @@
+import { describe, expect, it, vi, afterEach } from "vitest";
+import { AppModel } from "../desktop/renderer/models/app";
+import { TownModel } from "../desktop/renderer/models/town";
+import { WorkspaceModel } from "../desktop/renderer/models/workspace";
+import { SceneStore } from "../desktop/renderer/scene-store";
+import {
+  feedMessages,
+  filterMessages,
+  newFeedFilters,
+} from "../desktop/renderer/town-feed";
+import type {
+  DesktopAPI,
+  Snapshot,
+  TownLiveState,
+  TownResult,
+} from "../desktop/shared";
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+};
+const state = (being = "willow"): Snapshot => ({
+  settings: {
+    being,
+    endpoint: "https://fixture.test/" + being,
+    hasToken: true,
+    workspace: "/workspace",
+    portalBinary: "/portal",
+    portalName: "portal",
+    autoStart: false,
+    allowExec: true,
+    kitsEnabled: true,
+  },
+  portal: { phase: "stopped", message: "stopped", logs: [] },
+});
+const live = (
+  generation = 1,
+  revision = 1,
+  beingId = "willow",
+): TownLiveState => ({
+  phase: "connected",
+  generation,
+  revision,
+  beingId,
+  sync: 1,
+  message: "connected",
+  versions: { bonfire: 0, mail: 0, firesides: 0 },
+});
+const result = (data: Record<string, unknown>): TownResult => ({
+  ok: true,
+  data,
+  fetchedAt: "2026-09-12T00:00:00Z",
+});
+function api(overrides: Partial<DesktopAPI> = {}) {
+  const subscriptions = new Set<unknown>();
+  const on = (callback: unknown) => {
+    subscriptions.add(callback);
+    return () => {
+      subscriptions.delete(callback);
+    };
+  };
+  const value = {
+    snapshot: vi.fn(async () => state()),
+    appearance: vi.fn(async () => "light"),
+    updateState: vi.fn(async () => ({ phase: "idle" })),
+    onPortal: on,
+    onUpdate: on,
+    onTownLive: on,
+    townLive: vi.fn(async () => live()),
+    townAuth: vi.fn(async () => ({ configured: true, beingId: "willow" })),
+    town: vi.fn(async () => result({ messages: [] })),
+    connectionDefaults: vi.fn(async () => ({ portalName: "original-portal" })),
+    ...overrides,
+  } as unknown as DesktopAPI;
+  return { value, subscriptions };
+}
+function town(overrides: Partial<DesktopAPI> = {}) {
+  const fixture = api(overrides);
+  return {
+    ...fixture,
+    model: new TownModel(
+      fixture.value,
+      vi.fn(),
+      vi.fn(),
+      new SceneStore(),
+      vi.fn(),
+      vi.fn(),
+    ),
+  };
+}
+const settle = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
+afterEach(() => vi.useRealTimers());
+describe("React desktop state lifecycle", () => {
+  it("releases IPC subscriptions and ignores startup reads from an earlier mount", async () => {
+    const old = deferred<Snapshot>(),
+      fresh = deferred<Snapshot>();
+    const fixture = api({
+      snapshot: vi
+        .fn()
+        .mockReturnValueOnce(old.promise)
+        .mockReturnValueOnce(fresh.promise),
+    });
+    const app = new AppModel(fixture.value),
+      stop = app.start();
+    expect(fixture.subscriptions.size).toBe(3);
+    stop();
+    expect(fixture.subscriptions.size).toBe(0);
+    const stopAgain = app.start();
+    expect(fixture.subscriptions.size).toBe(3);
+    fresh.resolve(state("river"));
+    await settle();
+    old.resolve(state("willow"));
+    await settle();
+    expect(app.snapshot?.settings.being).toBe("river");
+    expect(app.startup).toBe("ready");
+    stopAgain();
+    expect(fixture.subscriptions.size).toBe(0);
+  });
+  it("preserves the chat document during status updates and reloads explicitly", () => {
+    const app = new AppModel(api().value);
+    app.applySnapshot(state());
+    const src = app.chatSource;
+    app.applySnapshot({
+      ...state(),
+      portal: { phase: "connected", message: "online", logs: ["ready"] },
+    });
+    expect(app.chatSource).toBe(src);
+    app.applySnapshot(state(), true);
+    expect(app.chatSource).not.toBe(src);
+    app.applySnapshot({
+      ...state(),
+      settings: { ...state().settings, hasToken: false },
+    });
+    expect(app.chatSource).toBe("");
+  });
+  it("does not overwrite an edited Portal name with late defaults", async () => {
+    const pending = deferred<{ portalName: string; source: string }>();
+    const app = new AppModel(
+      api({ connectionDefaults: () => pending.promise }).value,
+    );
+    app.applySnapshot(state());
+    app.showSettings();
+    app.editForm("portalName", "my-portal");
+    pending.resolve({ portalName: "detected", source: "old config" });
+    await settle();
+    expect(app.form?.portalName).toBe("my-portal");
+    expect(app.portalNameHelp).toContain("保留你填写的名称");
+    app.closeSettings();
+  });
+  it("invalidates closed forms and clears the connection secret", async () => {
+    const pending = deferred<{ portalName: string }>();
+    const app = new AppModel(
+      api({ connectionDefaults: () => pending.promise }).value,
+    );
+    app.applySnapshot(state());
+    app.showSettings();
+    app.editForm("connectionLink", "https://fixture.test/?token=secret");
+    app.closeSettings();
+    pending.resolve({ portalName: "late" });
+    await settle();
+    expect(app.form?.connectionLink).toBe("");
+    expect(app.form?.portalName).toBe("portal");
+  });
+});
+describe("Town request and identity isolation", () => {
+  it("ignores a response from the previous page", async () => {
+    const pending = deferred<TownResult>();
+    const { model } = town({
+      town: vi
+        .fn()
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValue(result({ scrolls: [{ id: "story" }] })),
+    });
+    model.show("bonfire");
+    model.show("embers");
+    await settle();
+    pending.resolve(result({ messages: [{ content: "old private content" }] }));
+    await settle();
+    expect(model.view).toBe("embers");
+    expect(model.data).toEqual({ scrolls: [{ id: "story" }] });
+    expect(model.loading).toBe(false);
+  });
+  it("discards stale details and private drafts when the identity changes", async () => {
+    const pending = deferred<TownResult>();
+    const { model } = town({ town: () => pending.promise });
+    model.live = live();
+    model.view = "chat";
+    model.sendTarget = { kind: "dm", beingId: "willow", generation: 1 };
+    model.content = "private draft";
+    model.recipient = "friend";
+    model.sendOpen = true;
+    const read = model.loadDetail({ kind: "scroll", id: "private" });
+    model.receiveLive(live(2, 2, "river"));
+    pending.resolve(result({ title: "private", content: "must not appear" }));
+    await read;
+    expect(model.detail).toBeUndefined();
+    expect(model.content).toBe("");
+    expect(model.recipient).toBe("");
+    expect(model.sendTarget).toBeUndefined();
+    expect(model.sendOpen).toBe(false);
+  });
+  it("sends once and never retries an uncertain result automatically", async () => {
+    const pending = deferred<TownResult>(),
+      sendTown = vi.fn(() => pending.promise);
+    const { model } = town({ sendTown });
+    model.live = live();
+    model.view = "bonfire";
+    model.compose();
+    model.content = "hello";
+    const send = model.send();
+    await model.send();
+    expect(sendTown).toHaveBeenCalledTimes(1);
+    pending.resolve({
+      ok: false,
+      code: "network",
+      message: "请先核对是否送达",
+    });
+    await send;
+    expect(model.sendOpen).toBe(true);
+    expect(model.content).toBe("hello");
+    expect(model.sendError).toContain("核对");
+    expect(sendTown).toHaveBeenCalledTimes(1);
+  });
+  it("loads the private All tab by merging inbox and sent messages", async () => {
+    const townApi = vi.fn(async (query: import("../desktop/shared").TownQuery) =>
+      result({
+        messages:
+          query.kind === "inbox"
+            ? [{ id: "incoming", sender: "river", recipient: "willow" }]
+            : [{ id: "outgoing", sender: "willow", recipient: "river" }],
+      }),
+    );
+    const { model } = town({ town: townApi });
+    model.live = live();
+    model.show("mail");
+    await settle();
+    expect(model.tab).toBe("all");
+    expect(model.data?.messages).toHaveLength(2);
+    expect(townApi.mock.calls.map(([query]) => query.kind)).toEqual([
+      "inbox",
+      "sent",
+    ]);
+  });
+  it("rejects a stale sender identity and clears credentials when closing pairing", async () => {
+    const sendTown = vi.fn();
+    const { model } = town({ sendTown });
+    model.live = live();
+    model.view = "mail";
+    model.compose();
+    model.content = "hello";
+    model.live = live(2, 2, "river");
+    await model.send();
+    expect(sendTown).not.toHaveBeenCalled();
+    expect(model.sendError).toContain("身份已改变");
+    model.authOpen = true;
+    model.pairCode = "ABC123";
+    model.token = "secret";
+    model.closeAuth();
+    expect(model.token).toBe("");
+    expect(model.pairCode).toBe("");
+  });
+  it("keeps loaded text while reconciling new activity", async () => {
+    vi.useFakeTimers();
+    const { model } = town({
+      town: vi.fn(async () =>
+        result({ messages: [{ seq: 2, content: "new" }] }),
+      ),
+    });
+    model.live = live();
+    model.me = "willow";
+    model.view = "bonfire";
+    model.tab = "bonfire";
+    model.data = { messages: [{ seq: 1, content: "reading" }] };
+    model.receiveLive({
+      ...live(1, 2),
+      sync: 2,
+      versions: { bonfire: 1, mail: 0, firesides: 0 },
+    });
+    await vi.advanceTimersByTimeAsync(701);
+    expect(model.data).toEqual({ messages: [{ seq: 1, content: "reading" }] });
+    expect(model.unread("bonfire")).toBe(true);
+  });
+  it("keeps the last Town snapshot readable when the live stream loses auth", () => {
+    const { model } = town();
+    model.view = "embers";
+    model.live = live();
+    model.data = { scrolls: [{ id: "story" }] };
+    model.receiveLive({
+      ...live(),
+      phase: "auth-error",
+      revision: 2,
+      beingId: undefined,
+      message: "凭据失效",
+    });
+    expect(model.data).toEqual({ scrolls: [{ id: "story" }] });
+    expect(model.error).toBeUndefined();
+    expect(model.status).toContain("仍可阅读");
+  });
+});
+describe("shared reading behavior", () => {
+  it("matches exact identities and preserves stable chronological ordering", () => {
+    const messages = feedMessages(
+      [
+        {
+          seq: 1,
+          being_id: "river",
+          content: "@willow_work unrelated",
+          at: "2026-09-12T01:00:00Z",
+        },
+        {
+          seq: 2,
+          being_id: "river",
+          content: "@willow hello",
+          at: "2026-09-12T01:00:00Z",
+        },
+        {
+          seq: 3,
+          being_id: "willow",
+          content: "mine",
+          at: "2026-09-12T02:00:00Z",
+        },
+      ],
+      { me: "Willow" },
+    );
+    const filters = { ...newFeedFilters(), relation: "about" };
+    expect(
+      filterMessages(messages, filters, "").map((m) => m.entry.seq),
+    ).toEqual([3, 2]);
+    expect(
+      filterMessages(messages, { ...filters, order: "oldest" }, "").map(
+        (m) => m.entry.seq,
+      ),
+    ).toEqual([2, 3]);
+  });
+  it("reads private message names from Town sender and recipient objects", () => {
+    const [message] = feedMessages(
+      [
+        {
+          id: "letter-1",
+          sender: { being_id: "river", display_name: "河流" },
+          recipient: { being_id: "willow", display_name: "柳树" },
+          content: "你好",
+        },
+      ],
+      { me: "willow", mail: "all" },
+    );
+    expect(message).toMatchObject({
+      author: "河流",
+      authorId: "river",
+      recipient: "柳树",
+      received: true,
+    });
+    const [flat] = feedMessages(
+      [{ id: "letter-2", sender_being_id: "river", sender_display_name: "河流", recipient: "willow", content: "好" }],
+      { me: "willow", mail: "all" },
+    );
+    expect(flat.author).toBe("河流");
+  });
+  it("only drafts private references for the matching Being", () => {
+    const post = vi.fn(),
+      toast = vi.fn(),
+      workspace = new WorkspaceModel(vi.fn(), toast, post, () => true);
+    const stop = workspace.start();
+    workspace.scenes.configure("willow", "https://fixture.test");
+    workspace.scenes.enter("mail");
+    workspace.scenes.update({ identity: "river" });
+    workspace.scenes.select({
+      id: "private",
+      title: "letter",
+      excerpt: "private text",
+      private: true,
+    });
+    workspace.scenes.pin();
+    workspace.compose();
+    expect(post).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringContaining("不能跨身份放入草稿"),
+    );
+    workspace.scenes.resetIdentity();
+    expect(workspace.open).toBe(false);
+    expect(workspace.scenes.reference).toBeNull();
+    stop();
+  });
+});
+
+describe("pending work on renderer disposal", () => {
+  it("discards a Kit prepared after the renderer was unmounted", async () => {
+    const pending = deferred<import("../desktop/shared").KitInstallPlan>();
+    const discardKit = vi.fn(async () => {});
+    const { model } = town({ prepareKit: () => pending.promise, discardKit });
+    const stop = model.start();
+    const preparing = model.prepareKit("kit");
+    stop();
+    pending.resolve({
+      ticket: "staged-ticket",
+      name: "kit",
+      version: "1",
+      description: "",
+      tools: 0,
+      command: [],
+      environment: [],
+      dependency: "none",
+      sha256: "",
+      notes: "",
+    });
+    await preparing;
+    expect(discardKit).toHaveBeenCalledWith("staged-ticket");
+    expect(model.plan).toBeUndefined();
+  });
+  it("does not apply a Portal snapshot requested by an earlier mount", async () => {
+    const pending = deferred<Snapshot>();
+    let callback!: Parameters<DesktopAPI["onPortal"]>[0];
+    const fixture = api({
+      onPortal: (listener) => {
+        callback = listener;
+        return () => {};
+      },
+      snapshot: vi
+        .fn()
+        .mockResolvedValueOnce(state())
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValueOnce(state("river")),
+    });
+    const app = new AppModel(fixture.value);
+    const stop = app.start();
+    await settle();
+    callback(state().portal);
+    stop();
+    const stopAgain = app.start();
+    await settle();
+    pending.resolve(state("willow"));
+    await settle();
+    expect(app.snapshot?.settings.being).toBe("river");
+    stopAgain();
+  });
+});

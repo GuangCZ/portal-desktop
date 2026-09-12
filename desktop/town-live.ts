@@ -32,7 +32,7 @@ export class TownLive {
   rejectAuth() {
     if (this.state.phase === 'auth-error') return;
     this.dispose();
-    this.update({ phase: 'auth-error', beingId: undefined, message: 'Town 凭据无效或已失效，请重新配对。' });
+    this.update({ phase: 'auth-error', beingId: undefined, message: 'Town 凭据无效或已失效；已加载内容仍可阅读，请重新配对后刷新。' });
   }
   private rememberKey(value: string) {
     if (!value || this.seen.has(value)) return false;
@@ -51,6 +51,7 @@ export class TownLive {
     let timeout = setTimeout(() => controller.abort(), 20000);
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let fatal = false, hello = false;
+    let failure = "网络连接失败";
     try {
       const token = this.getToken();
       const url = new URL('/api/client/stream', this.origin); url.searchParams.set('token', token);
@@ -59,7 +60,16 @@ export class TownLive {
       if ([401, 403].includes(response.status)) {
         await response.body?.cancel(); fatal = true; this.rejectAuth(); return;
       }
-      if (!response.ok || !response.headers.get('content-type')?.includes('text/event-stream') || !response.body) { await response.body?.cancel(); throw new Error('stream'); }
+      if (!response.ok) {
+        failure = `SSE 请求返回 HTTP ${response.status}`;
+        await response.body?.cancel();
+        throw new Error('sse-http');
+      }
+      if (!response.headers.get('content-type')?.includes('text/event-stream') || !response.body) {
+        failure = '服务器未返回 SSE 流';
+        await response.body?.cancel();
+        throw new Error('sse-format');
+      }
       reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '', event = '', lines: string[] = [], size = 0;
@@ -72,12 +82,13 @@ export class TownLive {
           const beingId = typeof data.being_id === 'string' ? data.being_id : '';
           const expected = this.getExpectedBeing();
           if (data.anonymous !== false || data.token_kind !== 'client' || !/^[a-z0-9_-]{1,64}$/.test(beingId) || expected && expected !== beingId || this.state.beingId && this.state.beingId !== beingId) {
+            failure = expected && expected !== beingId ? 'SSE hello 身份与配对 Being 不一致' : 'SSE hello 未确认 client 身份';
             fatal = true; this.rejectAuth(); throw new Error('identity');
           }
           if (!hello) { hello = true; this.attempts = 0; this.update({ phase: 'connected', beingId, sync: this.state.sync + 1, message: `Town 已连接 · @${beingId}` }); }
           return;
         }
-        if (!hello) throw new Error('missing hello');
+        if (!hello) { failure = 'SSE 未先返回 hello 身份事件'; throw new Error('missing-hello'); }
         const channel: TownChannel | undefined = type === 'bonfire' ? 'bonfire' : type === 'dm' ? 'mail' : type === 'fireside' ? 'firesides' : undefined;
         if (channel && this.rememberKey(key(type, data))) this.update({ versions: { ...this.state.versions, [channel]: this.state.versions[channel] + 1 } });
       };
@@ -111,7 +122,7 @@ export class TownLive {
       // Timed-out attempts reconnect; superseded and disposed attempts do not.
       if (!fatal && this.controller === controller && this.state.generation === generation) {
         controller.abort();
-        this.update({ phase: 'reconnecting', message: 'Town 连接中断，正在重连；已加载内容仍可阅读。' });
+        this.update({ phase: 'reconnecting', message: `Town SSE ${failure}，正在重连；已加载内容仍可阅读。` });
         const delay = Math.min(30000, 1000 * 2 ** Math.min(this.attempts++, 5)) + Math.floor(Math.random() * 500);
         this.retry = setTimeout(() => { void this.connect(generation); }, delay);
       }
