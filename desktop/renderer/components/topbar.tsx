@@ -124,7 +124,6 @@ export function Topbar({ model }: { model: AppModel }) {
           <span className="sbs-header-track" aria-hidden="true">
             <span className="sbs-header-thumb" />
           </span>
-          <span>SBS {app.sbsEnabled ? "开" : "关"}</span>
         </button>
         <span
           id="connection-light"
