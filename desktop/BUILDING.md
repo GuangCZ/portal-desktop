@@ -6,7 +6,7 @@
 
 | 环境 | 前置条件 | 当前交付状态 |
 | --- | --- | --- |
-| macOS | Git、Node.js 22.12+、npm、Rust stable、Xcode Command Line Tools | Apple Silicon 支持 `.app` / DMG / ZIP；Intel 需对应 x64 机器另行构建 |
+| macOS | Git、Node.js 22.12+、npm、Rust stable、Xcode Command Line Tools | Apple Silicon（arm64）和 Intel（x64）分别原生构建 `.app` / DMG / ZIP |
 | Windows | Git、Node.js 22.12+、npm、Rust stable MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK | Forge 打包客户端，electron-builder 生成 NSIS 一键安装包；安装升级验证见 `npm run test:windows-upgrade` |
 | Linux | Git、Node.js 22.12+、npm、Rust stable、本机 C/C++ 链接工具及 Electron 桌面运行依赖、密钥库 | 配置了 ZIP；后台常驻未实现，未完成 Linux 桌面验收 |
 
@@ -74,7 +74,11 @@ npm run make
 | make / macOS DMG | `out/make/Portal Desktop-<version>-<arch>.dmg` |
 | make / Windows Setup | `out/make/nsis/portal-desktop-<version>-windows-x64-Setup.exe` |
 
-DMG 和 ZIP 均含完整客户端和内置 Portal；macOS 的 DMG 用于拖拽安装，ZIP 用于客户端内升级。不要只拷贝 Windows 的单个 exe 或 macOS `.app` 中的单个可执行文件。当前没有 MSI、AppImage、deb/rpm。版本标签触发 macOS / Windows 配套构建，全部验证通过后才发布 GitHub Release。
+DMG 和 ZIP 均含完整客户端和内置 Portal；macOS 的 DMG 用于拖拽安装，ZIP 用于客户端内升级。不要只拷贝 Windows 的单个 exe 或 macOS `.app` 中的单个可执行文件。当前没有 MSI、AppImage、deb/rpm。版本标签触发 macOS arm64、macOS x64 和 Windows x64 三组配套构建，全部验证通过后才发布 GitHub Release。两个 Mac 架构分别使用 `macos-14` 和 `macos-15-intel` runner，Electron 与 Rust Portal 均在对应架构上编译、签名和验证。
+
+发布文件按架构命名：`portal-desktop-<version>-macos-arm64.dmg` / `.zip` 和
+`portal-desktop-<version>-macos-x64.dmg` / `.zip`，并分别附带 `runtime-bundle-macos-<arch>.json`。
+发布脚本要求三组产物齐全，并核对每组版本、架构及包内引擎摘要；重试发布也要求三组原生构建均已成功。
 
 macOS 打开 DMG，将 `Portal Desktop.app` 拖到其中的 Applications 快捷方式，推出磁盘映像后从应用程序启动；也可将 ZIP 解压到稳定、可写的用户应用目录。DMG 内运行及 App Translocation 路径不适合原地升级，客户端会在下载前要求更换安装位置。Windows ZIP 应解压到当前用户可写的稳定目录再运行 `portal-desktop.exe`，不要直接在压缩包预览里启动。
 
@@ -149,6 +153,6 @@ npm run make
 
 静态类型检查：`npm run typecheck`。完整测试及覆盖边界见 [TESTING.md](TESTING.md)。`npm run test:all` 会构建 package，但本地不会顺带生成 make 分发包；发布前还需执行 `npm run make`。
 
-Push / PR 的 GitHub Actions 在 macOS 和 Windows 运行测试并上传测试报告（保存 14 天）。只有版本 tag 触发分发包构建和 Release 发布；其中 Mac DMG 和 ZIP 必须共同通过 `test:macos-package`。托管 runner 跳过真实登录服务测试；可通过手动 `native_background` job 使用专用已登录 Mac runner。Windows 原生后台任务、睡眠唤醒以及其他平台仍需实机验收。
+Push / PR 的 GitHub Actions 在 macOS arm64、macOS x64 和 Windows x64 运行测试并上传测试报告（保存 14 天）。只有版本 tag 触发分发包构建和 Release 发布；每个 Mac 架构的 DMG 和 ZIP 必须共同通过 `test:macos-package`。托管 runner 跳过真实登录服务测试；可通过手动 `native_background` job 使用专用已登录 Mac runner。Windows 原生后台任务、睡眠唤醒以及其他平台仍需实机验收。
 
 每次交付记录客户端 commit、桌面版本、Portal commit、平台/架构和验证范围。更新桌面版本使用 `npm version <新版本> --no-git-tag-version` 同步 `package.json` / lockfile，然后重新构建；不要只改原网页的 `VERSION`。依赖风险应以交付时重新执行的 `npm audit` 为准，README 中的历史构建记录不代表永久无漏洞。

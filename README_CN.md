@@ -66,13 +66,13 @@ Portal 支持刷新 Kit 清单。清单存在、进程运行与第三方服务�
 | 平台 | 当前支持与验证范围 |
 | --- | --- |
 | macOS Apple Silicon | 支持 DMG 安装、从 GitHub Release 获取 ZIP 升级、托盘、客户端及 Portal 登录自启 |
-| macOS Intel | 需在对应架构机器构建；尚未完成验收 |
+| macOS Intel | 原生 x64 CI 构建，包含 DMG 安装与 ZIP 升级校验 |
 | Windows | ZIP / NSIS 一键安装包、登录任务和 CI；提供真实安装升级及完整生命周期测试 |
 | Linux | 已配置 ZIP 与临时 Portal；尚未完成桌面验收，不支持当前的客户端登录自启和 Portal 后台常驻 |
 
 macOS 发布与 Portal 源仓的签发策略一致：整个客户端及内置 Portal 使用同一 D5 Developer ID、固定标识、Hardened Runtime 和安全时间戳。公证与源仓一样暂缓；Windows Authenticode 尚未配置。签名前置条件、贡献者测试构建与安装方式见 [构建与交付说明](desktop/BUILDING.md)。
 
-macOS 下载 `portal-desktop-<版本>-macos-arm64.dmg`，打开后将 **Portal Desktop** 拖入 **Applications（应用程序）**，推出磁盘映像，再从应用程序打开。以后通过「检查更新 → 下载并升级」，客户端从最新正式 GitHub Release 下载对应 ZIP 和校验清单，验证完整应用签名后替换并重启，沿用原配置启动随包 Portal。不要在 DMG 内直接升级。恢复方式与验证边界见 [升级说明](desktop/UPDATING.md)。
+macOS 按芯片选择安装包：Apple Silicon 下载 `portal-desktop-<版本>-macos-arm64.dmg`，Intel 下载 `portal-desktop-<版本>-macos-x64.dmg`。打开后将 **Portal Desktop** 拖入 **Applications（应用程序）**，推出磁盘映像，再从应用程序打开。以后通过「检查更新 → 下载并升级」，客户端从最新正式 GitHub Release 下载对应架构的 ZIP 和校验清单，验证完整应用签名后替换并重启，沿用原配置启动随包 Portal。不要在 DMG 内直接升级。恢复方式与验证边界见 [升级说明](desktop/UPDATING.md)。
 
 ### 首次连接
 

@@ -2,7 +2,7 @@
 
 ## 用户操作
 
-macOS 首次安装：从正式 Release 下载 `portal-desktop-<版本>-macos-arm64.dmg`，打开后将 Portal Desktop 拖入 Applications，推出磁盘映像，再打开安装后的应用。同一 Release 同时提供用于客户端内升级的 ZIP，二者包含同一个已签名应用和配套 Portal。已有旧版但尚无升级入口时，退出后通过 DMG 替换应用即可，保留用户配置目录。
+macOS 首次安装：Apple Silicon 从正式 Release 下载 `portal-desktop-<版本>-macos-arm64.dmg`，Intel 下载 `portal-desktop-<版本>-macos-x64.dmg`。打开后将 Portal Desktop 拖入 Applications，推出磁盘映像，再打开安装后的应用。同一 Release 同时提供对应架构的升级 ZIP，DMG 与 ZIP 包含同一个已签名应用和配套 Portal。已有旧版但尚无升级入口时，退出后通过 DMG 替换应用即可，保留用户配置目录。
 
 菜单“检查更新”读取正式发布版本；客户端启动及每 6 小时检查一次。只有对应系统、架构的安装包和校验清单均已上传，才提示可安装更新。发布信息读取失败不会阻断聊天或 Portal。用户点击“下载并升级”后从固定 GitHub 正式发布地址下载平台安装包，并校验发布摘要。自动检测不会自动安装。
 
@@ -16,7 +16,7 @@ macOS 首次安装：从正式 Release 下载 `portal-desktop-<版本>-macos-arm
 
 发布版本已接续 0.1.1 重新从 0.1.2 编号，累计改动保留。此前已安装 0.1.9 的用户需退出后手动安装 0.1.2；更新检查按版本号比较，不会自动把较低版本作为升级推送。
 
-macOS 更新流程读取 GitHub `releases/latest`，使用 `vX.Y.Z` 正式 tag 下的 `portal-desktop-X.Y.Z-macos-arm64.zip` 与 `SHA256SUMS.txt`；DMG 不用于运行中的应用替换。草稿、预发布、缺失升级 ZIP 或校验清单均不提供安装。正常升级不要求用户重新填写 Being 连接。
+macOS 更新流程读取 GitHub `releases/latest`，使用 `vX.Y.Z` 正式 tag 下的 `portal-desktop-X.Y.Z-macos-<arch>.zip` 与 `SHA256SUMS.txt`；`<arch>` 按当前客户端架构选择 `arm64` 或 `x64`，不会拿另一架构的包替代。DMG 不用于运行中的应用替换。草稿、预发布、缺失升级 ZIP 或校验清单均不提供安装。正常升级不要求用户重新填写 Being 连接。
 
 先结束本机任务并保存聊天草稿。安装包下载、摘要校验及 macOS 应用暂存完成后，用户点击“停止 Portal 并安装”。客户端先持久保存原运行记录，停用并确认客户端 Portal 及对应守护退出，然后关闭自身；独立安装助手等待旧客户端退出，macOS 同目录备份并替换应用，Windows 执行 NSIS 一键安装并显示进度，成功后自动打开新版。新版使用原配置同步最新内置 Portal 和守护并自动运行；未开启后台常驻时，由客户端持有 Portal，不会因升级启用登录守护。
 
@@ -47,8 +47,8 @@ macOS 更新流程读取 GitHub `releases/latest`，使用 `vX.Y.Z` 正式 tag �
 
 - `npm version X.Y.Z --no-git-tag-version` 同步客户端与 lockfile 版本。
 - `npm run build:portal` 构建配套源码；`npm run make` 打包时从实际二进制读取版本、计算摘要并生成清单。不要复用未知来源或不对应源码的二进制。
-- `.github/workflows/release.yml` 只由版本 tag 触发。两个平台构建、Mac DMG 安装及 ZIP 暂存验证和 Windows 原生升级测试通过、包内引擎摘要核对后，先创建草稿并上传全部安装包、清单及摘要，最后公开为正式 Release。macOS 必须同时提供一个 DMG 和一个 ZIP，两者均写入 `SHA256SUMS.txt`；缺包或上传失败不发布正式版本。
-- 更新 `desktop/RELEASE_NOTES.md` 后再创建版本 tag；草稿和预发布不会提示用户更新。该首版不提供 Intel Mac 安装包。
+- `.github/workflows/release.yml` 只由版本 tag 触发。macOS arm64、macOS x64 和 Windows x64 三组构建、各 Mac 架构的 DMG 安装及 ZIP 暂存验证和 Windows 原生升级测试通过、包内引擎摘要核对后，先创建草稿并上传全部安装包、清单及摘要，最后公开为正式 Release。每个 Mac 架构必须同时提供一个 DMG 和一个 ZIP，各自写入 `SHA256SUMS.txt`；缺包或上传失败不发布正式版本。重试发布同样检查三组原生构建结果。
+- 更新 `desktop/RELEASE_NOTES.md` 后再创建版本 tag；草稿和预发布不会提示用户更新。
 - 默认更新源为 `d5z/portal-desktop`。私有仓库无法匿名检测：应在构建时设置 `PORTAL_DESKTOP_UPDATE_REPOSITORY=owner/public-release-repo`（Actions 中使用同名 repository variable），只公开版本及二进制；不内置 GitHub token。保持私有时可在浏览器登录发布页下载。
 - 下载和安装由用户手动触发。macOS 与 Portal 源仓使用相同的 D5 Developer ID、固定标识、Hardened Runtime 和安全时间戳；公证同样暂缓。签发和 Secrets 配置见 [BUILDING.md](BUILDING.md)。Windows Authenticode 尚未配置。SHA-256 检查不能代替签名和来源信任。
 

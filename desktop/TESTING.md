@@ -40,7 +40,11 @@ Windows 的离线升级、坏引擎回滚与独立 Portal 接管另用 PowerShel
 
 ## CI 接入
 
-`.github/workflows/desktop-tests.yml` 在分支 push、pull request 和手动运行时执行 macOS/Windows 矩阵，构建并运行客户端和引擎测试，上传测试报告。普通 CI 的 macOS 包仅使用显式本地测试签名，不作为分发包。正式签名、安装包检查和发布由版本 tag 触发的 `.github/workflows/release.yml` 执行；完整图形升级测试需在具备发布证书的已登录 Mac 上单独运行。Portal 源码由客户端仓库的子模块引用锁定。
+`.github/workflows/desktop-tests.yml` 在分支 push、pull request 和手动运行时执行 macOS arm64、macOS x64 和 Windows x64 矩阵，构建并运行客户端和引擎测试，上传测试报告。Intel Mac 使用 `macos-15-intel` runner 原生运行。普通 CI 的 macOS 包仅使用显式本地测试签名，不作为分发包。正式签名、两个 Mac 架构各自的安装包检查和发布由版本 tag 触发的 `.github/workflows/release.yml` 执行；完整图形升级测试需在具备发布证书的已登录 Mac 上单独运行。Portal 源码由客户端仓库的子模块引用锁定。
+
+`tests/release-assets.test.ts` 验证三组发布资产、各自的校验摘要，以及 Intel 产物缺失、
+架构错配、引擎损坏和任一 Mac 架构的 DMG/ZIP 缺失或重复时拒绝发布。
+更新检查测试覆盖两种 Mac 架构选择各自 ZIP，以及只有另一架构包时不提供安装。
 
 托管 runner 设置 `PORTAL_DESKTOP_TEST_BACKGROUND=0`，报告中显示 **SKIPPED**；普通 Portal 子进程、真实 Relay/工具调用及 Rust 测试仍执行。不能把这个结果当成登录自启验收。
 

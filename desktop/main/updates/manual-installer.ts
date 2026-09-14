@@ -16,7 +16,7 @@ const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
 const ps = (s: string) => `'${s.replaceAll("'", "''")}'`;
 export function assetName(version: string, platform = process.platform, arch = process.arch) {
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('无效的更新版本。');
-  if (platform === 'darwin' && arch === 'arm64') return `portal-desktop-${version}-macos-arm64.zip`;
+  if (platform === 'darwin' && (arch === 'arm64' || arch === 'x64')) return `portal-desktop-${version}-macos-${arch}.zip`;
   if (platform === 'win32' && arch === 'x64') return `portal-desktop-${version}-windows-x64-Setup.exe`;
   throw new Error('当前平台没有配套安装包，请查看发布页。');
 }

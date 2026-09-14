@@ -40,7 +40,7 @@ const candidate = path.join(out, name, `${pkg.productName}.app`);
 const archive = path.join(out, 'make/zip/darwin', process.arch, `${name}-${pkg.version}.zip`);
 const dmg = path.join(out, 'make', `${pkg.productName}-${pkg.version}-${process.arch}.dmg`);
 const expectedBundle = JSON.parse(await readFile(path.join(candidate, 'Contents/Resources/runtime-bundle.json'), 'utf8'));
-const archiveBytes = await readFile(archive), asset = `portal-desktop-${pkg.version}-macos-arm64.zip`;
+const archiveBytes = await readFile(archive), asset = `portal-desktop-${pkg.version}-macos-${process.arch}.zip`;
 const sums = `${sha(archiveBytes)}  ${asset}\n`;
 const previousVersion = pkg.version.replace(/\d+$/, number => String(Number(number) - 1));
 assert.notEqual(previousVersion, pkg.version);

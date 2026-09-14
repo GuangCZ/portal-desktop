@@ -3,6 +3,7 @@ import { UpdateChecker } from '../desktop/main/updates/checker';
 const release = (tag = 'v0.2.0') => ({ tag_name: tag, draft: false, prerelease: false, assets: [
   { name: `portal-desktop-${tag.slice(1)}-macos-arm64.zip` },
   { name: `portal-desktop-${tag.slice(1)}-windows-x64-Setup.exe` },
+  { name: `portal-desktop-${tag.slice(1)}-macos-x64.zip` },
   { name: 'SHA256SUMS.txt' },
 ] });
 it('compares semantic versions and constructs release links from the trusted repository', async () => {
@@ -20,8 +21,8 @@ it('does not offer installation without exactly one matching platform package an
       undefined, 'darwin', 'arm64');
     expect(await checker.check()).toMatchObject({ phase: 'unavailable', latestVersion: undefined });
   }
-  const intel = new UpdateChecker('0.1.4', 'd5z/portal-desktop', (async () => Response.json(metadata)) as typeof fetch, undefined, 'darwin', 'x64');
-  expect((await intel.check()).message).toContain('架构');
+  const unsupported = new UpdateChecker('0.1.4', 'd5z/portal-desktop', (async () => Response.json(metadata)) as typeof fetch, undefined, 'darwin', 'ia32');
+  expect((await unsupported.check()).message).toContain('架构');
 });
 it('handles private/missing releases without claiming that the installed version is current', async () => {
   const checker = new UpdateChecker('0.1.1', 'd5z/portal-desktop', (async () => new Response('', { status: 404 })) as typeof fetch);
@@ -57,11 +58,14 @@ it('publishes download activity and keeps periodic checks from replacing an acti
   expect(calls).toBe(2);
 });
 
-it('uses the Release ZIP for in-app macOS upgrades while also distributing a DMG', async () => {
+it.each(['arm64', 'x64'] as const)('uses the matching %s Release ZIP for macOS upgrades and rejects the other architecture', async arch => {
   const metadata = release();
-  const dmg = { name: `portal-desktop-${metadata.tag_name.slice(1)}-macos-arm64.dmg` };
+  const zip = `portal-desktop-${metadata.tag_name.slice(1)}-macos-${arch}.zip`;
+  const dmg = { name: `portal-desktop-${metadata.tag_name.slice(1)}-macos-${arch}.dmg` };
   const check = (assets: typeof metadata.assets) => new UpdateChecker('0.1.4', 'd5z/portal-desktop',
-    (async () => Response.json({ ...metadata, assets })) as typeof fetch, undefined, 'darwin', 'arm64').check();
+    (async () => Response.json({ ...metadata, assets })) as typeof fetch, undefined, 'darwin', arch).check();
   expect((await check([...metadata.assets, dmg])).phase).toBe('available');
   expect((await check([dmg, { name: 'SHA256SUMS.txt' }])).phase).toBe('unavailable');
+  expect((await check(metadata.assets.filter(asset => asset.name !== zip))).phase).toBe('unavailable');
+  expect((await check([...metadata.assets, { name: zip }])).phase).toBe('unavailable');
 });

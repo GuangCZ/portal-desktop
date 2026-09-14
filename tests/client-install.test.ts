@@ -34,8 +34,11 @@ it('journals client launch records and never resumes independent runtimes from o
 
 it('selects only supported assets, requires one digest and generates wait/replace/relaunch handoffs', () => {
   expect(assetName('0.1.4', 'win32', 'x64')).toBe('portal-desktop-0.1.4-windows-x64-Setup.exe');
+  expect(assetName('0.1.4', 'darwin', 'arm64')).toBe('portal-desktop-0.1.4-macos-arm64.zip');
+  expect(assetName('0.1.4', 'darwin', 'x64')).toBe('portal-desktop-0.1.4-macos-x64.zip');
   expect(() => assetName('../bad', 'darwin', 'arm64')).toThrow();
-  expect(() => assetName('0.1.4', 'darwin', 'x64')).toThrow();
+  expect(() => assetName('0.1.4', 'darwin', 'ia32')).toThrow();
+  expect(() => assetName('0.1.4', 'win32', 'arm64')).toThrow();
   const row = 'a'.repeat(64) + '  fixture.zip';
   expect(checksumFor(row, 'fixture.zip')).toBe('a'.repeat(64));
   expect(() => checksumFor(row + '\n' + row, 'fixture.zip')).toThrow();

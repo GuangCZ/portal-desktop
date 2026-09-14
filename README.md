@@ -71,13 +71,13 @@ Check [Releases](https://github.com/d5z/portal-desktop/releases) for packages an
 | Platform | Support and validation scope |
 | --- | --- |
 | macOS Apple Silicon | DMG installation and ZIP updates from GitHub Releases; tray behavior and client and Portal login startup |
-| macOS Intel | Requires a build on the matching architecture; not yet validated |
+| macOS Intel | Native x64 CI build with DMG installation and ZIP upgrade checks |
 | Windows | ZIP / NSIS one-click packaging, login tasks, and CI, with native installation, upgrade, and lifecycle tests |
 | Linux | ZIP packaging and temporary Portal operation are configured; desktop behavior is not yet validated, and client login startup and background Portal mode are not supported |
 
 macOS releases follow Heart Portal's signing policy: the same D5 Developer ID, stable identifiers, hardened runtime, and secure timestamps for the entire app and bundled Portal. Notarization is deferred, as in the upstream project; Windows Authenticode is not configured. See [Building and distribution](desktop/BUILDING.md) for signing prerequisites, contributor test builds, and installation steps.
 
-On macOS, download `portal-desktop-<version>-macos-arm64.dmg`, open it, and drag **Portal Desktop** to **Applications**. Eject the disk image and launch the installed app. For later versions, choose **Check for updates → Download and upgrade**. The client downloads the matching ZIP and checksum from the latest stable GitHub Release, validates the signed app, and restarts with the bundled Portal and your existing configuration. Do not run updates from inside the disk image. See [Updating](desktop/UPDATING.md) for recovery and validation limits.
+On macOS, choose `portal-desktop-<version>-macos-arm64.dmg` for Apple Silicon or `portal-desktop-<version>-macos-x64.dmg` for Intel. Open it and drag **Portal Desktop** to **Applications**. Eject the disk image and launch the installed app. For later versions, choose **Check for updates → Download and upgrade**. The client downloads the ZIP and checksum matching its architecture from the latest stable GitHub Release, validates the signed app, and restarts with the bundled Portal and your existing configuration. Do not run updates from inside the disk image. See [Updating](desktop/UPDATING.md) for recovery and validation limits.
 
 ### Connect for the first time
 

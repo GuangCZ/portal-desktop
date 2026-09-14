@@ -14,6 +14,7 @@
 
 ## 本次补充修复
 
+- **补齐 Intel Mac**：增加 macOS x64 原生构建、签名 DMG 和升级 ZIP，与 Apple Silicon、Windows 安装包一起校验和发布；客户端按自身架构选择升级包。
 - **升级下载显示进度**：增加下载窗口，显示读取更新信息、下载、校验和暂存状态；已知包大小时显示百分比与总大小，未知大小时显示已下载字节数。下载和暂存期间可以取消，不停止 Portal；确认安装后才停止服务并交给安装器。
 - **修复帮助菜单键盘焦点**：进入帮助、返回和按 Escape 后，将焦点恢复到已经显示的按钮，解决 macOS Town SDK 测试等待菜单关闭超时的问题；补充动画、减少动态效果、外部点击等回归与失败诊断。
 - **修正聊天持久化测试**：重启后等待聊天就绪，并保留服务端最近一页中已不包含的本地历史，避免旧测试与新的 IndexedDB 缓存行为冲突。
@@ -60,4 +61,4 @@ Loom 首次无缓存时从服务端加载最近 100 条；已有缓存时首屏�
 
 **已安装 0.1.9 的用户**：由于版本重新编号，0.1.2 不会被旧客户端识别为更高版本；请退出客户端后手动安装本版，保留用户配置目录。
 
-macOS ARM64 提供 Developer ID 签名的 DMG 和升级 ZIP，公证暂缓。Windows x64 提供 NSIS Setup 和 ZIP，尚未配置 Authenticode 签名，仍可能出现发布者或 SmartScreen 提示。请从本仓库下载，使用 `SHA256SUMS.txt` 核对完整性。
+macOS ARM64（Apple Silicon）和 x64（Intel）分别提供 Developer ID 签名的 DMG 和升级 ZIP，公证暂缓。Windows x64 提供 NSIS Setup 和 ZIP，尚未配置 Authenticode 签名，仍可能出现发布者或 SmartScreen 提示。请从本仓库下载，使用 `SHA256SUMS.txt` 核对完整性。

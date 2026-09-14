@@ -22,6 +22,7 @@ await mkdir(output, { recursive: true });
 if ((await readdir(output)).length) throw new Error('Release staging directory must be empty; refusing to include stale assets.');
 for (const [artifact, platform, arch, label] of [
   ['portal-desktop-macos-14', 'darwin', 'arm64', 'macos-arm64'],
+  ['portal-desktop-macos-15-intel', 'darwin', 'x64', 'macos-x64'],
   ['portal-desktop-windows-latest', 'win32', 'x64', 'windows-x64'],
 ]) {
   const contents = await files(path.join(input, artifact));
