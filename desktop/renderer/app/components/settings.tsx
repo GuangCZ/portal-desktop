@@ -280,6 +280,7 @@ export function ClientSettings({ model }: { model: AppModel }) {
             </button>
             <button
               id="check-updates"
+              disabled={Boolean(app.update?.activity)}
               onClick={() => void app.run(() => app.api.checkUpdates())}
             >
               {app.update?.phase === "available"

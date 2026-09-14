@@ -41,6 +41,22 @@ it('coalesces overlapping manual and automatic checks', async () => {
   await Promise.all([a, b]); expect(count).toBe(1);
 });
 
+it('publishes download activity and keeps periodic checks from replacing an active upgrade', async () => {
+  let calls = 0;
+  const published: import('../desktop/shared/types').UpdateState[] = [];
+  const checker = new UpdateChecker('0.1.9', 'd5z/portal-desktop', (async () => {
+    calls++; return Response.json(release());
+  }) as typeof fetch, state => published.push(state));
+  await checker.check();
+  checker.setActivity({ phase: 'downloading', version: '0.2.0', received: 12, total: 100 });
+  expect((await checker.check()).activity).toMatchObject({ received: 12, total: 100 });
+  expect(calls).toBe(1);
+  checker.setActivity();
+  expect(published.at(-1)?.activity).toBeUndefined();
+  await checker.check();
+  expect(calls).toBe(2);
+});
+
 it('uses the Release ZIP for in-app macOS upgrades while also distributing a DMG', async () => {
   const metadata = release();
   const dmg = { name: `portal-desktop-${metadata.tag_name.slice(1)}-macos-arm64.dmg` };

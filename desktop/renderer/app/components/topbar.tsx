@@ -13,6 +13,20 @@ export function Topbar({ model }: { model: AppModel }) {
     backButton = useRef<HTMLButtonElement>(null);
   const motion = useRef<Animation | null>(null);
   const pendingFocus = useRef<number | null>(null);
+  const pendingSectionFocus = useRef<"help" | "back" | null>(null);
+  useLayoutEffect(() => {
+    // The target is hidden until React commits the new section. Focusing it
+    // inside the click/Escape handler fails and leaves the next key on body.
+    if (expanded && visible && pendingSectionFocus.current) {
+      const target = pendingSectionFocus.current === "back" ? backButton : helpButton;
+      target.current?.focus();
+    }
+    pendingSectionFocus.current = null;
+  }, [expanded, visible, help]);
+  const showHelp = (open: boolean) => {
+    pendingSectionFocus.current = open ? "back" : "help";
+    setHelp(open);
+  };
   useLayoutEffect(() => {
     if (expanded && visible && pendingFocus.current !== null) {
       const buttons = menu.current?.querySelectorAll<HTMLButtonElement>(
@@ -26,6 +40,7 @@ export function Topbar({ model }: { model: AppModel }) {
     }
   }, [expanded, visible]);
   const toggle = (open: boolean, restore = false) => {
+    pendingSectionFocus.current = null;
     if (open) {
       setHelp(false);
       setVisible(true);
@@ -158,8 +173,7 @@ export function Topbar({ model }: { model: AppModel }) {
               event.preventDefault();
               event.stopPropagation();
               if (help) {
-                setHelp(false);
-                helpButton.current?.focus();
+                showHelp(false);
               } else toggle(false, true);
             }
             if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -254,10 +268,7 @@ export function Topbar({ model }: { model: AppModel }) {
                 ref={helpButton}
                 aria-controls="options-secondary"
                 aria-expanded={help}
-                onClick={() => {
-                  setHelp(true);
-                  requestAnimationFrame(() => backButton.current?.focus());
-                }}
+                onClick={() => showHelp(true)}
               >
                 对话与帮助 <span aria-hidden="true">›</span>
               </button>
@@ -273,10 +284,7 @@ export function Topbar({ model }: { model: AppModel }) {
               <button
                 id="options-back"
                 ref={backButton}
-                onClick={() => {
-                  setHelp(false);
-                  requestAnimationFrame(() => helpButton.current?.focus());
-                }}
+                onClick={() => showHelp(false)}
               >
                 ‹ 返回
               </button>

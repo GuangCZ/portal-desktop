@@ -1,6 +1,14 @@
 export interface UpdateState {
   phase: 'idle' | 'checking' | 'available' | 'current' | 'unavailable';
   currentVersion: string; latestVersion?: string; message: string; releaseUrl: string;
+  activity?: UpdateActivity;
+}
+
+export interface UpdateActivity {
+  phase: 'metadata' | 'downloading' | 'verifying' | 'preparing' | 'ready' | 'installing';
+  version: string;
+  received?: number;
+  total?: number;
 }
 
 export interface Settings {
@@ -49,6 +57,7 @@ export interface DesktopAPI {
   browserBounds(bounds: BrowserBounds): Promise<void>;
   onBrowser(callback: (state: BrowserState) => void): () => void;
   checkUpdates(): Promise<void>;
+  cancelUpdate(): Promise<void>;
   updateState(): Promise<UpdateState>;
   onUpdate(callback: (state: UpdateState) => void): () => void;
   appearance(theme?: 'light' | 'dark'): Promise<'light' | 'dark'>;

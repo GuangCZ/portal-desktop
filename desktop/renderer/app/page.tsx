@@ -3,6 +3,7 @@ import type { AppModel } from "./models/app";
 import { useModel } from "../shared/hooks/use-model";
 import { useChatBridge } from "./hooks/use-chat-bridge";
 import { Topbar } from "./components/topbar";
+import { UpdateProgress } from "./components/update-progress";
 import { SceneRibbon, Companion } from "./components/workspace";
 import { Browser } from "../browser/page";
 import { Portal } from "../portal/page";
@@ -162,6 +163,7 @@ export function App({ model }: { model: AppModel }) {
       <ClientSettings model={app} />
       <ConnectionSettings model={app} />
       <KitInstall model={app.town} />
+      <UpdateProgress activity={app.update?.activity} onCancel={() => void app.run(() => app.api.cancelUpdate())} />
       <Toast message={app.toastMessage} />
     </>
   );

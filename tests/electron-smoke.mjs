@@ -11,7 +11,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { desktopExecutable, backgroundCoverage } from './support/desktop.mjs';
+import { desktopExecutable, backgroundCoverage, waitForChatReady } from './support/desktop.mjs';
 import { c as archive } from 'tar';
 
 const executablePath = await desktopExecutable();
@@ -296,14 +296,16 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   assert.equal(errors.length, 0, errors.join('\n'));
   await app.close(); app = null;
   assert.throws(() => process.kill(pid, 0), /ESRCH/);
-  // Retire the temporary index fixture; the new root must reflect current server history.
+  // Retire the index fixture from the server; synchronized local history should
+  // remain available after restart even when absent from the latest response.
   for (let i = messages.length - 1; i >= 0; i--) if (messages[i].indexOnly) messages.splice(i, 1);
   // Reload encrypted settings from disk, without asking for the token again.
   app = await launchDesktop({ executablePath, env: { ...process.env, PORTAL_DESKTOP_USER_DATA: path.join(dir, 'profile') } });
   const restored = await app.firstWindow();
+  await waitForChatReady(restored);
   await restored.frameLocator('#chat-frame').getByText('本机 Portal 已完成操作。', { exact: false }).waitFor();
   await restored.frameLocator('#chat-frame').getByRole('button', { name: /跳转到提问.*请帮我写一份问候/ }).waitFor();
-  assert.equal(await restored.frameLocator('#chat-frame').getByRole('button', { name: /跳转到提问.*第一项/ }).count(), 0);
+  assert.equal(await restored.frameLocator('#chat-frame').getByRole('button', { name: /跳转到提问.*第一项/ }).count(), 1, 'Restart preserves cached history absent from the latest server response');
   assert.equal((await restored.evaluate(() => window.beings.snapshot())).settings.hasToken, true);
   assert.equal(await restored.evaluate(() => window.beings.appearance()), 'dark');
   if (background.enabled) {

@@ -11,11 +11,13 @@ export class UpdateChecker {
     this.state = { phase: 'idle', currentVersion: version, message: '尚未检查更新', releaseUrl: `https://github.com/${repository}/releases` };
   }
   check(): Promise<UpdateState> {
+    if (this.state.activity) return Promise.resolve(this.state);
     if (this.pending) return this.pending;
     this.pending = this.checkOnce().finally(() => { this.pending = undefined; });
     return this.pending;
   }
   private publish(patch: Partial<UpdateState>) { this.state = { ...this.state, ...patch }; this.changed(this.state); return this.state; }
+  setActivity(activity?: UpdateState['activity']) { this.publish({ activity }); }
   private async checkOnce() {
     this.publish({ phase: 'checking', latestVersion: undefined, message: '正在检查更新…' });
     try {

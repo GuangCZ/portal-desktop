@@ -5,6 +5,12 @@ import path from 'node:path';
 import { command, windowsModulePath } from '../portal/background';
 import { macInstallLocation, validateMacApp } from './mac-package';
 import windowsInstaller from '../../windows-installer.json';
+import type { UpdateActivity } from '../../shared/types';
+
+interface StageOptions {
+  signal?: AbortSignal;
+  onProgress?: (progress: Omit<UpdateActivity, 'version'>) => void;
+}
 
 const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
 const ps = (s: string) => `'${s.replaceAll("'", "''")}'`;
@@ -14,19 +20,31 @@ export function assetName(version: string, platform = process.platform, arch = p
   if (platform === 'win32' && arch === 'x64') return `portal-desktop-${version}-windows-x64-Setup.exe`;
   throw new Error('当前平台没有配套安装包，请查看发布页。');
 }
-async function download(url: string, file: string, max: number, fetcher: typeof fetch) {
-  const response = await fetcher(url, { signal: AbortSignal.timeout(15 * 60_000) });
+export async function downloadUpdateFile(url: string, file: string, max: number, fetcher: typeof fetch,
+  onProgress?: (received: number, total?: number) => void, signal?: AbortSignal) {
+  const timeout = AbortSignal.timeout(15 * 60_000);
+  const lifetime = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  lifetime.throwIfAborted();
+  onProgress?.(0);
+  const response = await fetcher(url, { signal: lifetime });
   if (!response.ok || !response.body) throw new Error('安装包下载失败，原服务未停止。');
   const reader = response.body.getReader(), handle = await open(file, 'wx', 0o600), hash = createHash('sha256');
+  const length = Number(response.headers.get('content-length'));
+  const total = Number.isSafeInteger(length) && length > 0 && length <= max ? length : undefined;
+  const cancel = () => { void reader.cancel().catch(() => {}); };
+  lifetime.addEventListener('abort', cancel, { once: true });
   let size = 0;
   try {
+    lifetime.throwIfAborted();
+    onProgress?.(0, total);
     while (true) {
-      const next = await reader.read(); if (next.done) break;
+      const next = await reader.read(); lifetime.throwIfAborted(); if (next.done) break;
       size += next.value.byteLength;
       if (size > max) throw new Error('安装包超出大小限制。');
       hash.update(next.value); await handle.writeFile(next.value);
+      onProgress?.(size, total);
     }
-  } finally { await reader.cancel().catch(() => {}); await handle.close(); }
+  } finally { lifetime.removeEventListener('abort', cancel); await reader.cancel().catch(() => {}); await handle.close(); }
   return hash.digest('hex');
 }
 export function checksumFor(text: string, name: string) {
@@ -91,7 +109,8 @@ try {
 }
 // Everything expensive and fallible is staged before stopping Portal.
 export async function stageInstaller(directory: string, version: string, repository: string, executable: string,
-  fetcher: typeof fetch = fetch) {
+  fetcher: typeof fetch = fetch, options: StageOptions = {}) {
+  options.signal?.throwIfAborted();
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error('无效的更新源。');
   const current = process.platform === 'darwin' ? await macInstallLocation(executable) : undefined;
   const name = assetName(version), root = path.join(directory, 'client-updates', randomUUID());
@@ -104,9 +123,15 @@ export async function stageInstaller(directory: string, version: string, reposit
   try {
     const base = `https://github.com/${repository}/releases/download/v${version}/`;
     const sums = path.join(root, 'SHA256SUMS.txt'), installer = path.join(root, name);
-    await download(base + 'SHA256SUMS.txt', sums, 64_000, fetcher);
+    options.onProgress?.({ phase: 'metadata' });
+    await downloadUpdateFile(base + 'SHA256SUMS.txt', sums, 64_000, fetcher, undefined, options.signal);
     const expected = checksumFor(await readFile(sums, 'utf8'), name);
-    if (await download(base + name, installer, 1024 * 1024 * 1024, fetcher) !== expected) throw new Error('安装包校验失败，原服务未停止。');
+    const actual = await downloadUpdateFile(base + name, installer, 1024 * 1024 * 1024, fetcher,
+      (received, total) => options.onProgress?.({ phase: 'downloading', received, total }), options.signal);
+    options.onProgress?.({ phase: 'verifying' });
+    options.signal?.throwIfAborted();
+    if (actual !== expected) throw new Error('安装包校验失败，原服务未停止。');
+    options.onProgress?.({ phase: 'preparing' });
     let script: string, scriptFile: string;
     if (process.platform === 'darwin') {
       stage = path.join(path.dirname(current!), `.portal-desktop-update-${randomUUID()}`);
@@ -123,6 +148,7 @@ export async function stageInstaller(directory: string, version: string, reposit
       scriptFile = path.join(root, 'install.ps1');
     }
     await writeFile(scriptFile, script, { mode: 0o700 });
+    options.signal?.throwIfAborted();
     const handoff = async () => {
       if (process.platform === 'win32') {
         // DETACHED_PROCESS makes Windows PowerShell exit before executing the

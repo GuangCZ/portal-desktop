@@ -15,6 +15,7 @@ const api: DesktopAPI = {
     return () => ipcRenderer.removeListener('beings:browser-state', listener);
   },
   checkUpdates: () => ipcRenderer.invoke('beings:check-updates'),
+  cancelUpdate: () => ipcRenderer.invoke('beings:cancel-update'),
   updateState: () => ipcRenderer.invoke('beings:update-state'),
   onUpdate: callback => {
     const listener = (_event: unknown, state: import('../shared/types').UpdateState) => callback(state);

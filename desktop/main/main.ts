@@ -225,6 +225,7 @@ async function ready() {
   const updates = new UpdateChecker(app.getVersion(), PORTAL_DESKTOP_UPDATE_REPOSITORY, net.fetch.bind(net) as typeof fetch,
     state => { if (window && !window.isDestroyed()) window.webContents.send('beings:update-state', state); });
   let showingUpdates = false;
+  let updateDownload: AbortController | undefined;
   const showUpdates = async () => {
     if (showingUpdates || !window) return;
     showingUpdates = true;
@@ -235,13 +236,32 @@ async function ready() {
         detail: `当前客户端：${app.getVersion()}${runtimeUpdate.portalVersion ? ` · Portal：${runtimeUpdate.portalVersion}` : ''}\n${runtimeUpdate.message}\n\n下载并校验安装包后，先停止客户端 Portal 和对应守护，再安装客户端。安装完成自动打开新版，沿用原配置启动最新 Portal。请先完成本机任务并保存草稿。`,
         buttons: state.phase === 'available' && app.isPackaged ? ['稍后', '下载并升级', '打开发布页'] : ['关闭', '打开发布页'], defaultId: 0, cancelId: 0 });
       if (state.phase === 'available' && app.isPackaged && answer.response === 1) {
+        const controller = new AbortController();
+        updateDownload = controller;
+        updates.setActivity({ phase: 'metadata', version: state.latestVersion! });
         window?.setProgressBar(2);
         let handoff: Awaited<ReturnType<typeof stageInstaller>>;
-        try { handoff = await stageInstaller(directory, state.latestVersion!, PORTAL_DESKTOP_UPDATE_REPOSITORY, process.execPath, net.fetch.bind(net) as typeof fetch); }
-        finally { window?.setProgressBar(-1); }
+        let lastProgress = 0;
+        try {
+          handoff = await stageInstaller(directory, state.latestVersion!, PORTAL_DESKTOP_UPDATE_REPOSITORY, process.execPath, net.fetch.bind(net) as typeof fetch, {
+            signal: controller.signal,
+            onProgress: progress => {
+              const now = Date.now();
+              if (progress.phase === 'downloading' && progress.received && progress.received !== progress.total && now - lastProgress < 200) return;
+              lastProgress = now;
+              updates.setActivity({ ...progress, version: state.latestVersion! });
+              window?.setProgressBar(progress.phase === 'downloading' && progress.total ? Math.min(1, (progress.received || 0) / progress.total) : 2);
+            },
+          });
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          throw error;
+        } finally { updateDownload = undefined; window?.setProgressBar(-1); }
         if (!window || quitting) { await handoff.discard(); return; }
+        updates.setActivity({ phase: 'ready', version: state.latestVersion! });
         const confirmed = await dialog.showMessageBox(window, { type: 'info', title: '安装包已就绪', message: `安装 ${CLIENT_NAME} ${state.latestVersion}`, detail: '已完成下载和校验。继续将停止 Portal 及守护、关闭客户端，安装成功后自动打开新版并恢复运行。执行中的本机任务会中断，请先保存草稿。', buttons: ['稍后', '停止 Portal 并安装'], defaultId: 0, cancelId: 0 });
         if (confirmed.response !== 1) { await handoff.discard(); return; }
+        updates.setActivity({ phase: 'installing', version: state.latestVersion! });
         await exclusive(async () => {
           if (recoveryBlocked) throw new Error('请先完成上次升级恢复。');
           const intent = await clientInstall.prepare(app.getVersion(), state.latestVersion!, store.connection, portal.managing);
@@ -259,10 +279,12 @@ async function ready() {
         });
       } else if (answer.response > 0) await shell.openExternal(state.releaseUrl);
     } catch (error) {
+      updates.setActivity();
       if (window && !quitting) await dialog.showMessageBox(window, { type: 'error', title: '客户端升级未完成', message: String(error), detail: '原配置和恢复记录已保留。可重新打开客户端恢复，或稍后重试。', buttons: ['知道了'] });
-    } finally { showingUpdates = false; }
+    } finally { showingUpdates = false; updates.setActivity(); }
   };
   handle('beings:check-updates', showUpdates);
+  handle('beings:cancel-update', () => { updateDownload?.abort(); });
   handle('beings:update-state', () => updates.state);
   const snapshot = () => ({ settings: store.settings, portal: portal.state, background: background.state, notice: startupNotice });
   const verifyConnection = async () => {

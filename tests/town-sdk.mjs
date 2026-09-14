@@ -1,16 +1,16 @@
 // SDK contract fixtures only: no real Town pairing, messages or credentials.
 import { launchDesktop } from './support/electron-lifecycle.mjs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { desktopExecutable, waitForChatReady } from './support/desktop.mjs';
 
 const dir = await mkdtemp(path.join(os.tmpdir(), 'town-sdk-2769e2f-'));
-let app, failure;
+let app, page, failure;
 try {
   app = await launchDesktop({ executablePath: await desktopExecutable(), env: { ...process.env, PORTAL_DESKTOP_USER_DATA: dir } });
-  const page = await app.firstWindow();
+  page = await app.firstWindow();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.getByRole('button', { name: '连接我的 Being' }).waitFor();
@@ -81,6 +81,7 @@ try {
   assert.equal(await page.locator('#conversation-options').getAttribute('open'), '');
   await page.keyboard.press('Escape');
   await page.locator('#options-home').waitFor();
+  await page.waitForFunction(() => document.activeElement?.id === 'options-help');
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('#conversation-options').open);
   assert.equal(await page.locator('#options-trigger').evaluate(el => el === document.activeElement), true);
@@ -194,6 +195,20 @@ try {
 } catch (error) {
   failure = error;
   console.error('Town SDK assertion failed:', error);
+  if (page && !page.isClosed()) {
+    try {
+      await mkdir('test-results', { recursive: true });
+      await page.screenshot({ path: 'test-results/town-sdk-failure.png' });
+      const state = await page.evaluate(() => ({
+        active: document.activeElement?.id || document.activeElement?.tagName,
+        menuOpen: document.querySelector('#conversation-options')?.open,
+        expanded: document.querySelector('#options-trigger')?.getAttribute('aria-expanded'),
+        homeHidden: document.querySelector('#options-home')?.hidden,
+        secondaryHidden: document.querySelector('#options-secondary')?.hidden,
+      }));
+      await writeFile('test-results/town-sdk-failure.json', JSON.stringify(state, null, 2));
+    } catch (diagnosticError) { console.error('Town SDK diagnostics failed:', diagnosticError); }
+  }
   throw error;
 } finally {
   if (app) {

@@ -6,6 +6,16 @@ macOS 首次安装：从正式 Release 下载 `portal-desktop-<版本>-macos-arm
 
 菜单“检查更新”读取正式发布版本；客户端启动及每 6 小时检查一次。只有对应系统、架构的安装包和校验清单均已上传，才提示可安装更新。发布信息读取失败不会阻断聊天或 Portal。用户点击“下载并升级”后从固定 GitHub 正式发布地址下载平台安装包，并校验发布摘要。自动检测不会自动安装。
 
+新版下载窗口显示读取更新信息、下载、校验和暂存步骤；已知安装包大小时显示已下载字节数、总大小与百分比，未知大小时显示已下载字节数。下载和暂存期间可以取消，清理本次临时文件且不停止 Portal。确认安装后才停止服务并交给独立安装器。
+
+### Windows 0.1.1 的首次迁移
+
+正式发布的 0.1.1 使用 Squirrel。其安装助手通过 Node `detached` 启动 PowerShell，在 Windows 上可能在脚本执行前退出，表现为下载完成、确认后客户端退出，但安装器不出现且 `client-updates/<id>/install.log` 为空。旧脚本还使用 `--silent` 和 Squirrel `Update.exe` 启动已安装应用，不能作为新 NSIS 安装器的升级契约。新版中的安装助手修复不会反向替换正在运行的 0.1.1 升级器。
+
+从 0.1.1 迁移时，请先在旧客户端菜单选择“退出客户端”，再手动运行正式 Release 的 Windows Setup；已下载且校验通过的 `client-updates/<id>/portal-desktop-<版本>-windows-x64-Setup.exe` 也可使用。安装后从新的 Portal Desktop 快捷方式启动。不要删除 `%APPDATA%/Beings` 或连接配置；新版会沿用旧 profile。旧 Squirrel 的应用目录或固定快捷方式可能仍存在，启动后应检查实际客户端版本。
+
+发布版本已接续 0.1.1 重新从 0.1.2 编号，累计改动保留。此前已安装 0.1.9 的用户需退出后手动安装 0.1.2；更新检查按版本号比较，不会自动把较低版本作为升级推送。
+
 macOS 更新流程读取 GitHub `releases/latest`，使用 `vX.Y.Z` 正式 tag 下的 `portal-desktop-X.Y.Z-macos-arm64.zip` 与 `SHA256SUMS.txt`；DMG 不用于运行中的应用替换。草稿、预发布、缺失升级 ZIP 或校验清单均不提供安装。正常升级不要求用户重新填写 Being 连接。
 
 先结束本机任务并保存聊天草稿。安装包下载、摘要校验及 macOS 应用暂存完成后，用户点击“停止 Portal 并安装”。客户端先持久保存原运行记录，停用并确认客户端 Portal 及对应守护退出，然后关闭自身；独立安装助手等待旧客户端退出，macOS 同目录备份并替换应用，Windows 执行 NSIS 一键安装并显示进度，成功后自动打开新版。新版使用原配置同步最新内置 Portal 和守护并自动运行；未开启后台常驻时，由客户端持有 Portal，不会因升级启用登录守护。
@@ -49,6 +59,8 @@ macOS 更新流程读取 GitHub `releases/latest`，使用 `vX.Y.Z` 正式 tag �
 `PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS=1 npx vitest run tests/runtime-update-native.test.ts` 在 macOS 上使用隔离 profile 和真实 LaunchAgent，验证离线升级及坏引擎回滚。Windows PowerShell 中先设置 `$env:PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS='1'`，同一测试验证计划任务路径；需要可用的交互式用户会话。该测试不触碰日常 Portal。Windows 实机结果应单独记录，不能用 mock 通过代替。
 
 Windows 发布构建还会运行实际 Setup，确认安装助手自动打开安装目录中的新客户端。macOS 的 `npm test` 使用真实签名、解压和文件替换，验证损坏包拒绝、取消清理、等待旧进程、替换及启动请求失败回滚；LaunchServices 用测试启动器替代，不打开额外的客户端窗口。
+
+当前 Windows 升级 E2E 的基线是当前源码修改版本号后构建的 NSIS fixture，验证的是现有安装协议；它没有运行正式发布的 0.1.1 Squirrel 升级器，不能证明这条历史迁移路径成功。`tests/installer-handoff-native.test.ts` 单独验证当前 Windows 助手在父进程退出后继续执行。
 
 构建后运行 `npm run test:macos-package`，校验实际 `.app`、Portal 和 DMG 的 Developer ID、完整签名及时间戳，验证可执行文件的 Hardened Runtime、架构、版本和清单。实际挂载只读 DMG，检查 Applications 快捷方式，复制到临时应用目录并推出，验证安装后签名及包内容一致，再让同一 Release 的 ZIP 经过完整安装前暂存流程。版本 tag 触发的 macOS 发布构建会运行此检查。它不代表公证或干净机器上的 Gatekeeper 验收。
 

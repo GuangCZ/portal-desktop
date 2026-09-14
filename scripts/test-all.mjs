@@ -52,6 +52,8 @@ try {
   await requirePortalSource();
   await npm('typecheck', ['run', 'typecheck']);
   await npm('unit', ['test', '--', '--reporter=default', '--reporter=junit', '--outputFile.junit=test-results/unit.xml']);
+  await npm('menu-keyboard', ['run', 'test:menu-keyboard']);
+  await npm('update-progress', ['run', 'test:update-progress']);
   await npm('town-names', ['run', 'test:town-names']);
   await npm('seed-garden', ['run', 'test:seed-garden']);
   await npm('sbs-refresh', ['run', 'test:sbs-refresh']);
