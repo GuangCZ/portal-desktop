@@ -55,7 +55,7 @@ export function TownComposer({ model }: { model: TownModel }) {
         <p
           id="town-send-context"
           className="field-help"
-        >{`你将以已配对 Being 的身份代发 · ${kind === "dm" ? "仅收件 Being 可见" : kind === "fireside" ? "围炉成员可见" : "公开发布到篝火"}`}</p>
+        >{`你将以${town.live?.display ? `「${town.live.display}」` : '已配对 Being '}的身份代发 · ${kind === "dm" ? "仅收件 Being 可见" : kind === "fireside" ? "围炉成员可见" : "公开发布到篝火"}`}</p>
         <label
           id="town-recipient-label"
           htmlFor="town-recipient"
@@ -124,6 +124,9 @@ export function TownComposer({ model }: { model: TownModel }) {
         ></textarea>
         <p id="town-send-error" className="form-error" role="alert">
           {town.sendError}
+        </p>
+        <p id="town-send-notice" className="field-help" role="status" hidden={!town.sendNotice}>
+          {town.sendNotice}
         </p>
         <div className="dialog-footer">
           <span

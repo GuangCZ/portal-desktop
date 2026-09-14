@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { SecretStorage } from '../app/settings';
 import type { TownPost, TownQuery, TownResult } from '../../shared/types';
-import { normalizeTownIdentity, validTownIdentity } from '../../shared/town-identity';
+import { normalizeTownDisplay, normalizeTownIdentity, validTownIdentity } from '../../shared/town-identity';
 
 export const TOWN_ORIGIN = 'https://beings.town';
 const idPattern = /^[a-zA-Z0-9_-]{1,160}$/;
@@ -57,30 +57,34 @@ export function townRoute(query: TownQuery, beingId = ''): { route: string; priv
 export class TownCredentials {
   token = '';
   beingId = '';
+  display = '';
   constructor(private directory: string, private storage: SecretStorage) {}
   async load() {
     try {
       const data = JSON.parse(await readFile(path.join(this.directory, 'town-credential.json'), 'utf8'));
       this.token = this.storage.decryptString(Buffer.from(data.credential, 'base64'));
       this.beingId = validTownIdentity(data.beingId) ? data.beingId : '';
+      this.display = this.token && this.beingId ? normalizeTownDisplay(data.display) : '';
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Town 凭据无法解密，请在 Town 设置中重新保存。'); }
   }
-  async save(token: string, beingId = '') {
+  async save(token: string, beingId = '', display = '') {
     if (typeof token !== 'string' || (token && !/^[a-zA-Z0-9._~-]{16,2048}$/.test(token))) throw new Error('请输入有效的 Town 专用凭据。');
     if (!this.storage.isEncryptionAvailable()) throw new Error('系统密钥库不可用。');
     if (beingId && !validTownIdentity(beingId)) throw new Error('无效的 Town ID 或 Being 名。');
+    const pairedDisplay = token && beingId ? normalizeTownDisplay(display) : '';
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const file = path.join(this.directory, 'town-credential.json');
-    await writeFile(file + '.tmp', JSON.stringify({ credential: this.storage.encryptString(token).toString('base64'), beingId: token ? beingId : '' }), { mode: 0o600 });
+    await writeFile(file + '.tmp', JSON.stringify({ credential: this.storage.encryptString(token).toString('base64'), beingId: token ? beingId : '', display: pairedDisplay }), { mode: 0o600 });
     await rename(file + '.tmp', file);
     this.token = token;
     this.beingId = token ? beingId : '';
+    this.display = pairedDisplay;
   }
 }
 
 export class TownClient {
   constructor(private getToken: () => string, private fetcher: typeof fetch = fetch, private origin = TOWN_ORIGIN, private getBeingId: () => string = () => '') {}
-  async pair(input: { beingId: string; code: string }): Promise<{ token: string; beingId: string }> {
+  async pair(input: { beingId: string; code: string }): Promise<{ token: string; beingId: string; display?: string }> {
     if (!input || typeof input.beingId !== 'string' || typeof input.code !== 'string') throw new Error('请输入 Being 名和配对码。');
     const beingId = normalizeTownIdentity(input.beingId), code = input.code.trim().toUpperCase();
     if (!validTownIdentity(beingId) || !/^[A-Z0-9]{6}$/.test(code)) throw new Error('请输入有效的 Town ID 或 Being 名；配对码须为 6 位字母或数字。');
@@ -93,15 +97,18 @@ export class TownClient {
       });
     } catch { throw new Error('配对请求未完成，请检查网络；若配对码已失效，请获取新码。'); }
     if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error(response.status === 429 ? '配对尝试过于频繁，请稍后重试。' : `配对失败（HTTP ${response.status}），请核对 Being 名并使用有效的新配对码。`);
+      const detail = await townErrorDetail(response, [this.getToken(), code]);
+      const label = response.status === 429 ? '配对尝试过于频繁，请稍后重试。' : `配对失败（HTTP ${response.status}），请核对 Town ID 或 Being 名与配对码。`;
+      throw new Error(detail ? `${label} ${detail}` : label);
     }
     let data: Record<string, unknown>;
     try { data = await readTownJson(response); } catch { throw new Error('配对响应格式不正确，请稍后重试。'); }
     if (data.ok !== true || typeof data.token !== 'string' || !/^[a-zA-Z0-9._~-]{16,2048}$/.test(data.token)) throw new Error('配对未成功，请核对 Being 名与配对码。');
     if (data.town_id !== undefined && (!validTownIdentity(data.town_id) || !data.town_id.startsWith('t_'))) throw new Error('配对返回的 Town ID 无效。');
-    if (townIdInput ? data.town_id !== beingId : data.being_id !== undefined && data.being_id !== beingId) throw new Error('配对返回的 Being 身份不匹配。');
-    return { token: data.token, beingId: typeof data.town_id === 'string' ? data.town_id : beingId };
+    // The server resolves a unique, case-sensitive Town ID prefix. Store its full ID.
+    if (townIdInput ? typeof data.town_id !== 'string' || !data.town_id.startsWith(beingId) : data.being_id !== undefined && data.being_id !== beingId) throw new Error('配对返回的 Being 身份不匹配。');
+    const display = normalizeTownDisplay(data.display);
+    return { token: data.token, beingId: typeof data.town_id === 'string' ? data.town_id : beingId, ...(display ? { display } : {}) };
   }
   async send(input: TownPost): Promise<TownResult> {
     const token = this.getToken();
@@ -128,7 +135,10 @@ export class TownClient {
       if (!response.ok) return await townError(response, token);
       const data = await readTownJson(response);
       if (data.ok !== true) throw new Error('unconfirmed');
-      return { ok: true, data, fetchedAt: new Date().toISOString() };
+      const warnings = Array.isArray(data.mention_warnings)
+        ? data.mention_warnings.slice(0, 20).map(value => cleanTownDetail(townWarning(value), [token])).filter(Boolean)
+        : [];
+      return { ok: true, data, fetchedAt: new Date().toISOString(), ...(warnings.length ? { warnings } : {}) };
     } catch { return { ok: false, code: 'network', message: '未收到发送确认。消息可能已送达，请刷新内容核对后再决定是否重发。' }; }
   }
   async query(query: TownQuery): Promise<TownResult> {
@@ -170,16 +180,34 @@ async function readTownJson(response: Response): Promise<Record<string, unknown>
   return data as Record<string, unknown>;
 }
 
+const townObject = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+const townText = (value: unknown) => typeof value === 'string' ? value.slice(0, 400) : '';
+function townWarning(value: unknown): string {
+  const warning = townObject(value);
+  const candidates = Array.isArray(warning.candidates) ? warning.candidates.slice(0, 8).map(value => {
+    const candidate = townObject(value);
+    const townId = typeof value === 'string' ? value : candidate.town_id;
+    if (!validTownIdentity(townId) || !townId.startsWith('t_')) return '';
+    const name = townText(candidate.display || candidate.display_name || candidate.name);
+    return name ? `${name} · ${townId}` : townId;
+  }).filter(Boolean) : [];
+  return [townText(warning.token), townText(warning.reason), townText(warning.hint), candidates.length ? `候选：${candidates.join('；')}` : ''].filter(Boolean).join(' · ');
+}
+function cleanTownDetail(detail: string, secrets: string[]): string {
+  for (const secret of secrets) if (secret) detail = detail.split(secret).join('[凭据已隐藏]');
+  return detail.replace(/[a-f0-9]{64}/gi, '[凭据已隐藏]').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 1600);
+}
+async function townErrorDetail(response: Response, secrets: string[]): Promise<string> {
+  try {
+    const data = await readTownJson(response);
+    return cleanTownDetail([townText(data.error), townText(data.hint), townWarning(data.recipient_warning), townWarning({ candidates: data.candidates })].filter(Boolean).join(' · '), secrets);
+  } catch { return ''; }
+}
 async function townError(response: Response, token: string): Promise<TownResult> {
   const status = response.status;
   const code = status === 401 ? 'auth' : status === 403 ? 'forbidden' : status === 404 ? 'not-found' : 'http';
   const label = status === 401 ? 'Town 凭据无效或已失效，请重新配对。' : status === 403 ? '当前 Being 无权访问此内容或执行此操作。' : status === 404 ? '内容或收件 Being 不存在，请核对后重试。' : `Town 请求失败（HTTP ${status}）。`;
-  let detail = '';
-  try {
-    const data = await readTownJson(response);
-    detail = [data.error, data.hint].filter((v): v is string => typeof v === 'string').join(' · ');
-    if (token) detail = detail.split(token).join('[凭据已隐藏]');
-    detail = detail.replace(/[a-f0-9]{64}/gi, '[凭据已隐藏]').replace(/[\r\n]+/g, ' ').slice(0, 400);
-  } catch { /* The HTTP status remains useful even without a JSON error body. */ }
+  const detail = await townErrorDetail(response, [token]);
   return { ok: false, code, message: detail ? `${label} ${detail}` : label };
 }

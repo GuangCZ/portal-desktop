@@ -295,6 +295,26 @@ describe("Town request and identity isolation", () => {
     expect(model.sendError).toContain("核对");
     expect(sendTown).toHaveBeenCalledTimes(1);
   });
+  it("keeps successful mention warnings visible and clears the sent draft so it cannot be resent by another click", async () => {
+    const sendTown = vi.fn(async (): Promise<TownResult> => ({ ok: true, data: { ok: true, seq: 7 }, fetchedAt: '2026-09-14T00:00:00Z', warnings: ['Neo · ambiguous · 候选：t_NeoA；t_NeoB'] }));
+    const { model } = town({ sendTown });
+    model.live = live();
+    model.view = 'bonfire';
+    model.compose();
+    model.content = '@Neo 你好';
+    await model.send();
+    expect(model.sendOpen).toBe(true);
+    expect(model.sendNotice).toContain('消息已发送');
+    expect(model.sendNotice).toContain('t_NeoB');
+    expect(model.sendError).toBe('');
+    expect(model.content).toBe('');
+    expect(model.canSend).toBe(false);
+    await model.send();
+    expect(sendTown).toHaveBeenCalledTimes(1);
+    model.compose();
+    expect(model.content).toBe('');
+    expect(model.sendNotice).toBe('');
+  });
   it("loads the private All tab by merging inbox and sent messages", async () => {
     const townApi = vi.fn(async (query: import("../desktop/shared/types").TownQuery) =>
       result({
@@ -332,6 +352,23 @@ describe("Town request and identity isolation", () => {
     model.closeAuth();
     expect(model.token).toBe("");
     expect(model.pairCode).toBe("");
+  });
+  it('prefills saved Town identity and display while keeping writes gated until hello confirms it', async () => {
+    const { model } = town({ townAuth: async () => ({ configured: true, pairedBeingId: 't_Paired', display: '配对的柳树', suggestedBeingId: 'another-loom-being' }) });
+    model.view = 'mail';
+    model.live = { ...live(), phase: 'connecting', beingId: undefined, message: '正在确认 Town 身份' };
+    await model.auth();
+    expect(model.authBeing).toBe('t_Paired');
+    expect(model.authState).toContain('配对的柳树');
+    expect(model.authState).toContain('正在确认 Town 身份');
+    expect(model.me).toBe('');
+    model.compose();
+    expect(model.sendTarget).toBeUndefined();
+    model.closeAuth();
+    model.api.townAuth = async () => ({ configured: false, suggestedBeingId: 'another-loom-being' });
+    await model.auth();
+    expect(model.authState).toBe('尚未配对。');
+    expect(model.authBeing).toBe('another-loom-being');
   });
   it("keeps loaded text while reconciling new activity", async () => {
     vi.useFakeTimers();

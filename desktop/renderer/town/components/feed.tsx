@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   feedMessages,
   feedDisplayName,
+  feedReplyAuthor,
   filterMessages,
   mailReply,
   newFeedFilters,
@@ -234,7 +235,7 @@ function Message({
     ? { id: replyId, author: feedDisplayName(m.author, m.authorId), preview: m.content.slice(0, 500) }
     : undefined;
   const authorName = feedDisplayName(m.author, m.authorId);
-  const replyAuthor = str(m.entry.reply_to_being || m.entry.reply_to_sender);
+  const replyAuthor = feedReplyAuthor(m.entry);
   const labels: Record<string, string> = {
     delivered: "已送达",
     pending: "待送达",
@@ -295,7 +296,7 @@ function Message({
           <blockquote className="feed-reply-preview">
             <strong>
               回复{" "}
-              {replyAuthor && !replyAuthor.startsWith('t_') ? replyAuthor : '原消息'}
+              {replyAuthor}
             </strong>
             <span>
               {str(m.entry.reply_to_preview).slice(0, 500) ||

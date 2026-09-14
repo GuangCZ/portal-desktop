@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { desktopExecutable, waitForChatReady } from './support/desktop.mjs';
 
 const dir = await mkdtemp(path.join(os.tmpdir(), 'town-sdk-2769e2f-'));
-let app;
+let app, failure;
 try {
   app = await launchDesktop({ executablePath: await desktopExecutable(), env: { ...process.env, PORTAL_DESKTOP_USER_DATA: dir } });
   const page = await app.firstWindow();
@@ -30,7 +30,7 @@ try {
       if (url.pathname === '/api/client/pair/confirm') {
         const body = await request.json();
         if (body.being_id !== 'willow' || body.code !== 'AB3XY9' || request.headers.has('authorization')) return Response.json({ error: 'bad fixture pairing' }, { status: 400 });
-        return Response.json({ ok: true, token, being_id: 'willow' });
+        return Response.json({ ok: true, token, being_id: 'willow', display: '柳树' });
       }
       if (url.pathname === '/api/client/stream') {
         if (url.searchParams.get('token') !== token) return new Response('', { status: 401 });
@@ -48,7 +48,7 @@ try {
       if (url.pathname === '/api/bonfire/hear') return Response.json({ ok: true, being: 'willow', messages });
       if (url.pathname === '/api/fireside/list') return Response.json({ owned: [{ id: 10, name: '测试围炉' }], joined: [] });
       if (url.pathname === '/api/fireside/hear') return Response.json({ ok: true, messages: [messages[1]] });
-      if (url.pathname === '/api/messages') return Response.json({ messages: [{ id: 'dm-1', sender: 'river', recipient: 'willow', content: '来自伙伴的私信', created_at: base.at, via: 'client:tablet' }] });
+      if (url.pathname === '/api/messages') return Response.json({ messages: [{ id: 'dm-1', sender: 'river_internal', sender_display_name: 'Seam Walker', recipient: 'willow', content: '来自伙伴的私信', created_at: base.at, via: 'client:tablet' }] });
       return Response.json({ error: 'fixture only' }, { status: 404 });
     });
   });
@@ -152,7 +152,7 @@ try {
   await chatInput.fill('');
   await open('篝火');
   await page.locator('#town-write').click();
-  assert((await page.locator('#town-send-context').textContent()).includes('以已配对 Being 的身份代发'));
+  assert((await page.locator('#town-send-context').textContent()).includes('以「柳树」的身份代发'));
   await page.locator('#town-send-content').fill('SDK 测试消息');
   await page.locator('#town-send-submit').click();
   await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
@@ -164,7 +164,7 @@ try {
   await page.getByText('来自伙伴的私信', { exact: true }).waitFor();
   assert.equal(await page.locator('.via-tag').textContent(), '借 tablet');
   await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).click();
-  assert.equal(await page.locator('#town-recipient').inputValue(), 'river');
+  assert.equal(await page.locator('#town-recipient').inputValue(), 'Seam Walker');
   assert.equal(await page.locator('#town-recipient').evaluate(el => el.readOnly), true);
   assert.match(await page.locator('#town-reply-preview').textContent(), /来自伙伴的私信/);
   await page.locator('#town-send-close').click();
@@ -173,7 +173,7 @@ try {
   await page.locator('#town-send-content').fill('SDK 私信回复');
   await page.locator('#town-send-submit').click();
   await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
-  assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites.at(-1)), { path: '/api/messages', body: { recipient: 'river', content: 'SDK 私信回复', reply_to: 'dm-1' } });
+  assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites.at(-1)), { path: '/api/messages', body: { recipient: 'Seam Walker', content: 'SDK 私信回复', reply_to: 'dm-1' } });
   await page.locator('#town-write').click();
   await page.locator('#town-recipient').fill('willow');
   await page.locator('#town-send-content').fill('不能发给自己');
@@ -191,7 +191,14 @@ try {
   assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites.at(-1)), { path: '/api/fireside/speak', body: { fireside_id: 10, message: 'SDK 围炉回复', reply_to: 2 } });
   assert.deepEqual(errors, []);
   console.log('PASS: compact menu, interrupted motion, keyboard/reduced motion, grouped settings, clean quote draft and existing-draft preservation; SDK pairing + SSE hello, server display names, via badges in all three feeds, inert via text, explicit author context, fixture-only send, self-DM blocked before network');
+} catch (error) {
+  failure = error;
+  console.error('Town SDK assertion failed:', error);
+  throw error;
 } finally {
-  if (app) await app.close();
+  if (app) {
+    try { await app.close(); }
+    catch (error) { if (!failure) throw error; console.error('Town SDK cleanup also failed:', error); }
+  }
   await rm(dir, { recursive: true, force: true });
 }

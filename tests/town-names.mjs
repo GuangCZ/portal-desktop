@@ -11,6 +11,7 @@ const { outputFiles } = await build({
     import { createRoot } from 'react-dom/client';
     import { TownFeed } from './desktop/renderer/town/components/feed';
     import { TownComposer } from './desktop/renderer/town/components/composer';
+    import { TownAuth } from './desktop/renderer/town/components/auth';
     import { TownModel } from './desktop/renderer/town/models/town';
     import { SceneStore } from './desktop/renderer/shared/models/scene';
     import { ChatPlaces } from './desktop/renderer/chat/components/navigation';
@@ -18,14 +19,17 @@ const { outputFiles } = await build({
       { id: 'incoming', sender_display: '河流', sender_name: 'old-river', sender_town_id: 't_RiverA', recipient_town_id: 't_Willow', content: '当前显示名优先', created_at: '2026-09-14T10:00:00Z' },
       { id: 'outgoing', sender_display: '柳树', sender_town_id: 't_Willow', recipient_display: '河流', recipient_town_id: 't_RiverB', content: '同名收件人使用各自的 Town ID', created_at: '2026-09-14T11:00:00Z' },
       { id: 'escaped', sender_display: '<img src=x onerror=alert(1)>', sender_town_id: 't_Other', recipient_town_id: 't_Willow', content: '名称按纯文本展示', created_at: '2026-09-14T09:00:00Z' },
+      { id: 'legacy-in', sender_being_id: 'river_internal', sender_display_name: 'Seam Walker', recipient_town_id: 't_Willow', content: '旧格式收件回复', created_at: '2026-09-14T08:00:00Z' },
+      { id: 'legacy-out', sender_town_id: 't_Willow', sender_display: '柳树', recipient_being_id: 'river_internal', recipient_display_name: 'Seam Walker', content: '旧格式发件回复', created_at: '2026-09-14T07:00:00Z' },
+      { id: 'unaddressable', sender_being_id: 'unaddressable_internal', recipient_town_id: 't_Willow', content: '只有内部 ID 不猜收件地址', created_at: '2026-09-14T06:00:00Z' },
     ];
     window.fixtureWrites = [];
-    const model = new TownModel({ sendTown: async (input) => {
+    const model = new TownModel({ townAuth: async () => ({ configured: true, pairedBeingId: 't_Willow', display: '柳树 (t_Willow)', suggestedBeingId: 'other-loom-being' }), sendTown: async (input) => {
       window.fixtureWrites.push(input);
       return { ok: true, data: {}, fetchedAt: new Date().toISOString() };
     } }, console.error, () => {}, new SceneStore(), () => {}, () => {});
     model.view = 'mail'; model.tab = 'all'; model.me = 't_Willow';
-    model.live = { phase: 'connected', beingId: 't_Willow', generation: 1, revision: 1, sync: 1, versions: { bonfire: 0, mail: 0, firesides: 0 }, message: 'fixture' };
+    model.live = { phase: 'connected', beingId: 't_Willow', display: '柳树', generation: 1, revision: 1, sync: 1, versions: { bonfire: 0, mail: 0, firesides: 0 }, message: 'fixture' };
     model.load = async () => {};
     if (location.pathname === '/places') {
       window.fixturePlaces = [];
@@ -38,6 +42,8 @@ const { outputFiles } = await build({
     } else createRoot(document.getElementById('root')).render(<>
       <TownFeed town={model} data={{ messages }} filterKey="mail:all" />
       <TownComposer model={model} />
+      <button id="fixture-auth" onClick={() => { model.live = { ...model.live, phase: 'connecting', beingId: undefined, display: undefined, message: '正在确认 Town 身份' }; void model.auth(); }}>连接设置</button>
+      <TownAuth model={model} />
     </>);
   ` },
   bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic',
@@ -81,9 +87,27 @@ try {
     { kind: 'dm', content: '回复 incoming', recipient: 't_RiverA', replyTo: 'incoming' },
     { kind: 'dm', content: '回复 outgoing', recipient: 't_RiverB', replyTo: 'outgoing' },
   ]);
+  for (const [caption, id] of [['旧格式收件回复', 'legacy-in'], ['旧格式发件回复', 'legacy-out']]) {
+    const card = page.locator('.social-message').filter({ hasText: caption });
+    await card.getByRole('button', { name: '回复', exact: true }).click();
+    assert.equal(await page.locator('#town-recipient').inputValue(), 'Seam Walker');
+    assert.match(await page.locator('#town-send-context').textContent(), /以「柳树」的身份代发/);
+    await page.locator('#town-send-content').fill('回复 ' + id);
+    await page.locator('#town-send-submit').click();
+    await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
+    assert.deepEqual(await page.evaluate(() => window.fixtureWrites.at(-1)), { kind: 'dm', content: '回复 ' + id, recipient: 'Seam Walker', replyTo: id });
+  }
+  assert.equal(await page.locator('.social-message').filter({ hasText: '只有内部 ID 不猜收件地址' }).getByRole('button', { name: '回复', exact: true }).count(), 0);
   await incoming.getByRole('button', { name: '回复', exact: true }).click();
   await page.locator('#town-reply-clear').click();
   assert.equal(await page.locator('#town-recipient').evaluate(el => el.readOnly), false);
+  await page.locator('#town-send-close').click();
+  await page.locator('#fixture-auth').click();
+  await page.locator('#town-auth-dialog').waitFor();
+  assert.equal(await page.locator('#town-being').inputValue(), 't_Willow');
+  assert.match(await page.locator('#town-auth-state').textContent(), /已保存配对：柳树/);
+  assert.match(await page.locator('#town-auth-state').textContent(), /正在确认 Town 身份/);
+  await page.screenshot({ path: 'test-results/town-paired-display.png' });
   await page.goto(`http://127.0.0.1:${server.address().port}/places`);
   const trigger = page.locator('#chat-places-trigger');
   await trigger.waitFor();
@@ -125,7 +149,7 @@ try {
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   await page.screenshot({ path: 'test-results/chat-places-narrow-dark.png' });
   assert.deepEqual(errors, []);
-  console.log('PASS: DM names without visible IDs, exact reply recipients; horizontal town shortcuts, toggle, keyboard, activity badges, narrow layout, reduced motion and draft preservation.');
+  console.log('PASS: DM names, exact and legacy reply recipients, unaddressable legacy mail, saved pairing display and confirmed sender; horizontal town shortcuts, toggle, keyboard, activity badges, narrow layout, reduced motion and draft preservation.');
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));

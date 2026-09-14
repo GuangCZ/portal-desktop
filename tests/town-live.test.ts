@@ -1,6 +1,28 @@
 import { expect, it, vi } from 'vitest';
 import { TownLive } from '../desktop/main/town/live';
 
+it('clears the previous display on re-pairing and publishes the new name only after identity confirmation', async () => {
+  let expected = 't_First', display = '柳树';
+  const fetcher = vi.fn(async () => new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode(`event: hello\ndata: ${JSON.stringify({ town_id: expected, anonymous: false, token_kind: 'client' })}\n\n`));
+  } }), { headers: { 'Content-Type': 'text/event-stream' } }));
+  const live = new TownLive(() => 'fixture-token', () => expected, () => {}, fetcher as typeof fetch, 'https://beings.town', () => display);
+  try {
+    live.restart();
+    expect(live.state.display).toBeUndefined();
+    await vi.waitFor(() => expect(live.state.phase).toBe('connected'));
+    expect(live.state.message).toContain('柳树');
+    expected = 't_Second'; display = '河流';
+    live.restart();
+    expect(live.state.display).toBeUndefined();
+    await vi.waitFor(() => expect(live.state.phase).toBe('connected'));
+    expect(live.state).toMatchObject({ beingId: 't_Second', display: '河流' });
+    expect(live.state.message).not.toContain('柳树');
+    live.rejectAuth();
+    expect(live.state.display).toBeUndefined();
+  } finally { live.dispose(); }
+});
+
 it('accepts documented SSE payloads, decodes split UTF-8 and deduplicates REST/SSE IDs per channel', async () => {
   let stream!: ReadableStreamDefaultController<Uint8Array>;
   const fetcher = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }), { headers: { 'Content-Type': 'text/event-stream' } }));

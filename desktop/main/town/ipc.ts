@@ -41,11 +41,11 @@ export function registerTownIpc(options: TownIpcOptions) {
       return result;
     });
   });
-  handle('beings:town-auth', () => ({ configured: Boolean(townCredentials.token), beingId: townLive.state.beingId, suggestedBeingId: store.settings.being, warning: options.getWarning() }));
+  handle('beings:town-auth', () => ({ configured: Boolean(townCredentials.token), beingId: townLive.state.beingId, pairedBeingId: townCredentials.beingId || undefined, display: townCredentials.display || undefined, suggestedBeingId: store.settings.being, warning: options.getWarning() }));
   handle('beings:town-pair', (input: { beingId: string; code: string }) => exclusive(async () => {
     if (!secretStorage.isEncryptionAvailable()) throw new Error('系统密钥库不可用，无法安全保存配对凭据。');
     const paired = await town.pair(input);
-    await townCredentials.save(paired.token, paired.beingId);
+    await townCredentials.save(paired.token, paired.beingId, paired.display);
     options.clearWarning(); townLive.restart();
   }));
   handle('beings:town-token', (token: string) => exclusive(async () => { await townCredentials.save(token); options.clearWarning(); townLive.restart(); }));

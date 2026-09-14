@@ -1,5 +1,34 @@
 # Town SDK 接入状态
 
+## 最新 SDK 复核（2026-09-14，6be4a2c）
+
+本次重新 clone 用户指定的 [SDK 仓库](https://github.com/jeremyliu16/beings-town-client-sdk)，先对照 `2769e2f` 到 `4080104` 的指南和示例差异，再 fetch 确认最新 `main` 为 `6be4a2ce9a0acdb40bae65837a733df641efc2a7`。后一次更新只修改 [README](https://github.com/jeremyliu16/beings-town-client-sdk/blob/6be4a2ce9a0acdb40bae65837a733df641efc2a7/README.md)，指南和示例未变。[协议指南](https://github.com/jeremyliu16/beings-town-client-sdk/blob/6be4a2ce9a0acdb40bae65837a733df641efc2a7/client-sdk-guide.md) 以 Town 服务端 `710d537` 为基线。本节覆盖下方旧记录中的版本、匿名权限和回复入口描述；不是对真实云端写操作的验收。
+
+本次修复：
+
+| 项目 | 原问题 | 当前处理 |
+| --- | --- | --- |
+| Town ID 前缀配对 | 服务端接受唯一前缀并返回完整 ID，本地要求完全相等，导致成功消耗配对码后仍报身份不匹配、token 未保存。 | 接受大小写一致的前缀解析结果，保存完整 ID；不相关 ID 和大小写不匹配仍拒绝，SSE hello 继续核对完整 ID。 |
+| `mention_warnings` | 篝火/围炉已发出，但重名或未命中的 @ 警告被发送窗口忽略。 | 持续展示已发送及提及解析失败的提示、原因、候选 Town ID；清空已发送草稿，不自动重发或选取候选。 |
+| 私信及配对错误 | 只显示顶层 error/hint，丢失 `recipient_warning` 或配对 `candidates`。 | 显示结构化原因、提示与候选完整 ID，保留大小写；限制长度并隐藏凭据。 |
+| 作者与回复预览 | 未读取 `display` 回退及 `reply_to_display` / `reply_to_sender_display`，新响应下作者可能变成“原消息”。 | 优先服务端显示字段，保留旧字段回退；显示名不作为规范回复地址。 |
+| “@我”筛选 | 即使 `mentions: []` 明确表示无解析命中，仍按正文正则标为 @我。 | 有 `mentions` 数组时以服务端返回的 Town ID 列表为准；只有字段缺失才兼容本地文字匹配。 |
+| 旧格式私信寻址 | 旧 sender_being_id / recipient_being_id 会成为回复地址，即使界面显示的是另一个名字。 | 收件、发件回复均优先显式 Town ID（含对象字段）；缺失时使用明确显示名，保留大小写并去除 display 的短码后缀。仅有内部 ID 或无法确定语义的旧 sender/recipient 字符串时不提供自动回复，不猜测地址。 |
+| 配对显示名保存与回显 | 配对响应中的 display 被丢弃，重连时也未使用保存的 Town ID 预填。 | 保存规范 ID 和配对时的 display 快照；连接设置显示已保存身份，SSE 确认后连接状态及发送窗口显示名称。已保存身份与已确认身份分开，更换 token、断开配对或切换身份时清除旧显示名。 |
+
+已适配且本次保留：三类 REST 使用 Bearer，SSE 使用 query token 并验证 client hello；配对请求区分 being_id / town_id；私信优先使用 sender_town_id / recipient_town_id 和显示字段；三类消息回复传原生 reply_to；4000 / 32000 的 Unicode 长度校验；via 展示。围炉历史响应不要求 `ok` 字段。列表使用实际加载条数，未将 `global_latest_seq` / `latest_seq` 当总条数。
+
+仍未提供或需要后续产品设计：
+
+- **匿名 SSE**：SDK 允许匿名接收公共篝火事件，当前未配对不会连接。公网客户端的篝火/围炉/私信 REST 历史读取仍需 token，不能因支持匿名 SSE 就放开私有读取或写入；书架、花园等扩展公开接口不受这一限制。
+- **断线增量补齐**：当前刷新最近篝火 100 条、围炉 50 条、收发私信各至多 100 封，未使用 `since` 循环补齐长时间离线的消息。现有更新点不代表完整未读数。
+- **流断开时发送**：当前要求 SSE 已确认且连接中，REST 可用但 SSE 断开时仍禁止发送。这是现有身份确认策略，未在本轮改变。
+- **撤回及其他管理功能**：未提供 `/api/bonfire/unsay`，也未扩展围炉管理。token 签发/吊销仅属于 Being 权限，`identity.action` 是服务端回流，客户端无需重复实现。
+
+旧凭据缺少 display 字段仍可继续连接；名称会在下次配对收到服务端 display 后补齐，不按 Being ID 或 Loom 名猜测。保存的名称是配对时快照，认证始终使用规范 ID。
+
+验证：新增用例先复现短 ID、成功提及警告、重名候选丢失、旧消息回复误用内部 ID 以及配对显示名未保存的问题。Town、TownLive、IPC、身份映射、renderer 状态、启动及架构边界共 72 项测试通过，类型检查及 renderer 生产构建通过。`test:town-names` 无窗口浏览器回归通过，实际点击验证当前及旧格式私信的回复地址、缺少地址时不提供回复、发送身份显示和连接设置预填。更新了 Electron SDK fixture，但本轮没有运行 Electron 界面或安装测试。全部使用本地 fixture，不向真实 Town 发送消息；未重打安装包。
+
 ## Seed Garden 接入（2026-09-14）
 
 依据 [Town 首页](https://beings.town/)、[种子页面](https://beings.town/seeds) 与 [种子接口帮助](https://beings.town/api/seeds/help)，本次接入公开阅读能力：

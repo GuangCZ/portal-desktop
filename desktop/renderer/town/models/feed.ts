@@ -1,4 +1,4 @@
-import { normalizeTownIdentity } from '../../../shared/town-identity';
+import { normalizeTownIdentity, validTownIdentity } from '../../../shared/town-identity';
 
 type Entry = Record<string, unknown>;
 export interface FeedFilters {
@@ -79,6 +79,7 @@ export function feedMessages(
         entry.sender_display_name,
         entry.speaker_name,
         entry.display_name,
+        entry.display,
         entry.sender,
         entry.sender_being,
         entry.from,
@@ -123,7 +124,7 @@ export function feedMessages(
       (match) => normalizeTownIdentity(match[1]),
     );
     const mentioned = Boolean(
-      me && (mentionedIds.includes(me) || textMentions.includes(me)),
+      me && (Array.isArray(entry.mentions) ? mentionedIds.includes(me) : textMentions.includes(me)),
     );
     const mine = Boolean(me && normalizeTownIdentity(authorId) === me);
     const received = Boolean(
@@ -150,14 +151,29 @@ export function feedMessages(
   });
 }
 export type FeedMessage = ReturnType<typeof feedMessages>[number];
+export function feedReplyAuthor(entry: Entry): string {
+  const name = firstText(entry.reply_to_display, entry.reply_to_sender_display, entry.reply_to_being, entry.reply_to_sender);
+  return name && !name.startsWith('t_') ? name : '原消息';
+}
 export const feedDisplayName = (name: string, id: string) =>
   !name || (name === id && id.startsWith('t_')) ? '未命名 Being' : name;
+function mailAddress(entry: Entry, sent: boolean): string {
+  const side = sent ? 'recipient' : 'sender';
+  const nested = [entry[side], ...(sent ? [entry.to, entry.recipient_being] : [entry.from, entry.author, entry.sender_being])].map(record);
+  // Old being_id and untyped sender/recipient strings can be internal IDs.
+  // Only explicit Town IDs or explicit name fields may become a reply address.
+  const townIds = [entry[`${side}_town_id`], ...nested.flatMap(value => [value.town_id, value.townId]), entry[`${side}_id`], entry[side]];
+  const townId = townIds.find(value => validTownIdentity(value) && value.startsWith('t_'));
+  if (typeof townId === 'string') return townId;
+  const names = [entry[`${side}_name`], entry[`${side}_display_name`], ...nested.flatMap(value => [value.display_name, value.displayName, value.name])];
+  const displays = [entry[`${side}_display`], ...nested.map(value => value.display)];
+  const name = firstText(...displays).replace(/\s+\(t_[a-zA-Z0-9_-]+\)$/, '') || firstText(...names);
+  return name.trim();
+}
 export function mailReply(message: FeedMessage): FeedReply | undefined {
   const id = text(message.entry.id || message.entry.message_id);
-  const recipient = message.mine
-    ? message.recipientId || message.recipient
-    : message.authorId || message.author;
-  if (!/^[a-zA-Z0-9_-]{1,160}$/.test(id) || !recipient || recipient === '未知') return;
+  const recipient = mailAddress(message.entry, message.mine);
+  if (!/^[a-zA-Z0-9_-]{1,160}$/.test(id) || !recipient || recipient === '未知' || recipient.length > 160 || /[\u0000-\u001f]/.test(recipient)) return;
   return {
     id, author: feedDisplayName(message.author, message.authorId),
     preview: message.content.slice(0, 500), recipient,

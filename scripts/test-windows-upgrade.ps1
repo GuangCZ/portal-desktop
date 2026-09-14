@@ -2,7 +2,8 @@ param(
   [string]$Node = (Get-Command node -ErrorAction Stop).Source,
   [string]$Test = 'tests/windows-upgrade-e2e.mjs',
   [string]$CompletionFile,
-  [switch]$ThroughTask
+  [switch]$ThroughTask,
+  [switch]$InspectToken
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
@@ -12,16 +13,43 @@ $taskRoot = Split-Path $PSScriptRoot -Parent
 Set-Location -LiteralPath $taskRoot
 $taskIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $taskElevated = ([Security.Principal.WindowsPrincipal]::new($taskIdentity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+Add-Type @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class PortalInstallerToken {
+  [DllImport("advapi32.dll", SetLastError = true)]
+  static extern bool GetTokenInformation(IntPtr token, int kind, out int value, int size, out int returned);
+  public static int ElevationType(IntPtr token) {
+    int value, returned;
+    if (!GetTokenInformation(token, 18, out value, sizeof(int), out returned)) throw new Win32Exception();
+    return value;
+  }
+}
+'@
+$taskElevationType = [PortalInstallerToken]::ElevationType($taskIdentity.Token)
+# TokenElevationTypeDefault (1) has no linked token. A Limited scheduled task
+# cannot manufacture a standard-user token for that hosted-runner account.
+$taskHostedUnsplitAdmin = $taskElevated -and $taskElevationType -eq 1 -and $env:GITHUB_ACTIONS -eq 'true'
+if ($InspectToken) {
+  @{ administrator = $taskElevated; elevationType = $taskElevationType; hostedUnsplitAdmin = $taskHostedUnsplitAdmin } | ConvertTo-Json -Compress
+  exit 0
+}
+Write-Output "Installer test token: administrator=$taskElevated elevationType=$taskElevationType"
+if ($taskHostedUnsplitAdmin) {
+  Write-Warning 'Hosted runner has no linked limited token. Full installer checks will run with its existing admin token; standard-user/UAC coverage is unavailable on this host.'
+}
 
 # NSIS installs for the current user and launches the app without elevation.
-# Hosted Windows runners are elevated; run the entire test with the same user
-# and limited token so Explorer does not discard its isolated profile env.
+# Prefer the same user's limited token when the account supports one. Hosted
+# accounts without a linked token retain their actual privilege coverage.
 if ($CompletionFile) {
   $taskExit = 1
   try {
-    if ($taskElevated) { throw 'The installer test must run with a limited user token.' }
+    "Installer test token: administrator=$taskElevated elevationType=$taskElevationType hostedUnsplitAdmin=$taskHostedUnsplitAdmin" | Set-Content -LiteralPath "$CompletionFile.log" -Encoding Unicode
+    if ($taskElevated -and !$taskHostedUnsplitAdmin) { throw "The installer test must run with a limited user token (elevationType=$taskElevationType)." }
     $ErrorActionPreference = 'Continue'
-    & $Node $Test *> "$CompletionFile.log"
+    & $Node $Test *>> "$CompletionFile.log"
     $taskExit = $LASTEXITCODE
   } catch {
     $_ | Out-String | Add-Content -LiteralPath "$CompletionFile.log"
@@ -31,7 +59,7 @@ if ($CompletionFile) {
   }
   exit $taskExit
 }
-if (!$taskElevated -and !$ThroughTask) {
+if ((!$taskElevated -or $taskHostedUnsplitAdmin) -and !$ThroughTask) {
   & $Node $Test
   exit $LASTEXITCODE
 }
@@ -43,7 +71,7 @@ $taskName = 'Portal-Installer-Test-' + [Guid]::NewGuid().ToString('N')
 $taskResult = Join-Path $taskLogs "$taskName.exit"
 $taskScript = ''
 # Copy only test configuration, never the runner's complete environment.
-foreach ($taskVariable in @('PORTAL_DESKTOP_UPDATE_REPOSITORY', 'PORTAL_DESKTOP_PACKAGE_OUT', 'PORTAL_DESKTOP_EXECUTABLE')) {
+foreach ($taskVariable in @('PORTAL_DESKTOP_UPDATE_REPOSITORY', 'PORTAL_DESKTOP_PACKAGE_OUT', 'PORTAL_DESKTOP_EXECUTABLE', 'GITHUB_ACTIONS')) {
   $taskValue = [Environment]::GetEnvironmentVariable($taskVariable)
   if ($taskValue) { $taskScript += '$env:' + $taskVariable + '=' + (Quote-TaskValue $taskValue) + '; ' }
 }

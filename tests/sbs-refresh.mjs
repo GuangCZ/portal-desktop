@@ -79,7 +79,7 @@ const server = createServer(async (request, response) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const until = async predicate => {
   const end = Date.now() + 10000;
-  while (!predicate()) { assert.ok(Date.now() < end, 'fixture request arrived'); await new Promise(resolve => setTimeout(resolve, 10)); }
+  while (!await predicate()) { assert.ok(Date.now() < end, 'fixture request arrived'); await new Promise(resolve => setTimeout(resolve, 10)); }
 };
 let browser;
 try {
@@ -141,7 +141,9 @@ try {
 
   // An older pending GET cannot undo a subsequently confirmed successful toggle.
   holdReads = true;
-  await request(); await until(() => pendingReads.length > 0);
+  // A focus/config read from the previous step may still be shared by the
+  // runtime. Request again once it settles until this fixture holds a new GET.
+  await until(async () => { await request(); return pendingReads.length > 0; });
   await button.click();
   await confirmed(false);
   const beforeLateRead = await page.evaluate(() => window.sbsStates.length);

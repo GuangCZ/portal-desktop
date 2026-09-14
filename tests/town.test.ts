@@ -46,6 +46,30 @@ describe('Town reads', () => {
 });
 
 describe('Town SDK 2769e2f protocol', () => {
+  it('preserves successful mention warnings without treating an accepted post as a failed send', async () => {
+    const token = 'client-fixture-token';
+    const fetcher = vi.fn(async () => Response.json({ ok: true, seq: 12, mention_warnings: [
+      { token: 'Neo', reason: 'ambiguous', hint: '请用 Town ID ' + token, candidates: [{ town_id: 't_NeoA', display_name: 'Neo' }, { town_id: 't_NeoB', display: 'Neo (t_NeoB)' }] },
+    ] }));
+    const client = new TownClient(() => token, fetcher as typeof fetch);
+    const result = await client.send({ kind: 'bonfire', content: '@Neo 你好' });
+    expect(result).toMatchObject({ ok: true, warnings: [expect.stringContaining('Neo')] });
+    if (!result.ok) throw new Error('post should succeed');
+    expect(result.warnings?.join(' ')).toContain('t_NeoA');
+    expect(result.warnings?.join(' ')).toContain('t_NeoB');
+    expect(result.warnings?.join(' ')).not.toContain(token);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows structured recipient and pairing ambiguity details without selecting or retrying a candidate', async () => {
+    const warning = { token: 'Neo', reason: 'ambiguous', hint: '请用完整 Town ID', candidates: [{ town_id: 't_NeoA', display_name: 'Neo' }, { town_id: 't_NeoB', display_name: 'Neo' }] };
+    const fetcher = vi.fn(async () => Response.json({ error: 'ambiguous', recipient_warning: warning, candidates: warning.candidates }, { status: 400 }));
+    const client = new TownClient(() => 'fixture-token', fetcher as typeof fetch);
+    expect(await client.send({ kind: 'dm', recipient: 'Neo', content: '你好' })).toMatchObject({ ok: false, message: expect.stringContaining('t_NeoB') });
+    await expect(client.pair({ beingId: 't_Neo', code: 'AB3XY9' })).rejects.toThrow('t_NeoA');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it('uses native reply_to fields and rejects invalid reply references before posting', async () => {
     const fetcher = vi.fn(async () => Response.json({ ok: true }));
     const client = new TownClient(() => 'fixture-token', fetcher as typeof fetch);

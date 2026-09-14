@@ -19,7 +19,7 @@ export class TownLive {
   private retry?: ReturnType<typeof setTimeout>;
   private seen = new Set<string>();
   private attempts = 0;
-  constructor(private getToken: () => string, private getExpectedBeing: () => string, private publish: (state: TownLiveState) => void, private fetcher: typeof fetch = fetch, private origin = TOWN_ORIGIN) {}
+  constructor(private getToken: () => string, private getExpectedBeing: () => string, private publish: (state: TownLiveState) => void, private fetcher: typeof fetch = fetch, private origin = TOWN_ORIGIN, private getDisplay: () => string = () => '') {}
   private update(patch: Partial<TownLiveState>) {
     this.state = { ...this.state, ...patch, revision: this.state.revision + 1 };
     this.publish(this.state);
@@ -27,13 +27,13 @@ export class TownLive {
   dispose() { clearTimeout(this.retry); this.controller?.abort(); this.controller = undefined; }
   restart() {
     this.dispose(); this.seen.clear(); this.attempts = 0;
-    this.update({ generation: this.state.generation + 1, sync: 0, beingId: undefined, versions: { bonfire: 0, mail: 0, firesides: 0 }, phase: this.getToken() ? 'connecting' : 'unpaired', message: this.getToken() ? '正在确认 Town 身份' : '尚未配对 Town' });
+    this.update({ generation: this.state.generation + 1, sync: 0, beingId: undefined, display: undefined, versions: { bonfire: 0, mail: 0, firesides: 0 }, phase: this.getToken() ? 'connecting' : 'unpaired', message: this.getToken() ? '正在确认 Town 身份' : '尚未配对 Town' });
     if (this.getToken()) void this.connect(this.state.generation);
   }
   rejectAuth() {
     if (this.state.phase === 'auth-error') return;
     this.dispose();
-    this.update({ phase: 'auth-error', beingId: undefined, message: 'Town 凭据无效或已失效；已加载内容仍可阅读，请重新配对后刷新。' });
+    this.update({ phase: 'auth-error', beingId: undefined, display: undefined, message: 'Town 凭据无效或已失效；已加载内容仍可阅读，请重新配对后刷新。' });
   }
   private rememberKey(value: string) {
     if (!value || this.seen.has(value)) return false;
@@ -87,7 +87,11 @@ export class TownLive {
             failure = expected && expected !== beingId ? 'SSE hello 身份与配对 Being 不一致' : 'SSE hello 未确认 client 身份';
             fatal = true; this.rejectAuth(); throw new Error('identity');
           }
-          if (!hello) { hello = true; this.attempts = 0; this.update({ phase: 'connected', beingId, sync: this.state.sync + 1, message: `Town 已连接 · @${beingId}` }); }
+          if (!hello) {
+            hello = true; this.attempts = 0;
+            const display = this.getDisplay() || undefined;
+            this.update({ phase: 'connected', beingId, display, sync: this.state.sync + 1, message: `Town 已连接 · ${display || '@' + beingId}` });
+          }
           return;
         }
         if (!hello) { failure = 'SSE 未先返回 hello 身份事件'; throw new Error('missing-hello'); }

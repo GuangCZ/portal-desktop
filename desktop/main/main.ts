@@ -135,7 +135,7 @@ async function ready() {
   const townCredentials = new TownCredentials(directory, secretStorage);
   let townWarning: string | undefined;
   try { await townCredentials.load(); } catch (error) { townWarning = (error as Error).message; }
-  townLive = new TownLive(() => townCredentials.token, () => townCredentials.beingId, state => { if (window && !window.webContents.isDestroyed()) window.webContents.send('beings:town-live', state); }, net.fetch.bind(net) as typeof fetch);
+  townLive = new TownLive(() => townCredentials.token, () => townCredentials.beingId, state => { if (window && !window.webContents.isDestroyed()) window.webContents.send('beings:town-live', state); }, net.fetch.bind(net) as typeof fetch, TOWN_ORIGIN, () => townCredentials.display);
   const town = new TownClient(() => townCredentials.token, net.fetch.bind(net) as typeof fetch, TOWN_ORIGIN, () => townLive.state.beingId || '');
   townLive.restart();
   kitInstaller = new KitInstaller(directory, net.fetch.bind(net) as typeof fetch);

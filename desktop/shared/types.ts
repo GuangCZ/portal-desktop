@@ -57,7 +57,7 @@ export interface DesktopAPI {
   reconnectTown(): Promise<void>;
   onTownLive(callback: (state: TownLiveState) => void): () => void;
   sendTown(input: TownPost): Promise<TownResult>;
-  townAuth(): Promise<{ configured: boolean; beingId?: string; suggestedBeingId?: string; warning?: string }>;
+  townAuth(): Promise<{ configured: boolean; beingId?: string; pairedBeingId?: string; display?: string; suggestedBeingId?: string; warning?: string }>;
   pairTown(input: { beingId: string; code: string }): Promise<void>;
   saveTownToken(token: string): Promise<void>;
   localKits(): Promise<KitLibrary>;
@@ -84,7 +84,7 @@ declare global { interface Window { beings: DesktopAPI } }
 export type TownKind = 'home' | 'bonfire' | 'firesides' | 'fireside' | 'inbox' | 'sent' | 'embers' | 'scrolls' | 'my-scrolls' | 'grove' | 'kit' | 'ember' | 'scroll' | 'seeds' | 'seed' | 'seed-lineage' | 'seed-absorbs';
 export interface SeedFilters { q: string; domain: string; tag: string; kit: string; lifecycle: string }
 export interface TownQuery { kind: TownKind; offset?: number; id?: string; scrollKind?: string; q?: string; domain?: string; tag?: string; kit?: string; lifecycle?: string }
-export type TownResult = { ok: true; data: Record<string, unknown>; fetchedAt: string } | { ok: false; code: 'auth' | 'forbidden' | 'not-found' | 'http' | 'network'; message: string };
+export type TownResult = { ok: true; data: Record<string, unknown>; fetchedAt: string; warnings?: string[] } | { ok: false; code: 'auth' | 'forbidden' | 'not-found' | 'http' | 'network'; message: string };
 export type TownChannel = 'bonfire' | 'mail' | 'firesides';
 export interface TownLiveState {
   phase: 'unpaired' | 'connecting' | 'connected' | 'reconnecting' | 'auth-error';
@@ -93,6 +93,7 @@ export interface TownLiveState {
   sync: number;
   // Canonical town_id on current servers; legacy being_id on older servers.
   beingId?: string;
+  display?: string;
   message: string;
   versions: Record<TownChannel, number>;
 }

@@ -160,6 +160,7 @@ export class TownModel extends Store {
   content = "";
   recipient = "";
   sendError = "";
+  sendNotice = "";
   plan?: KitInstallPlan;
   prepareBusy = false;
   installBusy = false;
@@ -250,6 +251,7 @@ export class TownModel extends Store {
     this.scenes.resetIdentity();
     this.drafts.clear();
     this.sendTarget = undefined;
+    this.sendNotice = "";
     this.content = "";
     this.recipient = "";
     this.sendOpen = false;
@@ -724,16 +726,19 @@ export class TownModel extends Store {
     this.token = "";
     this.pairCode = "";
     this.authError = "";
+    this.authState = "";
+    this.authBeing = "";
     this.changed();
     try {
       const state = await this.api.townAuth();
       if (revision !== this.authRequest) return;
-      this.authBeing = state.beingId || state.suggestedBeingId || "";
+      this.authBeing = state.beingId || state.pairedBeingId || state.suggestedBeingId || "";
       this.authConfigured = state.configured;
       this.authState =
         state.warning ||
         (state.configured
-          ? this.live?.message || "已保存 Town 凭据，等待身份确认。"
+          ? [state.display ? `已保存配对：${state.display}。` : '',
+              this.live?.phase === 'connected' ? 'Town 已连接。' : this.live?.message || "已保存 Town 凭据，等待身份确认。"].filter(Boolean).join(' ')
           : "尚未配对。");
     } catch (error) {
       if (revision === this.authRequest) this.authError = errorText(error);
@@ -812,6 +817,7 @@ export class TownModel extends Store {
     this.recipient = draft?.recipient || reply?.recipient || "";
     this.sendTarget = next;
     this.sendError = "";
+    this.sendNotice = "";
     this.sendOpen = true;
     this.changed();
   }
@@ -852,6 +858,7 @@ export class TownModel extends Store {
         input.kind === "dm" ? String(target.reply.id) : Number(target.reply.id);
     this.sendBusy = true;
     this.sendError = "";
+    this.sendNotice = "";
     this.changed();
     try {
       const result = await this.api.sendTown(input);
@@ -862,7 +869,10 @@ export class TownModel extends Store {
       }
       this.drafts.delete(JSON.stringify(target));
       this.content = "";
-      this.sendOpen = false;
+      this.sendNotice = result.warnings?.length
+        ? `消息已发送，但部分 @ 提及未解析成功：${result.warnings.join('；')}。请核对目标，无需重复发送原消息。`
+        : "";
+      this.sendOpen = Boolean(this.sendNotice);
       if (target.kind === "dm") {
         this.tab = "sent";
         this.tabs.mail = "sent";
