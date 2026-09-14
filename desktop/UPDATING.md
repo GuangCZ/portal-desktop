@@ -8,7 +8,7 @@ macOS 首次安装：从正式 Release 下载 `portal-desktop-<版本>-macos-arm
 
 macOS 更新流程读取 GitHub `releases/latest`，使用 `vX.Y.Z` 正式 tag 下的 `portal-desktop-X.Y.Z-macos-arm64.zip` 与 `SHA256SUMS.txt`；DMG 不用于运行中的应用替换。草稿、预发布、缺失升级 ZIP 或校验清单均不提供安装。正常升级不要求用户重新填写 Being 连接。
 
-先结束本机任务并保存聊天草稿。安装包下载、摘要校验及 macOS 应用暂存完成后，用户点击“停止 Portal 并安装”。客户端先持久保存原运行记录，停用并确认客户端 Portal 及对应守护退出，然后关闭自身；独立安装助手等待旧客户端退出，macOS 同目录备份并替换应用，Windows 执行 Squirrel Setup，成功后自动打开新版。新版使用原配置同步最新内置 Portal 和守护并自动运行；未开启后台常驻时，由客户端持有 Portal，不会因升级启用登录守护。
+先结束本机任务并保存聊天草稿。安装包下载、摘要校验及 macOS 应用暂存完成后，用户点击“停止 Portal 并安装”。客户端先持久保存原运行记录，停用并确认客户端 Portal 及对应守护退出，然后关闭自身；独立安装助手等待旧客户端退出，macOS 同目录备份并替换应用，Windows 执行 NSIS 一键安装并显示进度，成功后自动打开新版。新版使用原配置同步最新内置 Portal 和守护并自动运行；未开启后台常驻时，由客户端持有 Portal，不会因升级启用登录守护。
 
 从开发用临时签名首次换为 Developer ID 签名时，macOS 可能要求重新授权钥匙串访问。请在系统弹窗中完成授权，原连接配置会保留；后续版本保持签名身份和应用标识稳定。
 
@@ -44,7 +44,7 @@ macOS 更新流程读取 GitHub `releases/latest`，使用 `vX.Y.Z` 正式 tag �
 
 ## 验证
 
-`npm test` 包含更新检查、配套切换、损坏包拒绝、升级后自动运行、失败回滚、中断恢复及 Squirrel 安装事件测试。
+`npm test` 包含更新检查、配套切换、损坏包拒绝、升级后自动运行、失败回滚、中断恢复、Windows 安装助手独立存活及旧 Squirrel 事件兼容测试。`npm run make` 后运行 `npm run test:windows-upgrade`，验证真实 NSIS 首次安装及客户端内升级、自动重启、配置保留和随包 Portal 接管。
 
 `PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS=1 npx vitest run tests/runtime-update-native.test.ts` 在 macOS 上使用隔离 profile 和真实 LaunchAgent，验证离线升级及坏引擎回滚。Windows PowerShell 中先设置 `$env:PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS='1'`，同一测试验证计划任务路径；需要可用的交互式用户会话。该测试不触碰日常 Portal。Windows 实机结果应单独记录，不能用 mock 通过代替。
 

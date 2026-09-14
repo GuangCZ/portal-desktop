@@ -52,6 +52,9 @@ try {
   await requirePortalSource();
   await npm('typecheck', ['run', 'typecheck']);
   await npm('unit', ['test', '--', '--reporter=default', '--reporter=junit', '--outputFile.junit=test-results/unit.xml']);
+  await npm('town-names', ['run', 'test:town-names']);
+  await npm('seed-garden', ['run', 'test:seed-garden']);
+  await npm('sbs-refresh', ['run', 'test:sbs-refresh']);
   // Some engine tests share process-level environment variables; serialize Rust tests.
   await step('portal-rust', 'cargo', ['test', '--locked', '-p', 'heart-portal', '--', '--test-threads=1'], source);
   if (!flags.has('--reuse-package')) {
@@ -59,13 +62,12 @@ try {
     await npm('package', ['run', 'package']);
   }
   await npm('chat-react', ['run', 'test:chat-react']);
-  await npm('sbs-refresh', ['run', 'test:sbs-refresh']);
-  await npm('town-names', ['run', 'test:town-names']);
   await npm('client-lifecycle', ['run', 'test:client-lifecycle']);
   await npm('portal-runtime', ['run', 'test:portal-e2e']);
   await npm('town-sdk', ['run', 'test:town-sdk']);
   await npm('desktop-e2e', ['run', 'test:e2e']);
   await npm('town-e2e', ['run', 'test:town-ui']);
+  await npm('browser-e2e', ['run', 'test:browser']);
   report.status = 'passed';
 } catch (error) { report.status = 'failed'; report.error = String(error); console.error(String(error)); process.exitCode = 1; }
 finally { report.finishedAt = new Date().toISOString(); await persist(); console.log('\n测试报告：test-results/summary.md（结构化结果：summary.json）'); }

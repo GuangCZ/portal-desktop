@@ -2,8 +2,32 @@ import { expect, it, vi } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { BackgroundPortal, command, windowsModulePath } from '../desktop/main/portal/background';
+import { BackgroundPortal, command, windowsModulePath, windowsPowerShellScript } from '../desktop/main/portal/background';
 import { parseConnection } from '../desktop/main/chat/connection';
+
+it.skipIf(process.platform !== 'win32')('opens a saved Windows runtime even when its scheduled task no longer exists', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'portal-missing-task-'));
+  const background = new BackgroundPortal(root);
+  const service = { label: background.label, root: path.join(root, 'runtime'), file: '', existing: false };
+  const metadata = JSON.stringify(service);
+  await writeFile(path.join(root, 'portal-service.json'), metadata);
+  try {
+    await expect(background.discover({ endpoint: '', being: '', hasToken: false, portalName: 'fixture', portalBinary: process.execPath,
+      workspace: root, autoStart: false, backgroundEnabled: false, allowExec: false, kitsEnabled: false }, null))
+      .resolves.toMatchObject({ installed: true, enabled: false, running: false });
+    expect(background.installedService).toEqual(service);
+    expect(await readFile(path.join(root, 'portal-service.json'), 'utf8')).toBe(metadata);
+    await expect(background.disable()).resolves.toMatchObject({ enabled: false, running: false });
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 20_000);
+
+it.skipIf(process.platform !== 'win32')('keeps scheduler permission failures visible as readable UTF-8 instead of CLIXML', async () => {
+  const script = windowsPowerShellScript("function Get-ScheduledTask { throw '计划任务访问被拒绝 fixture' }; Find-PortalTask 'fixture'");
+  const failure = await command('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')])
+    .then(() => { throw new Error('Expected scheduler failure'); }, error => error as Error);
+  expect(failure.message).toContain('计划任务访问被拒绝 fixture');
+  expect(failure.message).not.toContain('CLIXML');
+}, 10_000);
 
 it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.platform !== 'win32')('protects credentials and registers an interactive Windows task', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'town-windows-registration-'));
@@ -17,6 +41,20 @@ it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.pla
     const encrypted = await readFile(path.join(background.installedService!.root, 'connection.dpapi'), 'utf8');
     expect(encrypted).not.toContain('registration-fixture');
     expect(encrypted.length).toBeGreaterThan(40);
+    const saved = background.installedService!;
+    await background.disable();
+    const unregister = windowsPowerShellScript(`Unregister-ScheduledTask -TaskName '${background.label}' -Confirm:$false`);
+    await command('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(unregister, 'utf16le').toString('base64')]);
+    await expect(background.refresh()).resolves.toMatchObject({ enabled: false, running: false });
+    // Reopening and explicitly starting must repair only the missing task,
+    // preserving the runtime, configuration and DPAPI credential bytes.
+    const reopened = new BackgroundPortal(path.join(root, 'profile'));
+    await reopened.discover({ endpoint: '', being: '', hasToken: true, portalName: 'fixture', portalBinary: process.execPath,
+      workspace: root, autoStart: false, backgroundEnabled: true, allowExec: false, kitsEnabled: false }, null);
+    await reopened.load(saved);
+    expect((await reopened.refresh()).enabled).toBe(true);
+    expect(reopened.installedService).toEqual(saved);
+    expect(await readFile(path.join(saved.root, 'connection.dpapi'), 'utf8')).toBe(encrypted);
   } catch (error) {
     console.error('Native Windows/macOS operation failed:', error);
     throw error;

@@ -2856,7 +2856,10 @@ export function createChatRuntime(state, options = {}) {
     void loadSbsState();
     installLifecycleHooks();
     await checkActiveStream();
-    if (!disposed) void checkHealth({ force: true });
+    if (!disposed) {
+      void checkHealth({ force: true });
+      performance.mark("loom:ready");
+    }
   }
   function dispose() {
     disposed = true;

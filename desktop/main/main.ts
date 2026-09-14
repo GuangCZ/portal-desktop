@@ -45,6 +45,7 @@ const userData = clientUserData(app.getPath('appData'), process.env.PORTAL_DESKT
 app.setPath('userData', userData);
 app.setPath('sessionData', userData);
 let window: BrowserWindow | null = null;
+let windowReady = false;
 let browser: ClientBrowser | undefined;
 let portal: PortalSupervisor;
 let proxy: ChatProxy;
@@ -76,13 +77,16 @@ async function openExternal(url: string) {
   } catch { /* Unsupported links stay inside the sandbox. */ }
 }
 function showWindow() {
-  if (quitting) return;
-  if (!window) { if (store) createWindow(); return; }
+  // A second launch can arrive while credentials/background discovery await IO.
+  // Do not load beings:// before the protocol and trusted IPC are registered.
+  if (quitting || !windowReady) return;
+  if (!window) { createWindow(); return; }
   if (window.isMinimized()) window.restore();
   window.show();
   window.focus();
 }
 function createWindow() {
+  if (!windowReady || quitting || (window && !window.isDestroyed())) return;
   const created = createMainWindow({
     shellURL,
     isQuitting: () => quitting,
@@ -478,6 +482,7 @@ async function ready() {
       if (!quitting && window) void dialog.showMessageBox(window, { type: 'warning', title: 'Portal 更新未完成', message: runtimeUpdate.message, buttons: ['知道了'] });
     }
   }
+  windowReady = true;
   createWindow();
   await exclusive(() => restoreStartup());
   if (app.isPackaged && !process.env.PORTAL_DESKTOP_USER_DATA) {

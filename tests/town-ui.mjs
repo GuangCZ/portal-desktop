@@ -5,7 +5,7 @@ import { c as archive } from 'tar';
 import path from 'node:path';
 import os from 'node:os';
 import assert from 'node:assert/strict';
-import { desktopExecutable } from './support/desktop.mjs';
+import { desktopExecutable, waitForChatReady } from './support/desktop.mjs';
 const executablePath = await desktopExecutable();
 const dir = await mkdtemp(path.join(os.tmpdir(), 'beings-town-ui-'));
 let app;
@@ -62,8 +62,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
     });
   }, (await readFile(bundle)).toString('base64'));
   // Wait for the chat document to finish initial focus before opening shell menus.
-  await page.frameLocator('#chat-frame').locator('#input').waitFor();
-  await page.waitForFunction(() => document.querySelector('#cloud-status')?.textContent === '已连接');
+  await waitForChatReady(page);
   const nav = async name => {
     if (await page.locator('#place-sheet').evaluate(element => element.open)) await page.locator('#back-to-chat').click();
     if (['town', 'kits', 'portal'].includes(name)) {

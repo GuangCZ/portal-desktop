@@ -19,7 +19,8 @@ desktop/
 ├─ shared/                  跨进程类型契约和纯身份规则，不含 Electron/Node 实现
 ├─ renderer/                React 页面，按大模块再分 components/models/hooks
 ├─ generated/               自动生成的聊天静态资源，不手工编辑或提交
-└─ macos-signing.json        macOS 构建签名配置
+├─ macos-signing.json        macOS 构建签名配置
+└─ windows-installer.json    Windows NSIS 安装身份配置
 ```
 
 `main/` 处理进程、文件系统、凭据和系统 API；`renderer/` 处理可见界面、表单及页面状态。
