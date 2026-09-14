@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -18,13 +18,13 @@ import { isolateWindowsInstallation, powershell, psQuote } from './support/windo
 if (process.platform !== 'win32') throw new Error('Run this test on Windows.');
 const execute = promisify(execFile), sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function runSetup(file, args, env) {
+async function runProcess(file, args, env, timeout = 150_000) {
   await new Promise((resolve, reject) => {
     // Explorer/NSIS descendants may retain pipes after the installer exits.
     const child = spawn(file, args, { env, windowsHide: false, stdio: 'ignore' });
-    const timer = setTimeout(() => { child.kill(); reject(new Error('NSIS timed out.')); }, 150_000);
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`${path.basename(file)} ${args.join(' ')} timed out after ${timeout} ms.`)); }, timeout);
     child.once('error', error => { clearTimeout(timer); reject(error); });
-    child.once('exit', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`NSIS exited ${code}`)); });
+    child.once('exit', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`${path.basename(file)} exited ${code}`)); });
   });
 }
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
@@ -85,7 +85,7 @@ function rpc(method, params = {}) {
 async function clients() {
   return JSON.parse(await powershell(`
     $root=${psQuote(installation.installedRoot + path.sep)};
-    $items=@(Get-CimInstance Win32_Process -Filter "Name='portal-desktop.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root,[StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine -notmatch '--type=' } | Select-Object ProcessId,ExecutablePath);
+    $items=@(Get-CimInstance Win32_Process -Filter "Name='portal-desktop.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root,[StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine -notmatch '--type=' } | Select-Object ProcessId,ExecutablePath,@{Name='MainWindowHandle';Expression={$p=Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; if ($p) { $p.MainWindowHandle.ToInt64() } else { 0 }}});
     ConvertTo-Json -InputObject $items -Compress
   `));
 }
@@ -102,10 +102,14 @@ try {
   await writeFile(path.join(baseline, 'resources/runtime-bundle.json'), JSON.stringify({ ...bundle, clientVersion: previous, id: sha('baseline:' + bundle.id) }));
   const baselineOutput = path.join(root, 'baseline-setup');
   await buildWindowsInstaller(baseline, baselineOutput, previous, false);
-  await runSetup(path.join(baselineOutput, `portal-desktop-${previous}-windows-x64-Setup.exe`), [`/D=${installation.installedRoot}`], env);
+  await runProcess(path.join(baselineOutput, `portal-desktop-${previous}-windows-x64-Setup.exe`), [`/D=${installation.installedRoot}`], env);
   console.log('NSIS installation completed; checking automatic startup.');
-  await until('NSIS automatically launches the installed client', async () => (await clients()).length === 1);
-  await execute(installed(), ['--quit-for-update'], { env, windowsHide: true, timeout: 30_000 });
+  await until('NSIS automatically opens the installed client window', async () => {
+    const opened = await clients();
+    return opened.length === 1 && opened[0].MainWindowHandle !== 0;
+  });
+  await until('automatic startup retains the isolated profile', () => access(profile).then(() => true, () => false));
+  await runProcess(installed(), ['--quit-for-update'], env, 30_000);
   await until('baseline client closes before controlled test launch', async () => (await clients()).length === 0);
   assert.equal(JSON.parse(asar.extractFile(path.join(path.dirname(installed(previous)), 'resources/app.asar'), 'package.json').toString()).version, previous);
   assert.equal(sha(await readFile(path.join(path.dirname(installed(previous)), 'resources/heart-portal.exe'))), bundle.sha256);
@@ -187,7 +191,7 @@ try {
   // A user can also open Setup while the client is still running. Exercise
   // NSIS's graceful prepare hook, not just the already-stopped update path.
   const priorClient = upgradedPid, priorPortal = state.pid;
-  await runSetup(setup, [], env);
+  await runProcess(setup, [], env);
   upgradedPid = await until('manual reinstall starts a new client', async () => (await clients()).find(p => p.ProcessId !== priorClient)?.ProcessId);
   await until('manual reinstall resumes Portal', async () => {
     const current = await json(path.join(service.root, '.portal-connection-status.json')).catch(() => null);
@@ -202,6 +206,13 @@ try {
   passed = true;
 } catch (error) {
   console.error('Windows upgrade failed. Isolated artifacts:', root);
+  const diagnostics = path.resolve('test-results/windows-installer');
+  await mkdir(diagnostics, { recursive: true });
+  await writeFile(path.join(diagnostics, 'failure.json'), JSON.stringify({
+    root, profile, error: { message: error.message, stack: error.stack, code: error.code, signal: error.signal, killed: error.killed },
+    clients: await clients().catch(failure => ({ error: String(failure) })),
+    profileCreated: await access(profile).then(() => true, () => false),
+  }, null, 2));
   throw error;
 } finally {
   if (app) await app.close().catch(() => {});

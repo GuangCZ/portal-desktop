@@ -65,6 +65,8 @@ Windows 的离线升级、坏引擎回滚与独立 Portal 接管另用 PowerShel
 
 macOS 安装包与完整升级测试需要实际 Developer ID 签名包，签发条件见 [BUILDING.md](BUILDING.md)。完整升级测试会打开真实客户端窗口，运行前需退出日常客户端；它使用签名包构造较低版本基线，不代表覆盖所有历史发布版本。签名和升级通过也不代表 Apple 公证或首次下载的 Gatekeeper 检查通过，详见 [UPDATING.md](UPDATING.md#验证)。
 
+Windows 的 `npm run test:windows-upgrade` 通过 `scripts/test-windows-upgrade.ps1` 运行。管理员 CI 会用同一用户的临时 Limited 计划任务执行完整测试，使测试、NSIS 和自动启动的客户端保持普通用户权限及同一隔离配置目录；任务结束后自动注销。测试等待真实窗口和配置目录就绪，再验证退出、升级和重启。发布 CI 始终上传 `test-results/windows-installer/` 中的日志及失败诊断。
+
 ## React 迁移回归
 
 `tests/renderer-state.test.ts` 随 `npm test` 运行，覆盖组件重挂载时 IPC 订阅清理、旧启动请求失效、

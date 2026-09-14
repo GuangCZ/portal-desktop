@@ -1,7 +1,7 @@
 {
   "name": "portal-desktop",
   "productName": "Portal Desktop",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "A desktop home for your Being, with Heart Portal built in.",
   "author": "Beings contributors",
   "license": "MIT",
@@ -21,7 +21,7 @@
     "test:client-lifecycle": "node tests/client-lifecycle.mjs",
     "test:macos-package": "PORTAL_DESKTOP_MAC_PACKAGE_TESTS=1 vitest run tests/macos-package.test.ts",
     "test:macos-upgrade": "node tests/macos-upgrade-e2e.mjs",
-    "test:windows-upgrade": "node tests/windows-upgrade-e2e.mjs",
+    "test:windows-upgrade": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-windows-upgrade.ps1",
     "test:town-sdk": "node tests/town-sdk.mjs",
     "test:town-names": "node tests/town-names.mjs",
     "test:seed-garden": "node tests/seed-garden.mjs",
