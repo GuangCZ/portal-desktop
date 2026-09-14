@@ -11,6 +11,15 @@ export async function desktopExecutable() {
   return executable;
 }
 
+export async function waitForChatReady(page) {
+  await page.frameLocator('#chat-frame').locator('#input').waitFor();
+  const frame = page.frames().find(candidate => candidate.url().startsWith('beings://chat/'));
+  if (!frame) throw new Error('Chat frame did not load.');
+  // DOM visibility precedes history/stream restoration and the final autofocus.
+  // Wait for Loom's existing readiness mark before interacting with shell menus.
+  await frame.waitForFunction(() => performance.getEntriesByName('loom:ready').length > 0);
+}
+
 export function backgroundCoverage() {
   if (process.env.PORTAL_DESKTOP_TEST_BACKGROUND === '0') return { enabled: false, reason: 'PORTAL_DESKTOP_TEST_BACKGROUND=0：当前运行环境不执行真实系统登录服务测试' };
   if (process.platform !== 'darwin') return { enabled: false, reason: '本桌面 E2E 的系统登录服务分支仅支持 macOS；Windows 真实计划任务与 Portal 安装升级由 test:windows-upgrade 和 native upgrade tests 单独验证' };

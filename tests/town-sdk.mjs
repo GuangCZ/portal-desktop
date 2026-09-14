@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { desktopExecutable } from './support/desktop.mjs';
+import { desktopExecutable, waitForChatReady } from './support/desktop.mjs';
 
 const dir = await mkdtemp(path.join(os.tmpdir(), 'town-sdk-2769e2f-'));
 let app;
@@ -63,7 +63,7 @@ try {
     const { settings } = await window.beings.snapshot();
     await window.beings.save({ ...settings, connectionLink: 'http://127.0.0.1:1/willow/?token=local-ui-fixture', workspace: dir, backgroundEnabled: false, autoStart: false });
   }, dir);
-  await page.frameLocator('#chat-frame').locator('#input').waitFor();
+  await waitForChatReady(page);
   const home = async () => {
     if (await page.locator('#place-sheet').evaluate(el => el.open)) await page.locator('#back-to-chat').click();
     await page.locator('#options-trigger').click();
