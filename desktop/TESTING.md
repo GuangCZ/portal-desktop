@@ -67,6 +67,11 @@ Windows 的离线升级、坏引擎回滚与独立 Portal 接管另用 PowerShel
 
 桌面 E2E 统一通过 `tests/support/electron-lifecycle.mjs` 启动：同一时间仅允许一个测试实例，单个测试设 5 分钟上限，退出等待最多 8 秒；超时仅清理该次 launch 返回的子进程。原生桌面 E2E 会显示窗口，不在日常使用客户端时自动运行。浏览器生命周期单元测试使用替身验证销毁窗口后不再访问 shell。
 
+原生弹窗关闭后，Intel macOS 上 DOM 就绪可能早于 Electron 画面提交。
+`tests/support/desktop.mjs` 的 `clickChatControl` 先确认 iframe 中的目标按钮收到鼠标悬停，
+再单次点击；等待期间仅移动鼠标，不重试导航。`town-ui` 覆盖连续关闭弹窗后重开篝火和书架，
+`electron-smoke` 覆盖关闭搜索后回到最新消息，保留原有 15 秒等待上限。
+
 macOS 安装包与完整升级测试需要实际 Developer ID 签名包，签发条件见 [BUILDING.md](BUILDING.md)。完整升级测试会打开真实客户端窗口，运行前需退出日常客户端；它使用签名包构造较低版本基线，不代表覆盖所有历史发布版本。签名和升级通过也不代表 Apple 公证或首次下载的 Gatekeeper 检查通过，详见 [UPDATING.md](UPDATING.md#验证)。
 
 Windows 的 `npm run test:windows-upgrade` 通过 `scripts/test-windows-upgrade.ps1` 运行。管理员 CI 会用同一用户的临时 Limited 计划任务执行完整测试，使测试、NSIS 和自动启动的客户端保持普通用户权限及同一隔离配置目录；任务结束后自动注销。测试等待真实窗口和配置目录就绪，再验证退出、升级和重启。发布 CI 始终上传 `test-results/windows-installer/` 中的日志及失败诊断。

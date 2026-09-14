@@ -20,6 +20,27 @@ export async function waitForChatReady(page) {
   await frame.waitForFunction(() => performance.getEntriesByName('loom:ready').length > 0);
 }
 
+export async function clickChatControl(page, selector) {
+  const control = page.frameLocator('#chat-frame').locator(selector);
+  // After a native dialog closes, DOM hit testing can become ready before
+  // Electron presents the iframe surface (observed on Intel macOS CI). Move
+  // the pointer until the iframe acknowledges hover, then click exactly once.
+  // Retrying only pointer movement cannot open/close a place twice.
+  const deadline = Date.now() + 15000;
+  let moves = 0;
+  while (Date.now() < deadline) {
+    moves++;
+    await control.hover({ timeout: Math.max(1, deadline - Date.now()) });
+    if (await control.evaluate(element => element.matches(':hover'))) {
+      if (moves > 1) console.log(`Chat pointer ready after ${moves} moves: ${selector}`);
+      await control.click();
+      return;
+    }
+    await page.waitForTimeout(50);
+  }
+  throw new Error(`Chat control did not receive pointer input: ${selector}`);
+}
+
 export function backgroundCoverage() {
   if (process.env.PORTAL_DESKTOP_TEST_BACKGROUND === '0') return { enabled: false, reason: 'PORTAL_DESKTOP_TEST_BACKGROUND=0：当前运行环境不执行真实系统登录服务测试' };
   if (process.platform !== 'darwin') return { enabled: false, reason: '本桌面 E2E 的系统登录服务分支仅支持 macOS；Windows 真实计划任务与 Portal 安装升级由 test:windows-upgrade 和 native upgrade tests 单独验证' };

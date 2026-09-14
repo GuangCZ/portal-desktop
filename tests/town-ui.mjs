@@ -5,7 +5,7 @@ import { c as archive } from 'tar';
 import path from 'node:path';
 import os from 'node:os';
 import assert from 'node:assert/strict';
-import { desktopExecutable, waitForChatReady } from './support/desktop.mjs';
+import { desktopExecutable, waitForChatReady, clickChatControl } from './support/desktop.mjs';
 const executablePath = await desktopExecutable();
 const dir = await mkdtemp(path.join(os.tmpdir(), 'beings-town-ui-'));
 let app;
@@ -64,7 +64,10 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
   // Wait for the chat document to finish initial focus before opening shell menus.
   await waitForChatReady(page);
   const nav = async name => {
-    if (await page.locator('#place-sheet').evaluate(element => element.open)) await page.locator('#back-to-chat').click();
+    if (await page.locator('#place-sheet').evaluate(element => element.open)) {
+      await page.locator('#back-to-chat').click();
+      await page.waitForFunction(() => document.body.dataset.view === 'chat' && !document.querySelector('#place-sheet').open);
+    }
     if (['town', 'kits', 'portal'].includes(name)) {
       const options = page.locator('#conversation-options');
       if ((await options.getAttribute('open')) === null) await options.locator('summary').click();
@@ -72,8 +75,8 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
       else await options.locator(`[data-view="${name}"]`).click();
     } else {
       const frame = page.frameLocator('#chat-frame');
-      if (await frame.locator('#chat-places-trigger').getAttribute('aria-expanded') !== 'true') await frame.locator('#chat-places-trigger').click();
-      await frame.locator(`[data-place="${name}"]`).click();
+      if (await frame.locator('#chat-places-trigger').getAttribute('aria-expanded') !== 'true') await clickChatControl(page, '#chat-places-trigger');
+      await clickChatControl(page, `[data-place="${name}"]`);
     }
     await page.waitForFunction(view => document.body.dataset.view === view && document.querySelector('#place-sheet')?.open, name);
     await page.waitForFunction(() => !document.querySelector('#town-body').hasAttribute('aria-busy'));
@@ -94,6 +97,12 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
   await page.locator('#town-search').fill('does-not-exist'); await page.getByText('当前页没有符合条件的内容。').waitFor();
   await page.getByRole('tab', { name: '本机 Kits', exact: true }).click(); await page.getByText('给 Being 添一件工具').waitFor();
   await nav('embers'); await page.locator('.catalog-item').first().click(); await page.getByText('完整内容', { exact: true }).waitFor(); assert.equal(await page.evaluate(() => window.pwned), undefined);
+  // Exercise consecutive modal closes and iframe navigation without sleeps
+  // between places. Each pointer click must open the requested place once.
+  for (let round = 0; round < 3; round++) {
+    await nav('bonfire'); await page.getByText('篝火测试', { exact: true }).waitFor();
+    await nav('embers'); await page.locator('.catalog-item').first().waitFor();
+  }
   await nav('kits'); await page.getByRole('tab', { name: 'Grove 市集', exact: true }).click();
   await page.locator('.catalog-item').first().click(); await page.getByRole('button', { name: '安装到本机', exact: true }).click();
   await page.getByRole('heading', { name: '安装 downloaded-kit', exact: true }).waitFor();

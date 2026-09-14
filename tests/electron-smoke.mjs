@@ -11,7 +11,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { desktopExecutable, backgroundCoverage, waitForChatReady } from './support/desktop.mjs';
+import { desktopExecutable, backgroundCoverage, waitForChatReady, clickChatControl } from './support/desktop.mjs';
 import { c as archive } from 'tar';
 
 const executablePath = await desktopExecutable();
@@ -247,7 +247,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   await page.locator('#chat-search-input').press('Escape');
   assert.equal(await page.locator('#toggle-chat-search').getAttribute('aria-expanded'), 'false');
   assert.equal(await page.locator('#chat-search-panel').evaluate(el => el.open), false);
-  await frame.locator('#chat-index-latest').click();
+  await clickChatControl(page, '#chat-index-latest');
   await childFrame.waitForFunction(() => {
     const messages = document.querySelector('#messages');
     return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 2;
