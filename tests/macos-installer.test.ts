@@ -15,6 +15,9 @@ vi.mock('../desktop/main/updates/mac-signature', () => ({ verifyMacSignature: as
 } }));
 
 const mac = it.skipIf(process.platform !== 'darwin');
+// clang, codesign, ditto and lipo run real native processes. A cold Intel CI
+// runner can exceed Vitest's 5s default while the other test files run in parallel.
+const nativeTimeout = 30_000;
 const directories: string[] = [];
 afterEach(async () => { for (const root of directories.splice(0)) await rm(root, { recursive: true, force: true }); });
 async function temporary() {
@@ -65,7 +68,7 @@ mac('stages a signed ZIP without touching the installed app or profile; cancella
   expect(await readdir(path.dirname(current))).toEqual(['Portal Desktop.app']);
   expect(await readdir(path.join(profile, 'client-updates'))).toEqual([]);
   expect(await readFile(path.join(profile, 'connection.json'), 'utf8')).toBe('unchanged encrypted fixture');
-});
+}, nativeTimeout);
 
 mac('rejects corrupt downloads, modified UI, wrong versions and missing executables before installation', async () => {
   const root = await temporary();
@@ -81,7 +84,7 @@ mac('rejects corrupt downloads, modified UI, wrong versions and missing executab
     expect(await readdir(path.join(root, 'profile/client-updates'))).toEqual([]);
     await expect(validateMacApp(current, '0.1.3')).resolves.toMatchObject({ clientVersion: '0.1.3' });
   }
-});
+}, nativeTimeout);
 
 mac('rejects translocated and read-only install locations before starting a download', async () => {
   const root = await temporary();
@@ -91,7 +94,7 @@ mac('rejects translocated and read-only install locations before starting a down
   await chmod(path.dirname(current), 0o500);
   try { await expect(macInstallLocation(path.join(current, 'Contents/MacOS/Portal Desktop'))).rejects.toThrow('不可写'); }
   finally { await chmod(path.dirname(current), 0o700); }
-});
+}, nativeTimeout);
 
 mac('waits for the old process, replaces once and restores the old app on move or launch failure', async () => {
   const root = await temporary();
@@ -120,4 +123,4 @@ mac('waits for the old process, replaces once and restores the old app on move o
       if (scenario === 'success') expect(await readFile(path.join(backup, 'version'), 'utf8')).toBe('old');
     } finally { old.kill(); child.kill(); }
   }
-}, 15_000);
+}, nativeTimeout);

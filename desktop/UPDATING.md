@@ -14,7 +14,7 @@ macOS 首次安装：Apple Silicon 从正式 Release 下载 `portal-desktop-<版
 
 从 0.1.1 迁移时，请先在旧客户端菜单选择“退出客户端”，再手动运行正式 Release 的 Windows Setup；已下载且校验通过的 `client-updates/<id>/portal-desktop-<版本>-windows-x64-Setup.exe` 也可使用。安装后从新的 Portal Desktop 快捷方式启动。不要删除 `%APPDATA%/Beings` 或连接配置；新版会沿用旧 profile。旧 Squirrel 的应用目录或固定快捷方式可能仍存在，启动后应检查实际客户端版本。
 
-发布版本已接续 0.1.1 重新从 0.1.2 编号，累计改动保留。此前已安装 0.1.9 的用户需退出后手动安装 0.1.2；更新检查按版本号比较，不会自动把较低版本作为升级推送。
+发布版本已接续 0.1.1 重新从 0.1.2 编号，累计改动保留。此前已安装 0.1.9 的用户需退出后手动安装当前正式版本；更新检查按版本号比较，不会自动把较低版本作为升级推送。
 
 macOS 更新流程读取 GitHub `releases/latest`，使用 `vX.Y.Z` 正式 tag 下的 `portal-desktop-X.Y.Z-macos-<arch>.zip` 与 `SHA256SUMS.txt`；`<arch>` 按当前客户端架构选择 `arm64` 或 `x64`，不会拿另一架构的包替代。DMG 不用于运行中的应用替换。草稿、预发布、缺失升级 ZIP 或校验清单均不提供安装。正常升级不要求用户重新填写 Being 连接。
 
