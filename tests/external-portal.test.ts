@@ -2,8 +2,8 @@ import { afterEach, expect, it } from 'vitest';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ExternalPortalObserver } from '../desktop/external-portal';
-import { parseConnection } from '../desktop/connection';
+import { ExternalPortalObserver } from '../desktop/main/portal/external';
+import { parseConnection } from '../desktop/main/chat/connection';
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 

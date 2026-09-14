@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TownClient, townRoute } from '../desktop/town';
-import type { DesktopAPI, TownQuery, TownResult } from '../desktop/shared';
-import { TownModel } from '../desktop/renderer/models/town';
-import { SceneStore } from '../desktop/renderer/scene-store';
-import { placeFromURL, validPlaceTarget } from '../desktop/renderer/place-target';
-import { registerTownIpc, type TownIpcOptions } from '../desktop/town-ipc';
+import { TownClient, townRoute } from '../desktop/main/town/client';
+import type { DesktopAPI, TownQuery, TownResult } from '../desktop/shared/types';
+import { TownModel } from '../desktop/renderer/town/models/town';
+import { SceneStore } from '../desktop/renderer/shared/models/scene';
+import { placeFromURL, validPlaceTarget } from '../desktop/renderer/shared/lib/navigation';
+import { registerTownIpc, type TownIpcOptions } from '../desktop/main/town/ipc';
 
 const success = (data: Record<string, unknown>): TownResult => ({ ok: true, data, fetchedAt: '2026-09-14T00:00:00Z' });
 function model(query: DesktopAPI['town']) {

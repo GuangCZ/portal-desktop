@@ -2,10 +2,10 @@ import { it, expect, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ClientInstall } from '../desktop/client-install';
-import { BackgroundPortal, type Service } from '../desktop/background';
-import { parseConnection } from '../desktop/connection';
-import { assetName, checksumFor, macInstallerScript, windowsInstallerScript } from '../desktop/manual-installer';
+import { ClientInstall } from '../desktop/main/updates/client-install';
+import { BackgroundPortal, type Service } from '../desktop/main/portal/background';
+import { parseConnection } from '../desktop/main/chat/connection';
+import { assetName, checksumFor, macInstallerScript, windowsInstallerScript } from '../desktop/main/updates/manual-installer';
 
 it('journals client launch records and never resumes independent runtimes from older install records', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'town-install-'));

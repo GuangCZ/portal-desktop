@@ -3,14 +3,14 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } fro
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { command } from '../desktop/background';
-import { assetName, macInstallerScript, stageInstaller } from '../desktop/manual-installer';
-import { macInstallLocation, validateMacApp } from '../desktop/mac-package';
-import { digest } from '../desktop/runtime-update';
+import { command } from '../desktop/main/portal/background';
+import { assetName, macInstallerScript, stageInstaller } from '../desktop/main/updates/manual-installer';
+import { macInstallLocation, validateMacApp } from '../desktop/main/updates/mac-package';
+import { digest } from '../desktop/main/updates/runtime';
 
 // Filesystem failure cases need no developer private key. Trust policy is
 // exercised separately, and the actual release ZIP must pass the real verifier.
-vi.mock('../desktop/mac-signature', () => ({ verifyMacSignature: async (file: string) => {
+vi.mock('../desktop/main/updates/mac-signature', () => ({ verifyMacSignature: async (file: string) => {
   await command('/usr/bin/codesign', ['--verify', '--deep', '--strict', file]);
 } }));
 

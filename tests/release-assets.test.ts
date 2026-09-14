@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { checksumFor } from '../desktop/manual-installer';
+import { checksumFor } from '../desktop/main/updates/manual-installer';
 
 const execute = promisify(execFile);
 const directories: string[] = [];

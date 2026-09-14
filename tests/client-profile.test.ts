@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
-import { clientUserData } from '../desktop/client-profile';
+import { clientUserData } from '../desktop/main/app/profile';
 
 describe('client profile compatibility', () => {
   it('keeps an explicit isolated profile for tests and development', () => {

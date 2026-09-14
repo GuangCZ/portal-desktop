@@ -126,7 +126,11 @@ try {
   assert.equal(await page.locator('.via-tag img').count(), 0);
   assert((await page.locator('.via-tag').allTextContents()).includes('借 <img src=x onerror=alert(1)>'));
   await page.screenshot({ path: path.join(os.tmpdir(), 'town-sdk-via.png') });
-  assert.equal(await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).count(), 0);
+  assert.equal(await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).count(), 4);
+  await partner.getByRole('button', { name: '回复', exact: true }).click();
+  assert.match(await page.locator('#town-reply-preview').textContent(), /伙伴代发消息/);
+  await page.locator('#town-send-close').click();
+  assert.equal(await app.evaluate(() => globalThis.sdkWrites.length), 0);
   await partner.getByRole('button', { name: '一起看', exact: true }).click();
   await page.locator('#scene-compose').click();
   const chatInput = page.frameLocator('#chat-frame').locator('#input');
@@ -151,7 +155,12 @@ try {
   await open('私信');
   await page.getByText('来自伙伴的私信', { exact: true }).waitFor();
   assert.equal(await page.locator('.via-tag').textContent(), '借 tablet');
-  assert.equal(await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).count(), 0);
+  await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).click();
+  assert.equal(await page.locator('#town-recipient').inputValue(), 'river');
+  assert.equal(await page.locator('#town-recipient').getAttribute('readonly'), '');
+  assert.match(await page.locator('#town-reply-preview').textContent(), /来自伙伴的私信/);
+  await page.locator('#town-send-close').click();
+  assert.equal(await app.evaluate(() => globalThis.sdkWrites.length), 1);
   await page.locator('#town-write').click();
   await page.locator('#town-recipient').fill('willow');
   await page.locator('#town-send-content').fill('不能发给自己');

@@ -1,0 +1,317 @@
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { AppModel } from "../models/app";
+import { useModel } from "../../shared/hooks/use-model";
+export function Topbar({ model }: { model: AppModel }) {
+  const app = useModel(model);
+  const [expanded, setExpanded] = useState(false),
+    [visible, setVisible] = useState(false),
+    [help, setHelp] = useState(false);
+  const options = useRef<HTMLDetailsElement>(null),
+    menu = useRef<HTMLDivElement>(null),
+    trigger = useRef<HTMLElement>(null);
+  const helpButton = useRef<HTMLButtonElement>(null),
+    backButton = useRef<HTMLButtonElement>(null);
+  const motion = useRef<Animation | null>(null);
+  const pendingFocus = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (expanded && visible && pendingFocus.current !== null) {
+      const buttons = menu.current?.querySelectorAll<HTMLButtonElement>(
+        "#options-home button:not(:disabled)",
+      );
+      if (buttons?.length)
+        buttons[
+          (pendingFocus.current + buttons.length) % buttons.length
+        ]?.focus();
+      pendingFocus.current = null;
+    }
+  }, [expanded, visible]);
+  const toggle = (open: boolean, restore = false) => {
+    if (open) {
+      setHelp(false);
+      setVisible(true);
+    }
+    setExpanded(open);
+    if (restore) trigger.current?.focus();
+  };
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const node = menu.current!;
+    const from = motion.current
+      ? {
+          opacity: getComputedStyle(node).opacity,
+          transform: getComputedStyle(node).transform,
+        }
+      : {
+          opacity: expanded ? "0" : "1",
+          transform: expanded
+            ? "translateY(-5px) scale(.98)"
+            : "translateY(0) scale(1)",
+        };
+    motion.current?.cancel();
+    const animation = node.animate(
+      [
+        from,
+        {
+          opacity: expanded ? "1" : "0",
+          transform: expanded
+            ? "translateY(0) scale(1)"
+            : "translateY(-5px) scale(.98)",
+        },
+      ],
+      {
+        duration: matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? 0
+          : expanded
+            ? 180
+            : 120,
+        easing: "cubic-bezier(.2,.8,.2,1)",
+        fill: "forwards",
+      },
+    );
+    motion.current = animation;
+    animation.onfinish = () => {
+      if (!expanded) setVisible(false);
+      animation.cancel();
+      motion.current = null;
+    };
+    return () => {
+      animation.onfinish = null;
+    };
+  }, [expanded, visible]);
+  useEffect(() => {
+    const outside = (event: Event) => {
+      if (!options.current?.contains(event.target as Node)) setExpanded(false);
+    };
+    const blur = () => setExpanded(false);
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("focusin", outside);
+    window.addEventListener("blur", blur);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("focusin", outside);
+      window.removeEventListener("blur", blur);
+      motion.current?.cancel();
+    };
+  }, []);
+  const hasToken = Boolean(app.snapshot?.settings.hasToken);
+  const labels: Record<string, string> = {
+    online: "已连接",
+    connecting: "正在连接",
+    reconnecting: "正在重连",
+    degraded: "网络不稳定",
+    offline: "已离线",
+  };
+  const label = labels[app.connection] || "尚未连接";
+  return (
+    <header className="topbar">
+      <div className="pair-name">
+        <span className="pair-human">你</span>
+        <span className="pair-link" aria-hidden="true">
+          ·
+        </span>
+        <span id="conversation-name">
+          {app.snapshot?.settings.being || "Being"}
+        </span>
+        <button
+          className={`sbs-header-switch${app.sbsKnown && app.sbsEnabled ? " enabled" : ""}`}
+          type="button"
+          aria-label="切换 SBS 自主醒来"
+          aria-pressed={app.sbsKnown ? app.sbsEnabled : undefined}
+          title={app.sbsKnown ? (app.sbsEnabled ? "SBS 自主醒来：开" : "SBS 自主醒来：关") : "SBS 状态未同步，可刷新重试"}
+          disabled={!hasToken || !app.sbsKnown || app.chatLoading}
+          onClick={() => app.toggleSbs()}
+        >
+          <span className="sbs-header-dot" aria-hidden="true" />
+        </button>
+      </div>
+      <div className="topbar-actions">
+        <button
+          id="refresh-chat"
+          className="topbar-icon-button"
+          aria-label="刷新 Being 对话"
+          title="刷新 Being 对话"
+          disabled={!hasToken || app.chatLoading}
+          aria-busy={app.chatLoading}
+          onClick={() => {
+            if (app.snapshot) app.applySnapshot(app.snapshot, true);
+          }}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 11a8 8 0 0 0-14.9-3.9L3 9m0 0V4m0 5h5M4 13a8 8 0 0 0 14.9 3.9L21 15m0 0v5m0-5h-5" />
+          </svg>
+        </button>
+        <details
+          id="conversation-options"
+          ref={options}
+          open={visible}
+          onClick={(event) => {
+            const button = (event.target as Element).closest("button");
+            if (
+              button &&
+              button !== helpButton.current &&
+              button !== backButton.current
+            )
+              toggle(false);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              if (help) {
+                setHelp(false);
+                helpButton.current?.focus();
+              } else toggle(false, true);
+            }
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              if (!expanded) {
+                pendingFocus.current = event.key === "ArrowDown" ? 0 : -1;
+                toggle(true);
+                return;
+              }
+              const buttons = [
+                ...menu.current!.querySelectorAll<HTMLButtonElement>(
+                  `${help ? "#options-secondary" : "#options-home"} button:not(:disabled)`,
+                ),
+              ];
+              const index = buttons.indexOf(
+                document.activeElement as HTMLButtonElement,
+              );
+              buttons[
+                (index +
+                  (event.key === "ArrowDown" ? 1 : index < 0 ? 0 : -1) +
+                  buttons.length) %
+                  buttons.length
+              ]?.focus();
+            }
+          }}
+        >
+          <summary
+            id="options-trigger"
+            ref={trigger}
+            aria-label="更多选项"
+            title="更多选项"
+            aria-expanded={expanded}
+            onClick={(event) => {
+              event.preventDefault();
+              toggle(!expanded);
+            }}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="5" cy="12" r="1.5" />
+              <circle cx="12" cy="12" r="1.5" />
+              <circle cx="19" cy="12" r="1.5" />
+            </svg>
+          </summary>
+          <div className="options-menu" ref={menu} inert={!expanded}>
+            <div id="options-home" hidden={help}>
+              <button
+                id="toggle-chat-search"
+                aria-controls="chat-search-panel"
+                aria-expanded={app.searchOpen}
+                disabled={!hasToken}
+                onClick={() => app.openSearch()}
+              >
+                查找对话{" "}
+                <small>
+                  {app.api?.platform === "win32" ? "Ctrl F" : "⌘ F"}
+                </small>
+              </button>
+              <div className="options-divider" />
+              <button data-view="town" onClick={() => app.navigate("town")}>
+                小镇
+              </button>
+              <button data-view="kits" onClick={() => app.navigate("kits")}>
+                工具
+              </button>
+              <button
+                id="open-browser"
+                onClick={() =>
+                  void app.run(async () => {
+                    await app.api.openBrowser();
+                    requestAnimationFrame(() => {
+                      document.getElementById("browser-address")?.focus();
+                      (
+                        document.getElementById(
+                          "browser-address",
+                        ) as HTMLInputElement
+                      )?.select();
+                    });
+                  })
+                }
+              >
+                浏览器
+              </button>
+              <div className="options-divider" />
+              <button
+                id="client-settings-button"
+                onClick={() => void app.openClientSettings()}
+              >
+                设置 <small>⌘ ,</small>
+              </button>
+              <button
+                id="options-help"
+                ref={helpButton}
+                aria-controls="options-secondary"
+                aria-expanded={help}
+                onClick={() => {
+                  setHelp(true);
+                  requestAnimationFrame(() => backButton.current?.focus());
+                }}
+              >
+                对话与帮助 <span aria-hidden="true">›</span>
+              </button>
+              <button
+                id="quit-client"
+                onClick={() => void app.run(() => app.api.quit())}
+              >
+                退出客户端
+              </button>
+              <span id="cloud-status">{label}</span>
+            </div>
+            <div id="options-secondary" hidden={!help}>
+              <button
+                id="options-back"
+                ref={backButton}
+                onClick={() => {
+                  setHelp(false);
+                  requestAnimationFrame(() => helpButton.current?.focus());
+                }}
+              >
+                ‹ 返回
+              </button>
+              <div className="options-divider" />
+              <button
+                id="open-loom"
+                disabled={!hasToken}
+                onClick={() => void app.run(() => app.api.openLoom())}
+              >
+                打开原版 Loom
+              </button>
+              <button
+                data-chat-action="being"
+                disabled={!hasToken}
+                onClick={() => app.chatAction("being")}
+              >
+                关于 Being
+              </button>
+              <button
+                id="open-town-guide"
+                onClick={() => void app.run(() => app.api.openTownLink("/"))}
+              >
+                小镇说明
+              </button>
+              <button
+                data-chat-action="privacy"
+                disabled={!hasToken}
+                onClick={() => app.chatAction("privacy")}
+              >
+                隐私说明
+              </button>
+            </div>
+          </div>
+        </details>
+      </div>
+    </header>
+  );
+}

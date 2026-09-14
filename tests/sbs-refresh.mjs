@@ -8,9 +8,9 @@ import { chromium } from 'playwright';
 const { outputFiles } = await build({ stdin: { resolveDir: process.cwd(), loader: 'tsx', contents: `
   import React from 'react';
   import { createRoot } from 'react-dom/client';
-  import { AppModel } from './desktop/renderer/models/app';
-  import { useModel } from './desktop/renderer/models/store';
-  import { Topbar } from './desktop/renderer/components/topbar';
+  import { AppModel } from './desktop/renderer/app/models/app';
+  import { useModel } from './desktop/renderer/shared/hooks/use-model';
+  import { Topbar } from './desktop/renderer/app/components/topbar';
   const app = new AppModel({});
   window.sbsApp = app;
   window.sbsStates = [];
@@ -36,9 +36,9 @@ const { outputFiles } = await build({ stdin: { resolveDir: process.cwd(), loader
   app.applySnapshot(snapshot);
   createRoot(document.getElementById('root')).render(<Fixture />);
 ` }, bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic' });
-const css = (await Promise.all(['tokens.css', 'style.css', 'workspace.css', 'quiet.css', 'react.css'].map(file => readFile('desktop/renderer/' + file, 'utf8')))).join('\n').replace(/@import url\('\.\/tokens\.css'\);/, '');
-const loom = (await readFile('desktop/generated/loom.html', 'utf8')).replace("const API_URL = 'beings://chat';", 'const API_URL = location.origin;');
-const assets = new Map(await Promise.all(['vendor.js', 'chat-index.js', 'chat-activity.js', 'chat-scene.js', 'chat.css', 'highlight.css'].map(async file => [ '/' + file, await readFile('desktop/generated/' + file) ])));
+const css = await readFile('desktop/renderer/app/styles.css', 'utf8');
+const loom = await readFile('desktop/generated/loom.html', 'utf8');
+const assets = new Map(await Promise.all(['chat.js', 'chat.css', 'highlight.css'].map(async file => [ '/' + file, await readFile('desktop/generated/' + file) ])));
 let enabled = false, status = 200, malformed = false, holdReads = true, holdPatch = false, rejectPatch = false;
 const reads = [], patches = [], pendingReads = [], pendingPatches = [];
 const release = queue => { for (const finish of queue.splice(0)) finish(); };
@@ -123,10 +123,10 @@ try {
 
   // Ordinary Loom config reads and focus refreshes also notify the shell.
   enabled = true;
-  await frame().evaluate(() => loadLlmConfig());
+  await page.evaluate(() => window.sbsApp.post({ type: 'beings:chat-action', action: 'model' }));
   await confirmed(true);
   enabled = false;
-  await frame().evaluate(() => { lastRefreshAt = 0; return refreshOnRegainedAttention(); });
+  await frame().evaluate(() => window.dispatchEvent(new Event('focus')));
   await confirmed(false);
 
   // A rejected toggle must not optimistically flip the header.
@@ -146,7 +146,7 @@ try {
   await confirmed(false);
   const beforeLateRead = await page.evaluate(() => window.sbsStates.length);
   holdReads = false; release(pendingReads);
-  await frame().evaluate(() => loadSbsState());
+  await request();
   await confirmed(false);
   assert.equal(await page.evaluate(index => window.sbsStates.slice(index).some(state => state.enabled === true), beforeLateRead), false);
 

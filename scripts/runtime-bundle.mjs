@@ -9,7 +9,7 @@ export async function writeRuntimeBundle() {
   const portalVersion = /\b(\d+\.\d+\.\d+)\b/.exec(execFileSync(binary, ['--version'], { encoding: 'utf8', timeout: 15000 }))?.[1];
   if (!portalVersion) throw new Error('Cannot identify bundled Portal');
   const sha256 = sha(await readFile(binary));
-  const runner = sha(await readFile('desktop/background.ts'));
+  const runner = sha(await readFile('desktop/main/portal/background.ts'));
   const id = sha(`${pkg.version}:${sha256}:${runner}`);
   await writeFile('resources/runtime-bundle.json', JSON.stringify({ schema: 1, id, clientVersion: pkg.version, portalVersion, sha256, platform: process.platform, arch: process.arch }, null, 2));
 }

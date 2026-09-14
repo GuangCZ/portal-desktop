@@ -5,10 +5,10 @@ import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import os from 'node:os';
 import path from 'node:path';
-import { macInstallLocation, validateMacApp } from '../desktop/mac-package';
-import { command } from '../desktop/background';
-import { macDmgIdentifier, verifyMacSignature } from '../desktop/mac-signature';
-import { assetName, stageInstaller } from '../desktop/manual-installer';
+import { macInstallLocation, validateMacApp } from '../desktop/main/updates/mac-package';
+import { command } from '../desktop/main/portal/background';
+import { macDmgIdentifier, verifyMacSignature } from '../desktop/main/updates/mac-signature';
+import { assetName, stageInstaller } from '../desktop/main/updates/manual-installer';
 
 it.skipIf(process.platform !== 'darwin' || process.env.PORTAL_DESKTOP_MAC_PACKAGE_TESTS !== '1')(
   'installs the signed DMG and stages its matching Release ZIP without launching another client', async () => {

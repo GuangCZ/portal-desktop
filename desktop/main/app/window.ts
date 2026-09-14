@@ -1,0 +1,58 @@
+import { app, BrowserWindow, nativeTheme } from 'electron';
+import os from 'node:os';
+import path from 'node:path';
+import { ClientBrowser } from '../browser/browser';
+
+const CLIENT_NAME = 'Portal Desktop';
+
+export interface MainWindowOptions {
+  shellURL: () => string;
+  isQuitting: () => boolean;
+  isSessionEnding: () => boolean;
+  markSessionEnding: () => void;
+  openExternal: (url: string) => void;
+  onBrowser: (browser: ClientBrowser) => void;
+  onClosed: (window: BrowserWindow) => void;
+}
+
+export function createMainWindow(options: MainWindowOptions) {
+  const acrylic = process.platform === 'win32' && Number(os.release().split('.')[2]) >= 22621;
+  const window = new BrowserWindow({
+    width: 1280, height: 860, minWidth: 920, minHeight: 640, title: CLIENT_NAME,
+    icon: path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), app.isPackaged ? 'branding/app.png' : 'resources/branding/app.png'),
+    backgroundColor: process.platform === 'darwin' || acrylic ? '#00000000' : nativeTheme.shouldUseDarkColors ? '#212121' : '#ffffff',
+    ...(process.platform === 'darwin' ? { vibrancy: 'sidebar' as const, visualEffectState: 'active' as const } : {}),
+    ...(acrylic ? { backgroundMaterial: 'acrylic' as const } : {}),
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    autoHideMenuBar: process.platform === 'win32',
+    trafficLightPosition: { x: 18, y: 20 },
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true,
+      nodeIntegration: false, nodeIntegrationInSubFrames: false, webSecurity: true,
+    },
+  });
+  if (process.platform === 'win32') window.setMenuBarVisibility(false);
+  window.webContents.setWindowOpenHandler(({ url }) => { options.openExternal(url); return { action: 'deny' }; });
+  window.webContents.on('will-navigate', event => event.preventDefault());
+  window.webContents.on('will-frame-navigate', event => {
+    const url = event.url;
+    const parsed = new URL(url);
+    const chatDocument = parsed.protocol === 'beings:' && parsed.hostname === 'chat' && parsed.pathname === '/';
+    if (!chatDocument && url !== options.shellURL()) { event.preventDefault(); options.openExternal(url); }
+  });
+
+  const browser = new ClientBrowser(window, state => {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('beings:browser-state', state);
+  });
+  options.onBrowser(browser);
+  window.on('close', event => {
+    if (options.isQuitting() || options.isSessionEnding()) return;
+    event.preventDefault();
+    window.hide();
+  });
+  // Let Windows logoff/shutdown close the app rather than hide the window.
+  window.on('query-session-end', options.markSessionEnding);
+  window.on('closed', () => options.onClosed(window));
+  void window.loadURL(options.shellURL());
+  return { window, browser };
+}

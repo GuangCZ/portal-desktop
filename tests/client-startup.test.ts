@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { clientStartup, loginItemOptions } from '../desktop/client-startup';
+import { clientStartup, loginItemOptions } from '../desktop/main/app/startup';
 
 describe('client login startup', () => {
   it('uses the stable Squirrel launcher after version updates and the exe for portable builds', () => {

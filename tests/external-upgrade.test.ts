@@ -2,9 +2,9 @@ import { it, expect } from 'vitest';
 import { mkdtemp, writeFile, rm, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ExternalPortalObserver } from '../desktop/external-portal';
-import { parseConnection } from '../desktop/connection';
-import { BackgroundPortal, type Command } from '../desktop/background';
+import { ExternalPortalObserver } from '../desktop/main/portal/external';
+import { parseConnection } from '../desktop/main/chat/connection';
+import { BackgroundPortal, type Command } from '../desktop/main/portal/background';
 
 it('ignores the Windows bootstrap PID and verifies its supervised child before takeover', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'town-external-'));

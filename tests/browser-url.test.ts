@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { browserURL, browserAddress } from '../desktop/browser-url';
+import { browserURL, browserAddress } from '../desktop/main/browser/url';
 describe('embedded browser addresses', () => {
   it('accepts web addresses and rejects privileged schemes', () => {
     expect(browserURL('beings.town')).toBe('https://beings.town/');

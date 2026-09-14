@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
-import { verifyBeingConnection } from '../desktop/being-ready';
-import { parseConnection } from '../desktop/connection';
+import { verifyBeingConnection } from '../desktop/main/chat/ready';
+import { parseConnection } from '../desktop/main/chat/connection';
 
 const connection = parseConnection('https://example.org/willow/?token=private-token');
 it('requires saved configuration and an authenticated Being status response', async () => {

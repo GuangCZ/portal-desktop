@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { UpdateChecker } from '../desktop/updates';
+import { UpdateChecker } from '../desktop/main/updates/checker';
 const release = (tag = 'v0.2.0') => ({ tag_name: tag, draft: false, prerelease: false, assets: [
   { name: `portal-desktop-${tag.slice(1)}-macos-arm64.zip` },
   { name: `portal-desktop-${tag.slice(1)}-windows-x64-Setup.exe` },

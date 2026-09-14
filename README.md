@@ -152,10 +152,12 @@ scripts/           Asset preparation, builds, tests, and release scripts
 tests/             Client unit and integration tests
 resources/         Branding, upstream licenses, and local build outputs
 .github/workflows/ CI and release workflows
-loom.html          Preserved single-file web client
+loom.html          React chat HTML entry
 ```
 
-The original single-file web client remains available: download [loom.html](loom.html) and open `file:///path/to/loom.html?api=https://example.com/your-being&token=YOUR_TOKEN`. The token is a credential; do not share the link publicly. `package.json` defines the desktop version. The root `VERSION` file belongs to the original Loom web client and is versioned independently.
+Desktop sources are separated into `main`, `preload`, `shared`, and `renderer`. React features keep their own `components`, `models`, and `hooks`. See the [desktop layout](desktop/README.md) and [React layout](desktop/renderer/README.md).
+
+The chat page also runs in a browser: run `npm run build:chat`, serve `desktop/generated` with a static HTTP server, and open `/loom.html?api=https://example.com/your-being&token=YOUR_TOKEN`. The API must allow your browser origin. The HTML entry now requires its compiled local assets; it is no longer a standalone downloaded file. The token is a credential; do not share the link publicly. `package.json` defines the desktop version; `VERSION` tracks the Loom protocol version.
 
 ## Roadmap
 

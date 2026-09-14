@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { parseConnection, redact } from '../desktop/connection';
-import { upstreamRequest, ChatProxy } from '../desktop/proxy';
+import { parseConnection, redact } from '../desktop/main/chat/connection';
+import { upstreamRequest, ChatProxy } from '../desktop/main/chat/proxy';
 
 const connection = parseConnection('https://echo.example/alice/?token=fixture-token&relay_secret=relay-key');
 describe('connection and credential boundary', () => {

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import path from 'node:path';
-import { handleInstallerEvent, installerEvent, installerTarget } from '../desktop/installer-events';
+import { handleInstallerEvent, installerEvent, installerTarget } from '../desktop/main/updates/installer-events';
 it('handles installer shortcut events without normal application startup', async () => {
   const calls: [string, string[]][] = [];
   const executable = path.resolve('install/app-0.1.1/portal-desktop.exe');

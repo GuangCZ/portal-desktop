@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { TownLive } from '../desktop/town-live';
+import { TownLive } from '../desktop/main/town/live';
 
 it('accepts documented SSE payloads, decodes split UTF-8 and deduplicates REST/SSE IDs per channel', async () => {
   let stream!: ReadableStreamDefaultController<Uint8Array>;

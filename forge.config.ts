@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { ignoreMacSigningFile } from './scripts/mac-signing';
 import signing from './desktop/macos-signing.json';
-import { macDmgIdentifier, verifyMacSignature } from './desktop/mac-signature';
+import { macDmgIdentifier, verifyMacSignature } from './desktop/main/updates/mac-signature';
 import pkg from './package.json';
 
 const binary = path.resolve('resources', process.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal');
@@ -77,8 +77,8 @@ const config: ForgeConfig = {
   ],
   plugins: [new VitePlugin({
     build: [
-      { entry: 'desktop/main.ts', config: 'vite.main.config.ts', target: 'main' },
-      { entry: 'desktop/preload.ts', config: 'vite.preload.config.ts', target: 'preload' },
+      { entry: 'desktop/main/main.ts', config: 'vite.main.config.ts', target: 'main' },
+      { entry: 'desktop/preload/preload.ts', config: 'vite.preload.config.ts', target: 'preload' },
     ],
     renderer: [{ name: 'main_window', config: 'vite.renderer.config.ts' }],
   })],

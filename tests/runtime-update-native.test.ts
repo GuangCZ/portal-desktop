@@ -4,13 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:net';
 import { spawn } from 'node:child_process';
-import { ExternalPortalObserver } from '../desktop/external-portal';
-import { BackgroundPortal, command, windowsModulePath } from '../desktop/background';
-import { RuntimeUpdater, digest, restoreRuntimeMode, type RuntimeBundle } from '../desktop/runtime-update';
-import { parseConnection } from '../desktop/connection';
-import type { Settings } from '../desktop/shared';
-import { PortalSupervisor } from '../desktop/portal';
-import { PortalTakeover } from '../desktop/portal-takeover';
+import { ExternalPortalObserver } from '../desktop/main/portal/external';
+import { BackgroundPortal, command, windowsModulePath } from '../desktop/main/portal/background';
+import { RuntimeUpdater, digest, restoreRuntimeMode, type RuntimeBundle } from '../desktop/main/updates/runtime';
+import { parseConnection } from '../desktop/main/chat/connection';
+import type { Settings } from '../desktop/shared/types';
+import { PortalSupervisor } from '../desktop/main/portal/supervisor';
+import { PortalTakeover } from '../desktop/main/portal/takeover';
 
 it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.platform !== 'darwin')('returns an upgraded saved service to foreground mode without leaving login startup enabled', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'portal-foreground-upgrade-'));
@@ -147,7 +147,7 @@ it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || !['darwin',
   const oldBinary = path.join(oldRoot, path.basename(binary)); await copyFile(process.env.PORTAL_DESKTOP_TEST_EXTERNAL_PORTAL || binary, oldBinary); await chmod(oldBinary, 0o700);
   const configPath = path.join(oldRoot, 'custom config.toml');
   const settings: Settings = { endpoint: '', being: '', hasToken: true, portalName: 'manual-upgrade', portalBinary: binary, workspace: oldRoot, autoStart: true, backgroundEnabled: true, allowExec: false, kitsEnabled: false };
-  const { portalConfig } = await import('../desktop/portal');
+  const { portalConfig } = await import('../desktop/main/portal/supervisor');
   const original = portalConfig(settings) + '\n# exact original configuration\n'; await writeFile(configPath, original);
   const connection = parseConnection(`http://127.0.0.1:1/test-${path.basename(root)}/?token=manual-upgrade-fixture`);
   const observer = new ExternalPortalObserver();
@@ -180,7 +180,7 @@ it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || !['darwin',
     throw error;
   } finally {
     await background.disable();
-    const { portableCommand } = await import('../desktop/background');
+    const { portableCommand } = await import('../desktop/main/portal/background');
     await portableCommand(oldBinary, 'stop').catch(() => {});
     child?.kill();
     await rm(path.dirname(oldRoot), { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });

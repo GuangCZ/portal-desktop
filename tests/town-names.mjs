@@ -9,11 +9,11 @@ const { outputFiles } = await build({
   stdin: { resolveDir: process.cwd(), sourcefile: 'town-names-fixture.tsx', loader: 'tsx', contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
-    import { TownFeed } from './desktop/renderer/components/town-feed';
-    import { TownComposer } from './desktop/renderer/components/town-composer';
-    import { TownModel } from './desktop/renderer/models/town';
-    import { SceneStore } from './desktop/renderer/scene-store';
-    import { mountChatPlaces } from './desktop/renderer/chat-places';
+    import { TownFeed } from './desktop/renderer/town/components/feed';
+    import { TownComposer } from './desktop/renderer/town/components/composer';
+    import { TownModel } from './desktop/renderer/town/models/town';
+    import { SceneStore } from './desktop/renderer/shared/models/scene';
+    import { ChatPlaces } from './desktop/renderer/chat/components/navigation';
     const messages = [
       { id: 'incoming', sender_display: '河流', sender_name: 'old-river', sender_town_id: 't_RiverA', recipient_town_id: 't_Willow', content: '当前显示名优先', created_at: '2026-09-14T10:00:00Z' },
       { id: 'outgoing', sender_display: '柳树', sender_town_id: 't_Willow', recipient_display: '河流', recipient_town_id: 't_RiverB', content: '同名收件人使用各自的 Town ID', created_at: '2026-09-14T11:00:00Z' },
@@ -28,9 +28,13 @@ const { outputFiles } = await build({
     model.live = { phase: 'connected', beingId: 't_Willow', generation: 1, revision: 1, sync: 1, versions: { bonfire: 0, mail: 0, firesides: 0 }, message: 'fixture' };
     model.load = async () => {};
     if (location.pathname === '/places') {
-      document.getElementById('root').innerHTML = '<div id="input-area"><div id="input-row"><textarea id="input" placeholder="说点什么…"></textarea><button type="button" class="btn-icon" aria-label="添加附件">＋</button><div id="desktop-composer-tools"></div><button id="send-btn" type="button" aria-label="发送">↑</button></div></div>';
       window.fixturePlaces = [];
-      window.updatePlaces = mountChatPlaces(message => window.fixturePlaces.push(message));
+      function PlacesFixture() {
+        const [channels, setChannels] = React.useState([]);
+        window.updatePlaces = setChannels;
+        return <div id="input-area"><div id="input-row"><textarea id="input" placeholder="说点什么…"/><button type="button" className="btn-icon" aria-label="添加附件">＋</button><div id="desktop-composer-tools"><ChatPlaces send={message => window.fixturePlaces.push(message)} channels={channels}/></div><button id="send-btn" type="button" aria-label="发送">↑</button></div></div>;
+      }
+      createRoot(document.getElementById('root')).render(<PlacesFixture/>);
     } else createRoot(document.getElementById('root')).render(<>
       <TownFeed town={model} data={{ messages }} filterKey="mail:all" />
       <TownComposer model={model} />
@@ -38,13 +42,13 @@ const { outputFiles } = await build({
   ` },
   bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic',
 });
-const styles = (await Promise.all(['quiet.css', 'town.css'].map(file => readFile(`desktop/renderer/${file}`, 'utf8')))).join('\n');
-const chatStyles = await readFile('desktop/renderer/chat.css', 'utf8');
+const styles = await readFile('desktop/renderer/app/styles.css', 'utf8');
+const chatStyles = await readFile('desktop/renderer/chat/styles.css', 'utf8');
 const server = createServer((request, response) => {
   response.setHeader('Content-Type', request.url === '/fixture.js' ? 'text/javascript' : 'text/html; charset=utf-8');
   const css = request.url === '/places'
     ? `${chatStyles} body {margin:0;} #root {min-height:100vh;display:flex;align-items:flex-end;} #input-area {box-sizing:border-box;} #input {box-sizing:border-box;resize:none;font-family:system-ui;} #send-btn {cursor:pointer;}`
-    : `${styles} body {padding:32px; overflow:auto;} .social-feed {max-width:960px;margin:auto;}`;
+    : `${styles} body {display:block;height:auto;padding:32px; overflow:auto;} .social-feed {max-width:960px;margin:auto;}`;
   response.end(request.url === '/fixture.js' ? outputFiles[0].text : `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>${css}</style><div id="root"></div><script src="/fixture.js"></script></html>`);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

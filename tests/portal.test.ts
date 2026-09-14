@@ -4,9 +4,9 @@ import { PassThrough } from 'node:stream';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { PortalSupervisor, portalConfig } from '../desktop/portal';
-import { parseConnection } from '../desktop/connection';
-import type { Settings } from '../desktop/shared';
+import { PortalSupervisor, portalConfig } from '../desktop/main/portal/supervisor';
+import { parseConnection } from '../desktop/main/chat/connection';
+import type { Settings } from '../desktop/shared/types';
 
 const settings: Settings = { endpoint: '', being: '', hasToken: true, workspace: os.tmpdir(), portalBinary: process.execPath, portalName: 'test-portal', autoStart: false, allowExec: false, kitsEnabled: false };
 const connection = parseConnection('https://example.org/alice/?token=private-token');

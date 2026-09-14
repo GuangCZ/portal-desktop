@@ -2,9 +2,9 @@ import { afterEach, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ExternalPortalObserver } from '../desktop/external-portal';
-import { parseConnection } from '../desktop/connection';
-import type { Command } from '../desktop/background';
+import { ExternalPortalObserver } from '../desktop/main/portal/external';
+import { parseConnection } from '../desktop/main/chat/connection';
+import type { Command } from '../desktop/main/portal/background';
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 it.skipIf(process.platform !== 'darwin')('finds old client guardians even between restarts, retains their name, and excludes disabled/unrelated/current services', async () => {

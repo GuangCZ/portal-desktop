@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { ClientBrowser } from '../desktop/browser';
+import { ClientBrowser } from '../desktop/main/browser/browser';
 
 vi.mock('electron', async () => {
   const { EventEmitter } = await import('node:events');

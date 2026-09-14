@@ -2,10 +2,10 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { BackgroundPortal, type Command } from '../desktop/background';
-import { RuntimeUpdater, digest, restoreRuntimeMode, type RuntimeBundle } from '../desktop/runtime-update';
-import { parseConnection } from '../desktop/connection';
-import type { Settings } from '../desktop/shared';
+import { BackgroundPortal, type Command } from '../desktop/main/portal/background';
+import { RuntimeUpdater, digest, restoreRuntimeMode, type RuntimeBundle } from '../desktop/main/updates/runtime';
+import { parseConnection } from '../desktop/main/chat/connection';
+import type { Settings } from '../desktop/shared/types';
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 async function fixture(platform: 'darwin' | 'win32' = 'darwin') {

@@ -3,8 +3,8 @@ import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/
 import path from 'node:path';
 import os from 'node:os';
 import { c as archive } from 'tar';
-import { KitInstaller, archivePath, dotenv, downloadKit, unpackKit } from '../desktop/kit-install';
-import type { Settings } from '../desktop/shared';
+import { KitInstaller, archivePath, dotenv, downloadKit, unpackKit } from '../desktop/main/kits/install';
+import type { Settings } from '../desktop/shared/types';
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }); });
 async function fixture(extra = {}) {

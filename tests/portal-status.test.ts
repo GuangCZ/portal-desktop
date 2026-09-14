@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { readPortalSample, readPortalReady } from '../desktop/portal-status';
+import { readPortalSample, readPortalReady } from '../desktop/main/portal/status';
 
 it('rejects stale, oversized and unrelated runtime status', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'portal-status-'));

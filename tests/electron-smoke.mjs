@@ -125,6 +125,7 @@ try {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.getByRole('button', { name: '连接我的 Being' }).click();
   await page.locator('#connection-link').fill(`http://127.0.0.1:${port}/willow/?token=${token}`);
+  await page.locator('#portal-name-input').fill('react-smoke');
   await page.locator('#workspace-input').fill(path.join(dir, '工作目录'));
   await page.locator('#background-input').uncheck();
   await page.getByRole('button', { name: '保存、连接并启动' }).click();
@@ -197,16 +198,17 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   assert.equal(await readFile(path.join(dir, '工作目录/hello.txt'), 'utf8'), '来自 Being 的问候');
   // Tick navigation previews and jumps within the frame; sidebar search shares the same targets.
   await frame.locator('.chat-index-tick').first().waitFor();
-  await childFrame.evaluate(() => {
-    for (let i = 0; i < 10; i++) {
-      addMessage('user', `历史提问 ${i + 1}：讨论客户端的界面和工具`);
-      addMessage('being', '这是一条用于验证快速索引的历史回复。');
-    }
-    addMessage('user', '第一项：核对客户端界面');
-    addMessage('being', Array.from({ length: 35 }, (_, i) => `段落 ${i + 1}：这是一段用于验证定位的长回复。`).join('\n\n'));
-    addMessage('user', '第二项：核对 Portal 配置');
-    addMessage('being', '配置检查完成。');
-  });
+  const appendHistory = (role, content) => messages.push({ indexOnly: true, seq: seq++, role, content, at: new Date().toISOString() });
+  for (let i = 0; i < 10; i++) {
+    appendHistory('user', `历史提问 ${i + 1}：讨论客户端的界面和工具`);
+    appendHistory('being', '这是一条用于验证快速索引的历史回复。');
+  }
+  appendHistory('user', '第一项：核对客户端界面');
+  appendHistory('being', Array.from({ length: 35 }, (_, i) => `段落 ${i + 1}：这是一段用于验证定位的长回复。`).join('\n\n'));
+  appendHistory('user', '第二项：核对 Portal 配置');
+  appendHistory('being', '配置检查完成。');
+  // Feed real history through the API instead of calling retired DOM globals.
+  await childFrame.goto(childFrame.url());
   await childFrame.waitForFunction(() => document.querySelectorAll('.chat-index-tick').length === 13);
   await frame.locator('#input').fill('索引跳转保留的草稿');
   const firstTick = frame.getByRole('button', { name: /跳转到提问.*第一项/ });
@@ -222,7 +224,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   });
   assert.equal(await frame.locator('#input').inputValue(), '索引跳转保留的草稿');
   const readingPosition = await childFrame.evaluate(() => document.querySelector('#messages').scrollTop);
-  await childFrame.evaluate(() => addMessage('being', '索引浏览时收到新回复。'));
+  appendHistory('being', '索引浏览时收到新回复。');
+  await page.waitForTimeout(1600); // Pass the attention-refresh debounce.
+  await childFrame.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await frame.getByText('索引浏览时收到新回复。', { exact: true }).waitFor();
   await page.waitForTimeout(100);
   assert.equal(await childFrame.evaluate(() => document.querySelector('#messages').scrollTop), readingPosition);
   await openChatSearch(page);
@@ -291,6 +296,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   assert.equal(errors.length, 0, errors.join('\n'));
   await app.close(); app = null;
   assert.throws(() => process.kill(pid, 0), /ESRCH/);
+  // Retire the temporary index fixture; the new root must reflect current server history.
+  for (let i = messages.length - 1; i >= 0; i--) if (messages[i].indexOnly) messages.splice(i, 1);
   // Reload encrypted settings from disk, without asking for the token again.
   app = await launchDesktop({ executablePath, env: { ...process.env, PORTAL_DESKTOP_USER_DATA: path.join(dir, 'profile') } });
   const restored = await app.firstWindow();

@@ -18,12 +18,12 @@ const seeds = Array.from({ length: 26 }, (_, index) => ({
 const { outputFiles } = await build({ stdin: { resolveDir: process.cwd(), loader: 'tsx', sourcefile: 'seed-garden-fixture.tsx', contents: `
   import React from 'react';
   import { createRoot } from 'react-dom/client';
-  import { Town } from './desktop/renderer/components/town';
-  import { Dialog } from './desktop/renderer/components/dialog';
-  import { PlaceHeading } from './desktop/renderer/components/place-heading';
-  import { useModel } from './desktop/renderer/models/store';
-  import { TownModel } from './desktop/renderer/models/town';
-  import { SceneStore } from './desktop/renderer/scene-store';
+  import { Town } from './desktop/renderer/town/page';
+  import { Dialog } from './desktop/renderer/shared/components/dialog';
+  import { PlaceHeading } from './desktop/renderer/app/components/navigation';
+  import { useModel } from './desktop/renderer/shared/hooks/use-model';
+  import { TownModel } from './desktop/renderer/town/models/town';
+  import { SceneStore } from './desktop/renderer/shared/models/scene';
   const scenes = new SceneStore();
   const town = new TownModel({
     town: async query => (await fetch('/query', { method: 'POST', body: JSON.stringify(query) })).json(),
@@ -41,7 +41,7 @@ const { outputFiles } = await build({ stdin: { resolveDir: process.cwd(), loader
   createRoot(document.getElementById('root')).render(<Fixture />);
   town.show('town');
 ` }, bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic' });
-const css = (await Promise.all(['tokens.css', 'style.css', 'utilities.css', 'town.css', 'workspace.css', 'quiet.css', 'react.css'].map(file => readFile('desktop/renderer/' + file, 'utf8')))).join('\n').replace(/@import url\('\.\/tokens\.css'\);/, '');
+const css = await readFile('desktop/renderer/app/styles.css', 'utf8');
 const server = createServer(async (request, response) => {
   if (request.url === '/query') {
     let body = ''; for await (const chunk of request) body += chunk;

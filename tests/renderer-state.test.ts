@@ -1,19 +1,19 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { AppModel } from "../desktop/renderer/models/app";
-import { TownModel } from "../desktop/renderer/models/town";
-import { WorkspaceModel } from "../desktop/renderer/models/workspace";
-import { SceneStore } from "../desktop/renderer/scene-store";
+import { AppModel } from "../desktop/renderer/app/models/app";
+import { TownModel } from "../desktop/renderer/town/models/town";
+import { WorkspaceModel } from "../desktop/renderer/app/models/workspace";
+import { SceneStore } from "../desktop/renderer/shared/models/scene";
 import {
   feedMessages,
   filterMessages,
   newFeedFilters,
-} from "../desktop/renderer/town-feed";
+} from "../desktop/renderer/town/models/feed";
 import type {
   DesktopAPI,
   Snapshot,
   TownLiveState,
   TownResult,
-} from "../desktop/shared";
+} from "../desktop/shared/types";
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
@@ -296,7 +296,7 @@ describe("Town request and identity isolation", () => {
     expect(sendTown).toHaveBeenCalledTimes(1);
   });
   it("loads the private All tab by merging inbox and sent messages", async () => {
-    const townApi = vi.fn(async (query: import("../desktop/shared").TownQuery) =>
+    const townApi = vi.fn(async (query: import("../desktop/shared/types").TownQuery) =>
       result({
         messages:
           query.kind === "inbox"
@@ -469,7 +469,7 @@ describe("shared reading behavior", () => {
 
 describe("pending work on renderer disposal", () => {
   it("discards a Kit prepared after the renderer was unmounted", async () => {
-    const pending = deferred<import("../desktop/shared").KitInstallPlan>();
+    const pending = deferred<import("../desktop/shared/types").KitInstallPlan>();
     const discardKit = vi.fn(async () => {});
     const { model } = town({ prepareKit: () => pending.promise, discardKit });
     const stop = model.start();

@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { feedMessages, mailReply } from '../desktop/renderer/town-feed';
-import { TownClient, TownCredentials, townRoute } from '../desktop/town';
-import { TownLive } from '../desktop/town-live';
+import { feedMessages, mailReply } from '../desktop/renderer/town/models/feed';
+import { TownClient, TownCredentials, townRoute } from '../desktop/main/town/client';
+import { TownLive } from '../desktop/main/town/live';
 
 describe('official Town client identity fields (2026-09-14)', () => {
   it.each([

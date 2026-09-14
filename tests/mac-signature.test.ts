@@ -2,8 +2,8 @@ import { expect, it } from 'vitest';
 import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { command } from '../desktop/background';
-import { verifyMacSignature } from '../desktop/mac-signature';
+import { command } from '../desktop/main/portal/background';
+import { verifyMacSignature } from '../desktop/main/updates/mac-signature';
 import signing from '../desktop/macos-signing.json';
 
 it('keeps the Portal signing identity and identifier aligned with the pinned upstream signer', async () => {

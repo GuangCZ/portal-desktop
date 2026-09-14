@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { SettingsStore } from '../desktop/settings';
-import { portalConfig } from '../desktop/portal';
+import { SettingsStore } from '../desktop/main/app/settings';
+import { portalConfig } from '../desktop/main/portal/supervisor';
 import { parse } from 'smol-toml';
 
 it('persists credentials encrypted, reloads and preserves them on workspace-only changes', async () => {

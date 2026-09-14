@@ -2,9 +2,9 @@ import { afterEach, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { BackgroundPortal, launchAgent, unixRunner, windowsRunner, type Command } from '../desktop/background';
-import { parseConnection } from '../desktop/connection';
-import type { Settings } from '../desktop/shared';
+import { BackgroundPortal, launchAgent, unixRunner, windowsRunner, type Command } from '../desktop/main/portal/background';
+import { parseConnection } from '../desktop/main/chat/connection';
+import type { Settings } from '../desktop/shared/types';
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 async function fixture() {

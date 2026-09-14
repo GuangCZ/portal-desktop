@@ -151,10 +151,12 @@ scripts/           资源准备、构建、测试与发布脚本
 tests/             客户端单元测试与集成测试
 resources/         品牌资源、上游许可及本地构建产物
 .github/workflows/ CI 与发布流程
-loom.html          保留的单文件网页版
+loom.html          React 聊天页挂载入口
 ```
 
-原单文件网页版仍可使用：下载 [loom.html](loom.html)，通过 `file:///path/to/loom.html?api=https://example.com/your-being&token=YOUR_TOKEN` 打开。链接中的 token 是凭据，请勿公开分享。桌面版本以 `package.json` 为准，根目录 `VERSION` 属于原 Loom 网页，两者独立。
+桌面源码按进程分为 `main`、`preload`、`shared`、`renderer`；React 界面先按业务大模块组织，再在模块内分 `components / models / hooks`。详见[桌面目录说明](desktop/README.md)与 [React 界面结构](desktop/renderer/README.md)。
+
+聊天页也可在浏览器使用：运行 `npm run build:chat`，用静态 HTTP 服务托管 `desktop/generated`，访问 `/loom.html?api=https://example.com/your-being&token=YOUR_TOKEN`。API 需允许该浏览器来源。现在 HTML 入口依赖编译后的本地资源，不再支持单独下载一个 HTML 文件运行。链接中的 token 是凭据，请勿公开分享。桌面版本以 `package.json` 为准，根目录 `VERSION` 记录 Loom 协议版本。
 
 ## 路线图
 

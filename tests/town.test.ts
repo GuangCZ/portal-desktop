@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { TownClient, TownCredentials, townRoute } from '../desktop/town';
-import type { TownQuery } from '../desktop/shared';
+import { TownClient, TownCredentials, townRoute } from '../desktop/main/town/client';
+import type { TownQuery } from '../desktop/shared/types';
 
 describe('Town reads', () => {
   it('routes only fixed resources with constrained identifiers and pagination', () => {

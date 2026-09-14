@@ -86,11 +86,11 @@
 
 | 优先级 | 项目 | 代码证据与影响 |
 | --- | --- | --- |
-| P2 | 匿名篝火实时流 | `desktop/town-live.ts` 的 `restart()` 无 token 时不调用 `connect()`，`hello` 也只接受 client 身份；参考页面 `connectSSE()` 支持匿名。未配对用户无法接收实时篝火。补齐需要独立的匿名状态及公开事件正文缓存，不能只放宽身份检查。 |
-| P2 | 断线后的历史补齐 | `desktop/town.ts:townRoute()` 只取最近篝火 100 / 围炉 50 条，未使用 `since`；`TownLive` 只发布变化计数，不保留正文。长时间离线后超出窗口的内容会遗漏。指南提供增量参数；参考页面也没有完整的离线补齐方案。 |
-| P2 | 私信回复未接入 UI | `desktop/town.ts:send()` 能传私信 `reply_to`，但 `renderer/components/town-feed.tsx` 仅在围炉提供回复按钮，并只接受数字 seq。用户只能新写私信。先前文档误写“三处已接入”，本次已纠正。 |
+| P2 | 匿名篝火实时流 | `desktop/main/town/live.ts` 的 `restart()` 无 token 时不调用 `connect()`，`hello` 也只接受 client 身份；参考页面 `connectSSE()` 支持匿名。未配对用户无法接收实时篝火。补齐需要独立的匿名状态及公开事件正文缓存，不能只放宽身份检查。 |
+| P2 | 断线后的历史补齐 | `desktop/main/town/client.ts:townRoute()` 只取最近篝火 100 / 围炉 50 条，未使用 `since`；`TownLive` 只发布变化计数，不保留正文。长时间离线后超出窗口的内容会遗漏。指南提供增量参数；参考页面也没有完整的离线补齐方案。 |
+| P2 | 私信回复未接入 UI | `desktop/main/town/client.ts:send()` 能传私信 `reply_to`，但 `renderer/town/components/feed.tsx` 仅在围炉提供回复按钮，并只接受数字 seq。用户只能新写私信。先前文档误写“三处已接入”，本次已纠正。 |
 | P3 | 实时阅读行为不同 | `TownLive` 将 SSE 转为更新提示，阅读层通过 REST 刷新；上游参考页面直接追加事件并滚到底部。本客户端刻意保留阅读位置，但无法保证每一条实时事件都在当前窗口中保留。 |
-| P3 | 发送依赖 SSE 身份确认 | `town-ipc.ts` 要求 `phase === connected` 才允许发送。纯 REST 可用而流断开时也无法发言，行为比参考页面更严格。属于身份确认策略，需产品决定是否支持已确认身份在暂时断流时发送。 |
+| P3 | 发送依赖 SSE 身份确认 | `main/town/ipc.ts` 要求 `phase === connected` 才允许发送。纯 REST 可用而流断开时也无法发言，行为比参考页面更严格。属于身份确认策略，需产品决定是否支持已确认身份在暂时断流时发送。 |
 
 ### 已对齐与主动差异
 
@@ -105,3 +105,12 @@
 
 
 验证：`npm run typecheck`、Vite renderer 生产构建、13 项 Town/TownLive 单元测试通过；扩展后的 `tests/town-sdk.mjs` 在独立 Electron 开发构建与本地协议 fixture 中通过，覆盖菜单中断动画、键盘/减少动态效果、设置分类跳转、篝火无回复按钮、精简引用与已有草稿保护。未向真实 Town 发言，未重打安装包；其他已调整导航路径的完整安装包测试本轮未运行。
+
+
+### 2026-09-14 目录重组时的回归修正
+
+当前 `renderer/town/components/feed.tsx` 在篝火、围炉和私信均提供回复入口，
+`town/models/feed.ts` 为私信计算精确回复对象；这些行为在本次 React 迁移前已存在。
+上方 2026-09-12 的“私信回复未接入”和“篝火回复按钮移除”记录不再反映当前代码。
+`test:town-sdk` 已更新为检查回复预览、私信收件人锁定、关闭窗口不发送，
+避免旧的“回复按钮数量为零”断言阻止后续回归。

@@ -2,8 +2,8 @@ import { expect, it, vi } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { BackgroundPortal, command, windowsModulePath } from '../desktop/background';
-import { parseConnection } from '../desktop/connection';
+import { BackgroundPortal, command, windowsModulePath } from '../desktop/main/portal/background';
+import { parseConnection } from '../desktop/main/chat/connection';
 
 it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.platform !== 'win32')('protects credentials and registers an interactive Windows task', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'town-windows-registration-'));

@@ -1,2 +1,0 @@
-/* Keep the original body's flex layout while React owns its descendants. */
-#root{display:contents}

@@ -2,11 +2,11 @@ import { expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { BackgroundPortal, command } from '../desktop/background';
-import { ExternalPortalObserver } from '../desktop/external-portal';
-import { PortalTakeover } from '../desktop/portal-takeover';
-import { RuntimeUpdater } from '../desktop/runtime-update';
-import { parseConnection } from '../desktop/connection';
+import { BackgroundPortal, command } from '../desktop/main/portal/background';
+import { ExternalPortalObserver } from '../desktop/main/portal/external';
+import { PortalTakeover } from '../desktop/main/portal/takeover';
+import { RuntimeUpdater } from '../desktop/main/updates/runtime';
+import { parseConnection } from '../desktop/main/chat/connection';
 
 it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.platform !== 'darwin')('takes over a real old client guardian automatically and leaves unrelated Being services running', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'portal-native-takeover-'));

@@ -58,6 +58,9 @@ try {
     await npm('build-portal', ['run', 'build:portal']);
     await npm('package', ['run', 'package']);
   }
+  await npm('chat-react', ['run', 'test:chat-react']);
+  await npm('sbs-refresh', ['run', 'test:sbs-refresh']);
+  await npm('town-names', ['run', 'test:town-names']);
   await npm('client-lifecycle', ['run', 'test:client-lifecycle']);
   await npm('portal-runtime', ['run', 'test:portal-e2e']);
   await npm('town-sdk', ['run', 'test:town-sdk']);

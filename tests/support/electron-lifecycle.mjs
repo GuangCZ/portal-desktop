@@ -43,6 +43,13 @@ export async function closeTestApplication(app, graceMs = 8000) {
 
 export async function launchDesktop(options) {
   if (!options.env?.PORTAL_DESKTOP_USER_DATA) throw new Error('桌面测试必须使用独立临时配置。');
+  // Ad-hoc macOS builds change their signature on every rebuild. Opt in to
+  // Chromium's test keychain for UI checks without prompting for real secrets.
+  // This switch is applied by the test launcher only, never by product code.
+  if (process.platform === 'darwin' && options.env.PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN === '1') {
+    options = { ...options, args: [...(options.args || []), '--use-mock-keychain'] };
+    console.log('Keychain coverage: MOCK — UI fixture only; native keychain authorization is not tested.');
+  }
   const release = await acquire();
   let app;
   try { app = await electron.launch(options); } catch (error) { await release(); throw error; }

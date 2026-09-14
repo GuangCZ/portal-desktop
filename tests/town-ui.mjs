@@ -63,7 +63,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
   }, (await readFile(bundle)).toString('base64'));
   // Wait for the chat document to finish initial focus before opening shell menus.
   await page.frameLocator('#chat-frame').locator('#input').waitFor();
-  await page.waitForFunction(() => document.querySelector('#connection-light').dataset.state === 'online');
+  await page.waitForFunction(() => document.querySelector('#cloud-status')?.textContent === '已连接');
   const nav = async name => {
     if (await page.locator('#place-sheet').evaluate(element => element.open)) await page.locator('#back-to-chat').click();
     if (['town', 'kits', 'portal'].includes(name)) {
@@ -76,6 +76,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
       if (await frame.locator('#chat-places-trigger').getAttribute('aria-expanded') !== 'true') await frame.locator('#chat-places-trigger').click();
       await frame.locator(`[data-place="${name}"]`).click();
     }
+    await page.waitForFunction(view => document.body.dataset.view === view && document.querySelector('#place-sheet')?.open, name);
     await page.waitForFunction(() => !document.querySelector('#town-body').hasAttribute('aria-busy'));
   };
   await nav('town'); await page.getByText('4 项服务').waitFor();

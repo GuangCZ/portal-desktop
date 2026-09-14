@@ -62,8 +62,32 @@ macOS 安装包与完整升级测试需要实际 Developer ID 签名包，签发
 
 ## React 迁移回归
 
+`tests/architecture.test.ts` 随单元测试检查进程与模块依赖：renderer 不导入本机实现、
+主进程不依赖界面、共享契约不依赖具体功能、模型不反向导入组件或 hooks。
+
+macOS 临时签名包每次重建后可能等待真实钥匙串授权。仅在界面 fixture 回归时可设置
+`PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN=1`，测试启动器将启用 Chromium 的测试钥匙串。
+报告会明确显示 `Keychain coverage: MOCK`；它不修改客户端源码中的凭据策略，也不代表
+真实钥匙串授权或正式签名已验收。默认测试仍使用系统钥匙串。
+
 `tests/renderer-state.test.ts` 随 `npm test` 运行，覆盖组件重挂载时 IPC 订阅清理、旧启动请求失效、
 连接表单异步默认值、Town 页面与身份切换、重复发送拦截、断线核对不替换阅读内容、精确身份
 筛选及私密引用的跨身份限制。组件的键盘、焦点、菜单动画、原生弹窗、配对、引用草稿、
 Markdown、分页、安装和浏览器隔离由现有 Electron `test:town-sdk`、`test:town-ui`、
 `test:browser` 和 `test:e2e` 使用新构建的包验证。
+
+`npm run test:chat-react` 编译并测试完整 React 聊天页，使用本地 HTTP fixture 覆盖历史与索引、
+Markdown/高亮与危险链接、模型切换失败和补充密钥、OAuth、附件、流式追加、停止、错误收尾、
+引用草稿保护、断点重放，以及明暗主题和窄屏布局。`npm run test:sbs-refresh` 验证配置读取竞争，
+`npm run test:town-names` 验证 React 小镇快捷入口的键盘与焦点。
+
+### 2026-09-14 本机验证记录
+
+macOS arm64：类型检查通过；单元测试 179 项通过、9 项按平台或显式开关跳过；
+`chat-react`、`sbs-refresh`、`town-names`、`seed-garden` 的 Chrome fixture 均通过。
+重组目录后重新打包，并通过 `town-sdk`、`electron-smoke`、`town-ui`、`browser-e2e`。
+覆盖真实 Rust Relay、Kit 调用、流式消息、索引搜索、配置恢复、页面导航及浏览器隔离。
+
+该次 Electron 验证使用临时签名包、隔离 profile、模拟钥匙串与本地服务 fixture；
+设置 `PORTAL_DESKTOP_TEST_BACKGROUND=0`，没有验收真实钥匙串授权、系统登录服务、
+正式发布签名、公证或 Windows 实机行为。

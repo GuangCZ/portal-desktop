@@ -3,8 +3,8 @@ import { copyFile, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
-import { command, windowsModulePath } from '../desktop/background';
-import { windowsInstallerScript } from '../desktop/manual-installer';
+import { command, windowsModulePath } from '../desktop/main/portal/background';
+import { windowsInstallerScript } from '../desktop/main/updates/manual-installer';
 
 it.skipIf(process.platform !== 'win32' || process.env.PORTAL_DESKTOP_NATIVE_INSTALLER_TESTS !== '1')('installs and starts the client through the standard Squirrel handoff', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'town-setup-'));
