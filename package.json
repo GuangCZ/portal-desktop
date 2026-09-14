@@ -1,7 +1,7 @@
 {
   "name": "portal-desktop",
   "productName": "Portal Desktop",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "A desktop home for your Being, with Heart Portal built in.",
   "author": "Beings contributors",
   "license": "MIT",
@@ -28,7 +28,8 @@
     "test:sbs-refresh": "npm run prepare:desktop && node tests/sbs-refresh.mjs",
     "test:browser": "node tests/browser-e2e.mjs",
     "build:chat": "node scripts/build-chat.mjs",
-    "test:chat-react": "npm run build:chat && node tests/chat-react.mjs"
+    "test:chat-react": "npm run build:chat && node tests/chat-react.mjs",
+    "test:chat-history": "npm run build:chat && node tests/chat-history.mjs"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.2",

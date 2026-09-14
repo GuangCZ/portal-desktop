@@ -58,6 +58,7 @@ export interface Preset {
 }
 export interface LlmConfig {
   model?: string;
+  provider?: string;
   presets?: Preset[];
   thinking?: string;
   temperature?: number;

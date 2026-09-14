@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChatRuntime, ChatState, Preset } from "../models/chat";
 import { useModel } from "../../shared/hooks/use-model";
-import { safeLink } from "../../shared/components/markdown";
 
 const baseUrls: Record<string, string> = {
   anthropic: "https://api.anthropic.com",
@@ -11,13 +10,21 @@ const baseUrls: Record<string, string> = {
   google: "https://generativelanguage.googleapis.com",
 };
 const providerNames: Record<string, string> = {
-  anthropic: "Claude",
+  anthropic: "Anthropic",
   "openai-responses": "OpenAI",
+  openai: "OpenAI",
   deepseek: "DeepSeek",
   kimi: "Kimi",
   google: "Google",
-  glm: "GLM",
+  glm: "智谱",
+  openrouter: "OpenRouter",
 };
+const thinkingOptions = [
+  ["off", "关闭"],
+  ["low", "低"],
+  ["medium", "中"],
+  ["high", "高"],
+];
 interface ModelDraft {
   preset: Preset;
   route: "official" | "openrouter";
@@ -26,172 +33,7 @@ interface ModelDraft {
   baseUrl: string;
   apiKey: string;
 }
-function OAuthSettings({ runtime }: { runtime: ChatRuntime }) {
-  const [status, setStatus] = useState<
-    "idle" | "starting" | "pending" | "connected"
-  >("idle");
-  const [remaining, setRemaining] = useState(0),
-    [error, setError] = useState(""),
-    [disconnecting, setDisconnecting] = useState(false);
-  const [url, setUrl] = useState<string>(),
-    [code, setCode] = useState("");
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      generation.current++;
-    },
-    [],
-  );
-  useEffect(() => {
-    if (status !== "pending") return;
-    const request = ++generation.current;
-    const deadline = Date.now() + remaining * 1000;
-    let inFlight = false;
-    const poll = async () => {
-      if (inFlight) return;
-      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-      setRemaining(left);
-      if (!left) {
-        setStatus("idle");
-        setError("Authorization timed out");
-        return;
-      }
-      inFlight = true;
-      try {
-        const res = await runtime.request("/api/llm/oauth/poll");
-        const data = await res.json();
-        if (request !== generation.current) return;
-        if (data.status === "connected" || data.status === "authorized")
-          setStatus("connected");
-        else if (data.status === "error") {
-          setStatus("idle");
-          setError(data.message || "Authorization failed");
-        }
-      } catch {
-        /* Continue within the device authorization deadline. */
-      } finally {
-        inFlight = false;
-      }
-    };
-    const complete = (event: MessageEvent) => {
-      if (
-        event.source === parent &&
-        event.data?.type === "heart:oauth-complete"
-      )
-        void poll();
-    };
-    const timer = setInterval(() => void poll(), 5000);
-    window.addEventListener("message", complete);
-    void poll();
-    return () => {
-      generation.current++;
-      clearInterval(timer);
-      window.removeEventListener("message", complete);
-    };
-    // The deadline is captured once when a new authorization starts.
-  }, [status, runtime]);
-  async function start() {
-    const request = ++generation.current;
-    setStatus("starting");
-    setError("");
-    try {
-      const res = await runtime.request("/api/llm/oauth/start", {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (request !== generation.current) return;
-      if (!res.ok || data.status !== "pending")
-        throw new Error(
-          data.status === "portal_required"
-            ? "Please start Portal first"
-            : data.error || data.message || "Failed to start OAuth",
-        );
-      setUrl(
-        safeLink(data.verification_uri_complete || data.verification_uri || ""),
-      );
-      setCode(data.user_code || "");
-      setRemaining(data.expires_in || 120);
-      setStatus("pending");
-    } catch (error) {
-      if (request === generation.current) {
-        setError(String(error));
-        setStatus("idle");
-      }
-    }
-  }
-  async function disconnect() {
-    const request = ++generation.current;
-    try {
-      const res = await runtime.request("/api/llm/oauth", { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to disconnect");
-      if (request === generation.current) {
-        setStatus("idle");
-        setDisconnecting(false);
-      }
-    } catch (error) {
-      if (request === generation.current) setError(String(error));
-    }
-  }
-  return (
-    <div id="oauth-section" className="settings-section">
-      <div className="section-label">CHATGPT ACCOUNT</div>
-      <div id="oauth-status" role="status">
-        {status === "connected" ? "✓ ChatGPT account connected" : error}
-      </div>
-      <button
-        id="oauth-connect-btn"
-        className="btn-sm"
-        type="button"
-        hidden={status === "pending" || status === "connected"}
-        disabled={status === "starting"}
-        onClick={() => void start()}
-      >
-        {status === "starting" ? "Starting..." : "🔗 Connect ChatGPT"}
-      </button>
-      <div id="oauth-device" hidden={status !== "pending"}>
-        <div className="hint">
-          Complete authorization in the browser window.
-        </div>
-        <div id="oauth-code">
-          {code || "Waiting for authorization on your device..."}
-        </div>
-        {url && (
-          <a
-            id="oauth-link"
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Open authorization page →
-          </a>
-        )}
-        <div id="oauth-timer" className="hint">
-          {remaining}s remaining
-        </div>
-      </div>
-      <button
-        id="oauth-disconnect-btn"
-        className="btn-sm"
-        type="button"
-        hidden={status !== "connected" || disconnecting}
-        onClick={() => setDisconnecting(true)}
-      >
-        Disconnect
-      </button>
-      {disconnecting && (
-        <div role="group" aria-label="Disconnect ChatGPT account?">
-          <p>Disconnect ChatGPT account?</p>
-          <button type="button" onClick={() => void disconnect()}>
-            Disconnect
-          </button>
-          <button type="button" onClick={() => setDisconnecting(false)}>
-            Cancel
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
+
 export function ChatSettings({
   state,
   runtime,
@@ -204,10 +46,11 @@ export function ChatSettings({
   close: () => void;
 }) {
   useModel(state);
-  const [draft, setDraft] = useState<ModelDraft | null>(null),
-    [error, setError] = useState(""),
+  const [draft, setDraft] = useState<ModelDraft | null>(null);
+  const [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
-  const [temperature, setTemperature] = useState(1);
+  const [query, setQuery] = useState(""),
+    [temperature, setTemperature] = useState(1);
   const keyInput = useRef<HTMLInputElement>(null),
     closeButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -217,6 +60,7 @@ export function ChatSettings({
     } else {
       setDraft(null);
       setError("");
+      setQuery("");
     }
   }, [open, runtime]);
   useEffect(
@@ -226,13 +70,28 @@ export function ChatSettings({
   const presets = Array.isArray(state.config.presets)
     ? state.config.presets
     : [];
-  const current = presets.find((p) => p.model === state.config.model);
+  const current = presets.find(
+    (p) =>
+      p.model === state.config.model &&
+      (!state.config.provider || p.provider === state.config.provider),
+  );
+  const provider = state.config.provider || current?.provider;
+  const search = query.trim().toLocaleLowerCase();
   const groups = new Map<string, Preset[]>();
-  for (const preset of presets.filter((p) => p.model !== state.config.model))
+  for (const preset of presets.filter(
+    (p) =>
+      p !== current &&
+      [p.label, p.model, p.provider, providerNames[p.provider] || ""]
+        .join(" ")
+        .toLocaleLowerCase()
+        .includes(search),
+  )) {
     groups.set(preset.provider, [
       ...(groups.get(preset.provider) || []),
       preset,
     ]);
+  }
+  const disabled = busy || state.configLoading;
   function select(preset: Preset) {
     setError("");
     setDraft({
@@ -248,14 +107,14 @@ export function ChatSettings({
   const update = (patch: Partial<ModelDraft>) =>
     setDraft((value) => (value ? { ...value, ...patch } : value));
   async function apply() {
-    if (!draft || busy) return;
+    if (!draft || disabled) return;
     const model = (
       draft.route === "openrouter"
         ? `${draft.preset.provider}/${draft.preset.model}`
         : draft.model
     ).trim();
     if (!model) {
-      setError("Enter a model name");
+      setError("请填写模型名称。");
       return;
     }
     setBusy(true);
@@ -268,16 +127,16 @@ export function ChatSettings({
         ...(draft.apiKey.trim() ? { api_key: draft.apiKey.trim() } : {}),
       });
       if (result?.needs_key) {
-        setError(result.error || "API key required for this provider.");
+        setError(result.error || "请填写该服务商的 API 密钥。");
         keyInput.current?.focus();
       } else if (result?.ok) setDraft(null);
-      else setError(state.configStatus || "Failed to switch model");
+      else setError(state.configStatus || "切换失败，请检查连接设置后重试。");
     } finally {
       setBusy(false);
     }
   }
   async function patch(value: Record<string, string | number>) {
-    if (busy) return;
+    if (disabled) return;
     setBusy(true);
     try {
       await runtime.applyConfigChange(value);
@@ -300,7 +159,10 @@ export function ChatSettings({
       }}
     >
       <div className="settings-header panel-header">
-        <span id="settings-title">Settings</span>
+        <div>
+          <h2 id="settings-title">模型设置</h2>
+          <p>选择当前 Being 使用的模型</p>
+        </div>
         <button
           ref={closeButton}
           className="btn-close"
@@ -311,25 +173,79 @@ export function ChatSettings({
           ✕
         </button>
       </div>
-      <div className="settings-body" aria-busy={state.configLoading || busy}>
+      <div className="settings-body" aria-busy={disabled}>
         <div id="llm-step1" hidden={!!draft}>
-          <div className="settings-section">
-            <div className="section-label">MODEL</div>
-            <div id="llm-current" className="llm-current">
-              <div className="model-name">
-                {current?.label || state.config.model || "No model set"}
+          <section
+            id="llm-current"
+            className="llm-current"
+            aria-label="当前模型"
+          >
+            <div className="current-model-caption">
+              <span className="model-indicator" />
+              当前使用
+            </div>
+            <h3 className="model-name">
+              {current?.label ||
+                state.config.model ||
+                (state.configLoading ? "正在读取模型…" : "尚未配置模型")}
+            </h3>
+            {state.config.model && (
+              <div className="model-detail">
+                {providerNames[provider || ""] || provider || "自定义"}
+                <span> / </span>
+                {state.config.model}
               </div>
-              {state.config.model && (
-                <div className="model-detail">
-                  {state.config.model} · {current?.provider || "custom"}
-                </div>
-              )}
+            )}
+          </section>
+
+          <section
+            className="model-catalog"
+            aria-labelledby="model-catalog-title"
+          >
+            <div className="settings-section-heading">
+              <h3 id="model-catalog-title">切换模型</h3>
+              <button
+                className="llm-custom-link"
+                type="button"
+                disabled={disabled}
+                onClick={() =>
+                  select({
+                    id: "__custom",
+                    label: "自定义模型",
+                    model: "",
+                    provider: "",
+                  })
+                }
+              >
+                <span aria-hidden="true">＋</span> 自定义
+              </button>
+            </div>
+            <div className="model-search">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                aria-hidden="true"
+              >
+                <circle cx="10.5" cy="10.5" r="6.5" />
+                <path d="m16 16 4.5 4.5" />
+              </svg>
+              <input
+                type="search"
+                aria-label="搜索模型"
+                placeholder="搜索模型或服务商"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
             </div>
             <div id="llm-preset-list" className="llm-list">
-              {[...groups].map(([provider, items]) => (
-                <div key={provider}>
+              {[...groups].map(([name, items]) => (
+                <div className="provider-group" key={name}>
                   <div className="provider-group-label">
-                    {providerNames[provider] || provider}
+                    {providerNames[name] || name}
                   </div>
                   <div className="provider-items">
                     {items.map((preset) => (
@@ -337,107 +253,143 @@ export function ChatSettings({
                         key={preset.id}
                         className="llm-item"
                         type="button"
-                        disabled={busy}
+                        disabled={disabled}
                         onClick={() => select(preset)}
                       >
-                        {preset.label.replace(
-                          /^(Claude|GPT|DeepSeek|Kimi|Gemini|GLM)\s*/i,
-                          "",
-                        )}
-                        {preset.has_key === false && (
-                          <span className="badge">🔑</span>
-                        )}
+                        <span className="model-option-name">
+                          {preset.label}
+                        </span>
+                        <span className="model-option-detail">
+                          {preset.has_key === false
+                            ? "需配置密钥"
+                            : "选择此模型"}
+                          <span aria-hidden="true">↗</span>
+                        </span>
                       </button>
                     ))}
                   </div>
                 </div>
               ))}
+              {!groups.size && (
+                <p className="model-empty">
+                  {state.configLoading
+                    ? "正在读取可用模型…"
+                    : search
+                      ? "没有匹配的模型，试试其他名称。"
+                      : "暂无其他预设，可添加自定义模型。"}
+                </p>
+              )}
             </div>
-            <button
-              className="llm-custom-link"
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                select({
-                  id: "__custom",
-                  label: "Custom Model",
-                  model: "",
-                  provider: "",
-                })
-              }
-            >
-              Custom model ›
-            </button>
-          </div>
-          <div className="settings-section">
-            <div className="section-label">THINKING</div>
-            <div className="toggle-group" id="cfg-thinking">
-              {[
-                ["off", "Off"],
-                ["low", "Low"],
-                ["medium", "Med"],
-                ["high", "High"],
-              ].map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  data-val={value}
-                  className={
-                    (state.config.thinking || "medium") === value
-                      ? "active"
-                      : ""
-                  }
-                  aria-pressed={(state.config.thinking || "medium") === value}
-                  disabled={busy}
-                  onClick={() => void patch({ thinking: value })}
+          </section>
+
+          <details className="model-parameters">
+            <summary>
+              <span>生成参数</span>
+              <span className="parameter-summary">
+                思考 ·{" "}
+                {thinkingOptions.find(
+                  ([value]) => value === (state.config.thinking || "medium"),
+                )?.[1] || state.config.thinking}
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  aria-hidden="true"
                 >
-                  {label}
-                </button>
-              ))}
+                  <path d="m7 10 5 5 5-5" />
+                </svg>
+              </span>
+            </summary>
+            <div className="model-parameter">
+              <div className="parameter-heading">
+                <span>思考强度</span>
+                <span className="parameter-hint">平衡响应速度与思考深度</span>
+              </div>
+              <div
+                className="toggle-group"
+                id="cfg-thinking"
+                role="group"
+                aria-label="思考强度"
+              >
+                {thinkingOptions.map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    data-val={value}
+                    className={
+                      (state.config.thinking || "medium") === value
+                        ? "active"
+                        : ""
+                    }
+                    aria-pressed={(state.config.thinking || "medium") === value}
+                    disabled={disabled}
+                    onClick={() => void patch({ thinking: value })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-          <div className="settings-section">
-            <div className="section-label">TEMPERATURE</div>
-            <div className="slider-row">
-              <input
-                aria-label="Temperature"
-                type="range"
-                id="cfg-temperature"
-                min="0"
-                max="1"
-                step="0.1"
-                value={temperature}
-                disabled={busy}
-                onChange={(event) => setTemperature(Number(event.target.value))}
-                onPointerUp={() => void patch({ temperature })}
-                onKeyUp={(event) => {
-                  if (
-                    [
-                      "ArrowLeft",
-                      "ArrowRight",
-                      "ArrowUp",
-                      "ArrowDown",
-                      "Home",
-                      "End",
-                    ].includes(event.key)
-                  )
-                    void patch({ temperature });
-                }}
-              />
-              <span id="cfg-temperature-val">{temperature.toFixed(1)}</span>
+            <div className="model-parameter">
+              <div className="parameter-heading">
+                <label htmlFor="cfg-temperature">回答随机性</label>
+                <output id="cfg-temperature-val" htmlFor="cfg-temperature">
+                  {temperature.toFixed(1)}
+                </output>
+              </div>
+              <div className="slider-row">
+                <input
+                  type="range"
+                  id="cfg-temperature"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={temperature}
+                  disabled={disabled}
+                  onChange={(event) =>
+                    setTemperature(Number(event.target.value))
+                  }
+                  onPointerUp={(event) =>
+                    void patch({
+                      temperature: Number(event.currentTarget.value),
+                    })
+                  }
+                  onKeyUp={(event) => {
+                    if (
+                      [
+                        "ArrowLeft",
+                        "ArrowRight",
+                        "ArrowUp",
+                        "ArrowDown",
+                        "Home",
+                        "End",
+                      ].includes(event.key)
+                    )
+                      void patch({
+                        temperature: Number(event.currentTarget.value),
+                      });
+                  }}
+                />
+              </div>
+              <div className="parameter-scale">
+                <span>更稳定</span>
+                <span>更多变化</span>
+              </div>
             </div>
-          </div>
-          <div className="settings-section">
-            <button
-              className="btn-rollback"
-              type="button"
-              disabled={busy}
-              onClick={() => void patch({ rollback: "true" })}
-            >
-              ↩ Rollback to last working
-            </button>
-          </div>
+          </details>
+          <button
+            className="btn-rollback"
+            type="button"
+            disabled={disabled}
+            onClick={() => void patch({ rollback: "true" })}
+          >
+            <span aria-hidden="true">↶</span> 恢复上次可用配置
+          </button>
         </div>
+
         {draft && (
           <form
             id="llm-step2"
@@ -446,20 +398,25 @@ export function ChatSettings({
               void apply();
             }}
           >
-            <div className="step2-header">
-              <button
-                className="step2-back"
-                type="button"
-                aria-label="返回模型列表"
-                disabled={busy}
-                onClick={() => setDraft(null)}
-              >
-                ←
-              </button>
-              <span id="step2-title">
-                {draft.preset.label}
-                {draft.route === "openrouter" ? " (OpenRouter)" : ""}
-              </span>
+            <button
+              className="step2-back"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setDraft(null);
+                setError("");
+              }}
+              aria-label="返回模型列表"
+            >
+              ← 返回模型列表
+            </button>
+            <div className="model-form-heading">
+              <h3 id="step2-title">{draft.preset.label}</h3>
+              <p>
+                {custom
+                  ? "填写模型名称及服务商的连接信息。"
+                  : "确认连接方式后，应用到当前 Being。"}
+              </p>
             </div>
             <div
               className="settings-section"
@@ -467,14 +424,16 @@ export function ChatSettings({
               hidden={!custom}
             >
               <label className="field-label" htmlFor="s2-model">
-                Model
+                模型名称
               </label>
               <input
                 id="s2-model"
                 className="field-input"
+                placeholder="服务商提供的模型 ID"
                 value={draft.model}
                 onChange={(event) => update({ model: event.target.value })}
-                disabled={busy}
+                disabled={disabled}
+                autoComplete="off"
               />
             </div>
             <div
@@ -482,7 +441,13 @@ export function ChatSettings({
               id="s2-route-section"
               hidden={custom}
             >
-              <div className="toggle-group" id="s2-route">
+              <span className="field-label">连接方式</span>
+              <div
+                className="toggle-group"
+                id="s2-route"
+                role="group"
+                aria-label="连接方式"
+              >
                 {(["official", "openrouter"] as const).map((route) => (
                   <button
                     type="button"
@@ -490,10 +455,11 @@ export function ChatSettings({
                     data-val={route}
                     className={draft.route === route ? "active" : ""}
                     aria-pressed={draft.route === route}
-                    disabled={busy}
+                    disabled={disabled}
                     onClick={() =>
                       update({
                         route,
+                        apiKey: route === draft.route ? draft.apiKey : "",
                         provider:
                           route === "openrouter"
                             ? "openrouter"
@@ -505,40 +471,45 @@ export function ChatSettings({
                       })
                     }
                   >
-                    {route === "official" ? "Official" : "OpenRouter"}
+                    {route === "official" ? "服务商直连" : "OpenRouter"}
                   </button>
                 ))}
               </div>
             </div>
             <div className="settings-section">
               <label className="field-label" htmlFor="s2-provider">
-                Provider
+                服务商
               </label>
               <input
                 id="s2-provider"
                 className="field-input"
+                placeholder="例如 openai-responses"
                 readOnly={!custom}
                 value={draft.provider}
-                disabled={busy}
+                disabled={disabled}
                 onChange={(event) => update({ provider: event.target.value })}
+                autoComplete="off"
               />
             </div>
             <div className="settings-section">
               <label className="field-label" htmlFor="s2-base-url">
-                Base URL
+                接口地址
               </label>
               <input
                 id="s2-base-url"
                 className="field-input"
+                placeholder="https://…"
                 readOnly={!custom}
                 value={draft.baseUrl}
-                disabled={busy}
+                disabled={disabled}
                 onChange={(event) => update({ baseUrl: event.target.value })}
+                spellCheck={false}
+                autoComplete="off"
               />
             </div>
             <div className="settings-section">
               <label className="field-label" htmlFor="s2-api-key">
-                API Key
+                API 密钥
               </label>
               <input
                 ref={keyInput}
@@ -546,38 +517,45 @@ export function ChatSettings({
                 className="field-input"
                 type="password"
                 autoComplete="off"
+                placeholder="输入 API 密钥"
                 value={draft.apiKey}
-                disabled={busy}
+                disabled={disabled}
                 onChange={(event) => update({ apiKey: event.target.value })}
               />
-              <div id="s2-key-hint" className="hint">
-                {custom
-                  ? "Enter provider details for custom model."
+              <p id="s2-key-hint" className="hint">
+                {custom || draft.route === "openrouter"
+                  ? "填写服务商提供的密钥；已有密钥时可留空。"
                   : draft.preset.has_key === false
-                    ? `No key found for ${draft.provider}. Enter one below.`
-                    : `Key for ${draft.provider}`}
+                    ? "此服务商尚未配置密钥，请填写后应用。"
+                    : draft.preset.has_key
+                      ? "已配置密钥，留空则继续使用。"
+                      : "如需更新密钥，可在此填写。"}
+              </p>
+            </div>
+            {error && (
+              <div id="s2-error" className="step2-error" role="alert">
+                {error}
               </div>
-            </div>
-            <div id="s2-error" className="step2-error" role="alert">
-              {error}
-            </div>
+            )}
             <button
               id="s2-apply"
               type="submit"
               className="btn-apply"
-              disabled={busy}
+              disabled={disabled}
             >
-              {busy ? "Switching…" : "Apply"}
+              {busy ? "正在应用…" : "保存并使用"}
             </button>
           </form>
         )}
-        <OAuthSettings runtime={runtime} />
-        <div id="cfg-status" className={state.configStatusClass} role="status">
-          {state.configStatus}
-        </div>
-        <div className="loom-version">
-          Loom v<span id="loom-ver">1.8.0</span>
-        </div>
+        {state.configStatus && !draft && (
+          <div
+            id="cfg-status"
+            className={state.configStatusClass}
+            role="status"
+          >
+            {state.configStatus}
+          </div>
+        )}
       </div>
     </aside>
   );

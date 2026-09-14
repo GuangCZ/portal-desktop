@@ -24,6 +24,9 @@ describe('connection and credential boundary', () => {
     expect(upstream.headers.has('authorization')).toBe(false);
     for (const path of ['beings://chat/api/exec', 'beings://desktop/api/status', 'https://chat/api/status']) expect(() => upstreamRequest(new Request(path), connection)).toThrow();
     expect(() => upstreamRequest(new Request('beings://chat/api/history', { method: 'POST' }), connection)).toThrow();
+    for (const [route, method] of [['start', 'POST'], ['poll', 'GET'], ['', 'DELETE']]) {
+      expect(() => upstreamRequest(new Request('beings://chat/api/llm/oauth' + (route ? '/' + route : ''), { method }), connection)).toThrow();
+    }
   });
   it('forwards request bodies and preserves streamed chunks without buffering', async () => {
     let push!: ReadableStreamDefaultController<Uint8Array>;

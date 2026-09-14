@@ -3,8 +3,7 @@ import type { Connection } from './connection';
 const routes: Record<string, string[]> = {
   '/health': ['GET'], '/api/status': ['GET'], '/api/history': ['GET'],
   '/api/stream/active': ['GET'], '/api/chat/stream': ['POST'], '/api/stop': ['POST'],
-  '/api/llm/config': ['GET', 'PATCH'], '/api/llm/oauth/start': ['POST'],
-  '/api/llm/oauth/poll': ['GET'], '/api/llm/oauth': ['DELETE'],
+  '/api/llm/config': ['GET', 'PATCH'],
 };
 export function upstreamRequest(request: Request, connection: Connection) {
   const local = new URL(request.url);

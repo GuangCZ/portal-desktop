@@ -12,7 +12,7 @@ append('being', '打开篝火，然后看 `seeds`。\n\n```javascript\nconst saf
 const presets = [{ id: 'a', label: 'Claude Alpha', provider: 'anthropic', model: 'alpha', has_key: true }, { id: 'b', label: 'DeepSeek Beta', provider: 'deepseek', model: 'beta', has_key: false }];
 let config = { model: 'alpha', presets, thinking: 'medium', temperature: 0.7, sbs_enabled: false };
 const requests = [], patches = [];
-let active = null, heldResponse = null, rejectConfig = false, requireKey = false, stopCount = 0, oauthPolls = 0;
+let active = null, heldResponse = null, rejectConfig = false, requireKey = false, stopCount = 0, oauthRequests = 0;
 const event = (response, name, data) => response.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
@@ -29,9 +29,7 @@ const server = createServer(async (request, response) => {
     config = { ...config, ...patch, sbs_enabled: patch.sbs_enabled ? patch.sbs_enabled === 'on' : config.sbs_enabled };
     return json({ ok: true, config });
   }
-  if (url.pathname === '/api/llm/oauth/start') { oauthPolls = 0; return json({ status: 'pending', expires_in: 120 }); }
-  if (url.pathname === '/api/llm/oauth/poll') { oauthPolls++; return json({ status: 'connected' }); }
-  if (url.pathname === '/api/llm/oauth') return json({ ok: true });
+  if (url.pathname.startsWith('/api/llm/oauth')) { oauthRequests++; return json({ status: 'portal_required' }, 503); }
   if (url.pathname === '/api/stop') { stopCount++; heldResponse?.end(); heldResponse = null; return json({ ok: true }); }
   if (url.pathname === '/api/stream/active') {
     if (!active) { response.writeHead(204); response.end(); return; }
@@ -109,19 +107,36 @@ try {
   await post({ type: 'beings:chat-action', action: 'model' });
   await frame.locator('#settings-panel.active').waitFor();
   await frame.locator('#llm-current').getByText('Claude Alpha', { exact: true }).waitFor();
+  assert.equal(await frame.locator('#oauth-section').count(), 0);
+  await frame.getByRole('searchbox', { name: '搜索模型' }).fill('missing-provider');
+  await frame.getByText('没有匹配的模型，试试其他名称。').waitFor();
+  await frame.getByRole('searchbox', { name: '搜索模型' }).fill('deepseek');
+  assert.equal(await frame.locator('.llm-item').count(), 1);
+  await frame.getByRole('searchbox', { name: '搜索模型' }).fill('');
   await frame.locator('.llm-custom-link').click();
   await frame.locator('#s2-model').fill('custom-test'); await frame.locator('#s2-provider').fill('custom'); await frame.locator('#s2-base-url').fill('https://example.com/v1');
   rejectConfig = true; await frame.locator('#s2-apply').click(); await frame.locator('#s2-error').getByText(/fixture rejected/).waitFor();
   assert.equal(await frame.locator('#s2-model').inputValue(), 'custom-test');
-  rejectConfig = false; await frame.locator('.step2-back').click(); await frame.getByRole('button', { name: /^Beta/ }).click();
+  rejectConfig = false; await frame.locator('.step2-back').click(); await frame.getByRole('button', { name: /^DeepSeek Beta/ }).click();
   assert.equal(await frame.locator('#s2-provider').evaluate(el => el.readOnly), true);
+  await frame.locator('#s2-api-key').fill('official-provider-key');
+  await frame.locator('#s2-route [data-val="openrouter"]').click();
+  assert.equal(await frame.locator('#s2-api-key').inputValue(), '', 'Changing providers must not reuse the previous provider key');
+  assert.equal(await frame.locator('#s2-base-url').inputValue(), 'https://openrouter.ai/api/v1');
+  await frame.locator('#s2-route [data-val="official"]').click();
   requireKey = true; await frame.locator('#s2-apply').click(); await frame.locator('#s2-error').getByText('fixture needs key').waitFor();
   await frame.locator('#s2-api-key').fill('fixture-key'); await frame.locator('#s2-apply').click();
   await frame.locator('#llm-current').getByText('DeepSeek Beta', { exact: true }).waitFor();
   assert.equal(patches.at(-1).api_key, 'fixture-key'); requireKey = false;
+  await frame.locator('.model-parameters summary').click();
   await frame.locator('#cfg-thinking [data-val="high"]').click(); await frame.locator('#cfg-thinking [data-val="high"].active').waitFor();
-  await frame.locator('#oauth-connect-btn').click(); await frame.locator('#oauth-status').getByText('✓ ChatGPT account connected').waitFor(); assert.equal(oauthPolls, 1);
-  await frame.locator('#oauth-disconnect-btn').click(); await frame.getByRole('group').getByRole('button', { name: 'Disconnect', exact: true }).click(); await frame.locator('#oauth-connect-btn').waitFor();
+  await frame.locator('#cfg-temperature').focus(); await page.keyboard.press('Home');
+  await frame.locator('#cfg-temperature-val').getByText('0.0', { exact: true }).waitFor();
+  assert.equal(patches.at(-1).temperature, 0);
+  await frame.getByRole('button', { name: '恢复上次可用配置' }).click();
+  await frame.locator('#cfg-status').getByText('设置已更新').waitFor();
+  assert.equal(patches.at(-1).rollback, 'true');
+  assert.equal(oauthRequests, 0, 'Unsupported account authorization must never be requested');
   await frame.getByRole('button', { name: '关闭模型设置' }).click();
   await post({ type: 'beings:chat-action', action: 'being' }); await frame.locator('#soul-card.active').waitFor();
   assert.match(await frame.locator('#soul-stats').innerText(), /7/);
@@ -176,9 +191,16 @@ try {
   await page.goto(origin + '/loom.html');
   await page.getByRole('button', { name: '模型设置', exact: true }).click();
   await page.locator('#settings-panel.active').waitFor();
+  await page.locator('.llm-item').first().waitFor();
+  assert.equal(await page.locator('.llm-item').first().evaluate(button => {
+    const name = button.querySelector('.model-option-name').getBoundingClientRect();
+    const detail = button.querySelector('.model-option-detail').getBoundingClientRect();
+    return detail.top >= name.bottom && button.scrollWidth <= button.clientWidth;
+  }), true, 'Narrow model cards keep names and hints on separate rows');
+  assert.equal(await page.locator('#settings-panel').evaluate(panel => panel.scrollWidth <= panel.clientWidth), true);
   await page.getByRole('button', { name: '关闭模型设置' }).click();
   assert.deepEqual(errors, []);
-  console.log('PASS: React history/index/Markdown, settings and OAuth, attachments, live and spliced streams, stop/error cleanup, scene drafts, replay, dark/narrow layout.');
+  console.log('PASS: React history/index/Markdown, searchable model settings without unsupported OAuth, API keys and parameters, attachments, live and spliced streams, stop/error cleanup, scene drafts, replay, dark/narrow layout.');
 } finally {
   heldResponse?.end(); await browser?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
 }

@@ -34,6 +34,10 @@ The main view centers on one Being conversation. Search, model, connection, and 
 
 The browser has a separate persistent website session and no access to the client's local APIs. Chat Markdown and highlighting assets are bundled without runtime CDN scripts. Thinking and tool activity come from the current stream; details absent from server history are not reconstructed after a reload.
 
+Loom keeps synchronized conversation messages in local IndexedDB, based on [loom-local's cache](https://github.com/d5z/loom-local/blob/a18812c35d2e2322f745f841d1d94fdec6015893/loom.html#L3621). All sources returned by the configured Being's history API appear together; there is no scene filter or source grouping. Startup reads the latest 300 cached messages, including while offline, then fetches newer records using the history cursor. The initial network load retrieves the latest 100 messages; this does not backfill the Being's entire past. The render limit does not delete older cached records. Confirmed live/replay replies enter the cache through history synchronization; unfinished replies, attachment bytes and tool/thinking details are not archived.
+
+On Windows the chat database normally lives under `%APPDATA%/portal-desktop/IndexedDB` (legacy installations may use `%APPDATA%/Beings/IndexedDB`; a custom profile uses its own directory). It uses the client's persistent session, separate from the embedded website browser. This cache is not application-encrypted or a permanent backup: clearing profile/site data removes it, and unavailable storage falls back to server history. `npm run test:chat-history` checks process restart, offline recovery, mixed sources, incremental pagination and storage failures in an isolated Chromium profile.
+
 ### Reading and posting in the Town
 
 Seed Garden offers public, paginated experience browsing, server-side search, domain/tag/Kit/status filters, seed details, lineage, absorption history, and Kit experience walls. Open it from the horizontal Town shortcuts or a Grove Kit. Seeds can be quoted into the conversation; this integration does not publish or absorb seeds.

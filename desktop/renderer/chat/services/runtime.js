@@ -1,3 +1,5 @@
+import { HistoryCache } from "./history-cache";
+
 /**
  * Loom's streaming, replay and history protocol, independent of rendering.
  * Message references below are domain objects. React is the sole owner of their DOM.
@@ -134,7 +136,7 @@ export function createChatRuntime(state, options = {}) {
     try {
       const res = await fetch(apiUrl("/api/llm/config"), { cache: "no-store" });
       const cfg = await readJsonResponse(res);
-      if (!res.ok) throw new Error(cfg.error || "Failed to load config");
+      if (!res.ok) throw new Error(cfg.error || "无法读取模型设置，请检查 Being 连接。");
       if (revision !== configReadRevision) return;
       state.config = cfg;
       if (
@@ -144,7 +146,7 @@ export function createChatRuntime(state, options = {}) {
         setSbsEnabled(cfg.sbs_enabled, false);
     } catch (e) {
       if (!disposed && revision === configReadRevision)
-        setConfigStatus("✗ " + e.message, "error");
+        setConfigStatus(e.message, "error");
     } finally {
       if (revision === configReadRevision) {
         state.configLoading = false;
@@ -155,7 +157,7 @@ export function createChatRuntime(state, options = {}) {
   async function applyConfigChange(patch) {
     ++configReadRevision;
     state.configLoading = false;
-    setConfigStatus("Applying...", "applying");
+    setConfigStatus("正在应用设置…", "applying");
     try {
       const res = await fetch(apiUrl("/api/llm/config"), {
         method: "PATCH",
@@ -164,19 +166,19 @@ export function createChatRuntime(state, options = {}) {
       });
       const data = await readJsonResponse(res);
       if (data.needs_key) {
-        setConfigStatus(data.error || "API key required", "error");
+        setConfigStatus(data.error || "请填写该服务商的 API 密钥。", "error");
         return data;
       }
-      if (!res.ok || !data.ok) throw new Error(data.error || "Failed");
+      if (!res.ok || !data.ok) throw new Error(data.error || "设置未能保存，请稍后重试。");
       if (data.config) state.config = data.config;
       setConfigStatus(
-        "✓ Updated" + (data.rolled_back ? " (rolled back)" : ""),
+        data.rolled_back ? "已恢复上次可用配置" : "设置已更新",
         "success",
       );
       configStatusTimer = setTimeout(() => setConfigStatus(""), 3000);
       return data;
     } catch (e) {
-      if (!disposed) setConfigStatus("✗ " + e.message, "error");
+      if (!disposed) setConfigStatus(e.message, "error");
       return null;
     }
   }
@@ -1559,6 +1561,7 @@ export function createChatRuntime(state, options = {}) {
                 if (visibleText) updateMessage(streamMessage, visibleText);
                 else removeMessage(streamMessage);
               }
+              noteLocalEcho("being", streamText);
               streamMessage = null;
               streamText = "";
               if (data.session_id) sessionId = data.session_id;
@@ -1900,6 +1903,7 @@ export function createChatRuntime(state, options = {}) {
         lastSendFailed = true;
       } else if (userStoppedStream) {
         // 用户手动停止：内容已在屏幕上，只需推进历史游标避免下次对账重复渲染
+        noteLocalEcho("being", streamText);
         syncHistoryCursor();
         setStatus("connected");
       }
@@ -2171,6 +2175,23 @@ export function createChatRuntime(state, options = {}) {
   let lastHistorySeq = 0;
   let lastReconcileSawBeing = false;
   let reconcileInFlight = null;
+  const cacheEndpoint = location.protocol === "beings:"
+    ? params.get("history_scope") || ""
+    : API_URL;
+  const historyCache = new HistoryCache(cacheEndpoint);
+  let historyCacheSeeded = false;
+  let historyCachePending = [];
+  function cacheHistory(messages, cursor) {
+    if (disposed) return;
+    if (!historyCacheSeeded) {
+      if (historyCachePending.length >= 200) historyCachePending.shift();
+      historyCachePending.push({ messages, cursor });
+      return;
+    }
+    void historyCache.write(messages, cursor);
+    for (const batch of historyCachePending) void historyCache.write(batch.messages, batch.cursor);
+    historyCachePending = [];
+  }
 
   // 本地已经渲染、但还没被历史游标覆盖的消息。用于避免"本地回显 + 历史对账"渲染两遍。
   let localEchoes = [];
@@ -2248,28 +2269,67 @@ export function createChatRuntime(state, options = {}) {
     return reconcileInFlight;
   }
 
+  async function fetchHistory(incremental, prefetched = null) {
+    let cursor = lastHistorySeq;
+    const messages = [];
+    while (!disposed) {
+      const path = incremental ? `/api/history?limit=100&after=${cursor}` : "/api/history?limit=100";
+      const res = prefetched || await fetch(apiUrl(path), { cache: "no-store", signal: timeoutSignal(8000) });
+      prefetched = null;
+      if (!res.ok) return messages.length ? messages : null;
+      const data = await res.json();
+      const page = Array.isArray(data.messages) ? data.messages : [];
+      messages.push(...page.filter(m => !incremental || (Number(m.seq) || 0) > cursor));
+      const next = Math.max(cursor, ...page.map(m => Number(m.seq) || 0));
+      // Servers that ignore after= cannot cause an endless pagination loop.
+      if (!incremental || page.length < 100 || next <= cursor) return messages;
+      cursor = next;
+    }
+    return null;
+  }
+
   async function reconcileHistoryOnce({ full = false } = {}) {
     lastReconcileSawBeing = false;
     try {
-      // 首次调用直接吃顶部预取的结果（已经在 CDN 下载期间跑完了）
-      const res =
-        (await takePrefetch("history")) ||
-        (await fetch(apiUrl("/api/history?limit=100"), { cache: "no-store" }));
-      if (!res.ok) return 0;
-      const data = await res.json();
-      const msgs = Array.isArray(data.messages) ? data.messages : [];
-      let added = 0;
-
+      let hydrated = false;
       if (full || lastHistorySeq === 0) {
+        const cached = await historyCache.read();
+        if (disposed) return 0;
+        if (cached) {
+          resetMessages();
+          localEchoes = [];
+          await renderHistoryBatched(cached.messages);
+          lastHistorySeq = Math.max(lastHistorySeq, cached.lastSeq);
+          historyCacheSeeded = true;
+          hydrated = true;
+        }
+      }
+      const incremental = hydrated || (!full && lastHistorySeq > 0);
+      // A cached cursor needs after=, not the prefetched latest 100: an offline
+      // gap may contain more than 100 messages.
+      if (hydrated) {
+        prefetch.history?.then(res => res.body?.cancel()).catch(() => {});
+        delete prefetch.history;
+      }
+      const msgs = await fetchHistory(incremental, await takePrefetch("history"));
+      if (!msgs) return 0;
+      let added = 0;
+      let toCache = [];
+      if (disposed) return 0;
+
+      if (!incremental) {
         resetMessages();
         localEchoes = [];
-        await renderHistoryBatched(msgs);
-        added = msgs.length;
-        lastReconcileSawBeing = msgs.some(
+        toCache = msgs;
+        await renderHistoryBatched(toCache);
+        added = toCache.length;
+        lastReconcileSawBeing = toCache.some(
           (m) => !isHistoryMarker(m) && m.role !== "user",
         );
       } else {
+        if (cursorSyncInFlight) await cursorSyncInFlight;
         const fresh = msgs.filter((m) => (Number(m.seq) || 0) > lastHistorySeq);
+        toCache = fresh;
         for (const m of fresh) {
           if (isHistoryMarker(m)) {
             addBreathMarker(m.content, formatHistoryTime(m.at));
@@ -2291,6 +2351,8 @@ export function createChatRuntime(state, options = {}) {
           ...msgs.map((m) => Number(m.seq) || 0),
         );
       }
+      if (!incremental) historyCacheSeeded = true;
+      cacheHistory(toCache, lastHistorySeq);
       return added;
     } catch (e) {
       console.warn("reconcileHistory failed:", e);
@@ -2299,19 +2361,32 @@ export function createChatRuntime(state, options = {}) {
   }
 
   // live 流结束后调用：只推进游标，不渲染（内容已经在屏幕上了）
-  async function syncHistoryCursor() {
+  let cursorSyncInFlight = null;
+  function syncHistoryCursor() {
+    // Serialize metadata/reply syncs: a second stop must still fetch history
+    // after an earlier in-flight metadata request completes.
+    const pending = (cursorSyncInFlight || Promise.resolve()).then(syncHistoryCursorOnce);
+    cursorSyncInFlight = pending;
+    void pending.finally(() => {
+      if (cursorSyncInFlight === pending) cursorSyncInFlight = null;
+    });
+    return pending;
+  }
+  async function syncHistoryCursorOnce() {
+    if (disposed) return;
     try {
-      const res = await fetch(apiUrl("/api/history?limit=5"), {
-        cache: "no-store",
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      const msgs = Array.isArray(data.messages) ? data.messages : [];
+      const msgs = await fetchHistory(lastHistorySeq > 0 && historyCacheSeeded);
+      if (!msgs) return;
+      if (disposed) return;
       if (msgs.length) {
         lastHistorySeq = Math.max(
           lastHistorySeq,
           ...msgs.map((m) => Number(m.seq) || 0),
         );
+        for (const m of msgs) {
+          if (!isHistoryMarker(m)) consumeLocalEcho(m.role === "user" ? "user" : "being", m.content);
+        }
+        cacheHistory(msgs, lastHistorySeq);
       }
     } catch (_) {}
   }
@@ -2481,7 +2556,10 @@ export function createChatRuntime(state, options = {}) {
           // F3: 缓冲里可能有多个 message_stop（yield 续写）。每个都要落成独立气泡，
           // 否则追赶渲染会把两次回复和中间那条用户消息的顺序搅在一起。
           const replied = cleanContent(streamText);
-          if (replied) addMessage("being", replied, false);
+          if (replied) {
+            addMessage("being", replied, false);
+            noteLocalEcho("being", replied);
+          }
           streamText = "";
           break;
         }
@@ -2773,6 +2851,7 @@ export function createChatRuntime(state, options = {}) {
       renderTimer = null;
     }
     solidifyReplayBubble();
+    noteLocalEcho("being", streamText);
     streamMessage = null;
     streamText = "";
     removeThinkingIndicator();
@@ -2792,6 +2871,7 @@ export function createChatRuntime(state, options = {}) {
   }
 
   function finalizeReplayStream() {
+    noteLocalEcho("being", streamText);
     if (activeStreamPollTimer) clearTimeout(activeStreamPollTimer);
     activeStreamPollTimer = null;
 
@@ -2863,6 +2943,8 @@ export function createChatRuntime(state, options = {}) {
   }
   function dispose() {
     disposed = true;
+    historyCache.close();
+    historyCachePending = [];
     writerEpoch++;
     lifetime.abort();
     currentAbortController?.abort();

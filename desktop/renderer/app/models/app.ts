@@ -171,7 +171,7 @@ export class AppModel extends Store {
       this.sbsKnown = false;
       this.chatLoading = true;
       this.connection = "connecting";
-      this.chatSource = `beings://chat/?name=${encodeURIComponent(next.settings.being)}&theme=${this.theme}&revision=${crypto.randomUUID()}`;
+      this.chatSource = `beings://chat/?name=${encodeURIComponent(next.settings.being)}&history_scope=${encodeURIComponent(next.settings.endpoint)}&theme=${this.theme}&revision=${crypto.randomUUID()}`;
     }
     if (!next.settings.hasToken) {
       this.sbsKnown = false;
