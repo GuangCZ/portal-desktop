@@ -3,6 +3,21 @@ import { mountChatLinks } from './chat-links';
 (() => {
   const revision = new URLSearchParams(location.search).get('revision');
   const send = (data: Record<string, unknown>) => parent.postMessage({ ...data, revision }, '*');
+  const sbs = window as unknown as { toggleSbs: () => Promise<void>; loadSbsState: () => Promise<boolean | undefined> };
+  let sbsRequest = 0;
+  window.addEventListener('loom:sbs-state', event => {
+    const enabled: unknown = (event as CustomEvent).detail;
+    if (typeof enabled !== 'boolean') return;
+    ++sbsRequest;
+    send({ type: 'beings:sbs-state', enabled });
+  });
+  const refreshSbs = async () => {
+    const request = ++sbsRequest;
+    let enabled: boolean | undefined;
+    try { enabled = await sbs.loadSbsState(); } catch { /* Report unknown, never a default or cached value. */ }
+    if (request !== sbsRequest) return;
+    send(typeof enabled === 'boolean' ? { type: 'beings:sbs-state', enabled } : { type: 'beings:sbs-state', known: false });
+  };
   const updatePlaces = mountChatPlaces(send);
   mountChatLinks(send);
   const composer = document.getElementById('input') as HTMLTextAreaElement | null;
@@ -50,15 +65,13 @@ import { mountChatLinks } from './chat-links';
     if (event.source !== parent) return;
     const data = event.data;
     if (data?.type === 'beings:sbs-toggle') {
-      const ui = window as unknown as { toggleSbs?: () => unknown };
-      Promise.resolve(ui.toggleSbs?.()).finally(() => {
-        send({ type: 'beings:sbs-state', enabled: Boolean((window as unknown as { __loomSbsEnabled?: boolean }).__loomSbsEnabled) });
-      });
+      void (async () => {
+        try { await sbs.toggleSbs(); } finally { await refreshSbs(); }
+      })().catch(() => {});
       return;
     }
     if (data?.type === 'beings:sbs-request') {
-      const value = (window as unknown as { __loomSbsEnabled?: boolean }).__loomSbsEnabled;
-      send({ type: 'beings:sbs-state', enabled: typeof value === 'boolean' ? value : true });
+      void refreshSbs();
       return;
     }
     if (data?.type === 'beings:reading' && Number.isInteger(data.size) && data.size >= 13 && data.size <= 21) {

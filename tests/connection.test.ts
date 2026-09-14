@@ -43,6 +43,17 @@ describe('connection and credential boundary', () => {
     expect(new TextDecoder().decode((await reader.read()).value)).toContain('event: done');
     expect((await reader.read()).done).toBe(true);
   });
+  it('bypasses upstream caching when refreshing SBS configuration', async () => {
+    let enabled = false;
+    const proxy = new ChatProxy(() => connection, async (_url, options) => {
+      expect(options?.cache).toBe('no-store');
+      return Response.json({ sbs_enabled: enabled });
+    });
+    const read = async () => (await proxy.handle(new Request('beings://chat/api/llm/config'))).json();
+    expect(await read()).toEqual({ sbs_enabled: false });
+    enabled = true;
+    expect(await read()).toEqual({ sbs_enabled: true });
+  });
   it('cancels upstream requests when switching connections', async () => {
     let signal: AbortSignal | undefined;
     const proxy = new ChatProxy(() => connection, async (_url, options) => {

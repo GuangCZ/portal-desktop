@@ -40,6 +40,8 @@ frame 和 revision，传递设置、搜索、导航与引用事件。`loom.html`
 原有流程打包，不共享 React shell 的 preload。主进程、preload、Rust 引擎不依赖 React。
 详见 [渲染器维护说明](renderer/README.md)。
 
+刷新对话会作废已确认的 SBS 状态，iframe 加载后通过 `beings:sbs-request` 实际读取 `/api/llm/config`；客户端和主进程代理均禁用配置缓存。Loom 的配置读取、切换回执、重新获得焦点及重连同步，通过 `loom:sbs-state` 事件回传顶部开关。状态未经确认时禁用开关，旧读取不能覆盖更新的配置回执，也不通过本地翻转猜测服务器状态。
+
 ## 与现有项目的适配
 
 Rust 引擎源码随 `heart-portal/` 目录一起版本管理，客户端与引擎由同一次提交记录，CI 和本机构建读取同一版本。来源见根目录 UPSTREAM.md；发布包只包含编译后的 Portal 可执行文件和许可，不包含源码或 Cargo 构建缓存。

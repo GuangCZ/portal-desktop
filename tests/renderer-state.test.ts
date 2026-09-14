@@ -95,6 +95,45 @@ const settle = async () => {
 };
 afterEach(() => vi.useRealTimers());
 describe("React desktop state lifecycle", () => {
+  it("invalidates SBS on refresh and waits for confirmed state instead of toggling optimistically", () => {
+    const app = new AppModel(api().value), post = vi.fn();
+    app.post = post;
+    app.applySnapshot(state());
+    app.frameLoaded();
+    expect(post).toHaveBeenCalledWith({ type: 'beings:sbs-request' });
+    expect(app.sbsKnown).toBe(false);
+    app.setSbsEnabled(false);
+    app.applySnapshot(state());
+    expect(app.sbsKnown).toBe(true);
+    const source = app.chatSource;
+    app.applySnapshot(state(), true);
+    expect(app.chatSource).not.toBe(source);
+    expect(app.sbsKnown).toBe(false);
+    post.mockClear();
+    app.toggleSbs();
+    expect(post).not.toHaveBeenCalled();
+    app.frameLoaded();
+    expect(post).toHaveBeenCalledWith({ type: 'beings:sbs-request' });
+    app.setSbsEnabled(false);
+    post.mockClear();
+    app.toggleSbs();
+    app.toggleSbs();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith({ type: 'beings:sbs-toggle' });
+    expect(app.sbsEnabled).toBe(false);
+    expect(app.sbsKnown).toBe(false);
+    app.setSbsEnabled(true);
+    expect(app.sbsKnown).toBe(true);
+    expect(app.sbsEnabled).toBe(true);
+    app.setSbsEnabled();
+    expect(app.sbsKnown).toBe(false);
+    app.setSbsEnabled(true);
+    const disconnected = state();
+    disconnected.settings.hasToken = false;
+    app.applySnapshot(disconnected);
+    expect(app.sbsKnown).toBe(false);
+  });
+
   it("refreshes each place navigation and clears pending details when changing features", async () => {
     const pending = deferred<TownResult>();
     const query = vi.fn<DesktopAPI['town']>(async query => {

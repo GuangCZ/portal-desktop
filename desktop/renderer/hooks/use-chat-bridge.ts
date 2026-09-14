@@ -44,8 +44,9 @@ export function useChatBridge(
       }
       if (message.revision !== new URL(target.src).searchParams.get("revision"))
         return;
-      if (message.type === "beings:sbs-state" && typeof message.enabled === "boolean") {
-        app.setSbsEnabled(message.enabled);
+      if (message.type === "beings:sbs-state") {
+        if (typeof message.enabled === "boolean") app.setSbsEnabled(message.enabled);
+        else if (message.known === false) app.setSbsEnabled();
         return;
       }
       if (

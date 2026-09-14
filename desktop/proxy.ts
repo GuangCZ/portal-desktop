@@ -44,7 +44,7 @@ export class ChatProxy {
     const timeout = setTimeout(abort, 30_000);
     try {
       const response = await this.fetchUpstream(upstream.url, {
-        method: request.method, headers: upstream.headers, redirect: 'error', credentials: 'omit',
+        method: request.method, headers: upstream.headers, redirect: 'error', credentials: 'omit', cache: 'no-store',
         body: ['POST', 'PATCH'].includes(request.method) ? await request.arrayBuffer() : undefined,
         signal: controller.signal,
       });

@@ -113,12 +113,12 @@ export function Topbar({ model }: { model: AppModel }) {
           {app.snapshot?.settings.being || "Being"}
         </span>
         <button
-          className={`sbs-header-switch${app.sbsEnabled ? " enabled" : ""}`}
+          className={`sbs-header-switch${app.sbsKnown && app.sbsEnabled ? " enabled" : ""}`}
           type="button"
           aria-label="切换 SBS 自主醒来"
-          aria-pressed={app.sbsEnabled}
-          title={app.sbsEnabled ? "SBS 自主醒来：开" : "SBS 自主醒来：关"}
-          disabled={!hasToken}
+          aria-pressed={app.sbsKnown ? app.sbsEnabled : undefined}
+          title={app.sbsKnown ? (app.sbsEnabled ? "SBS 自主醒来：开" : "SBS 自主醒来：关") : "SBS 状态未同步，可刷新重试"}
+          disabled={!hasToken || !app.sbsKnown || app.chatLoading}
           onClick={() => app.toggleSbs()}
         >
           <span className="sbs-header-dot" aria-hidden="true" />

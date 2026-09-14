@@ -168,11 +168,13 @@ export class AppModel extends Store {
     this.snapshot = next;
     this.workspace.snapshot(next);
     if (next.settings.hasToken && (!this.chatSource || reload)) {
+      this.sbsKnown = false;
       this.chatLoading = true;
       this.connection = "connecting";
       this.chatSource = `beings://chat/?name=${encodeURIComponent(next.settings.being)}&theme=${this.theme}&revision=${crypto.randomUUID()}`;
     }
     if (!next.settings.hasToken) {
+      this.sbsKnown = false;
       this.chatSource = "";
       this.chatLoading = false;
       this.connection = "";
@@ -192,14 +194,14 @@ export class AppModel extends Store {
     this.changed();
   }
   toggleSbs() {
-    if (!this.snapshot?.settings.hasToken) return;
-    this.sbsEnabled = !this.sbsEnabled;
+    if (!this.snapshot?.settings.hasToken || !this.sbsKnown || this.chatLoading) return;
+    this.sbsKnown = false;
     this.post({ type: "beings:sbs-toggle" });
     this.changed();
   }
-  setSbsEnabled(enabled: boolean) {
-    this.sbsEnabled = enabled;
-    this.sbsKnown = true;
+  setSbsEnabled(enabled?: boolean) {
+    if (typeof enabled === "boolean") this.sbsEnabled = enabled;
+    this.sbsKnown = typeof enabled === "boolean";
     this.changed();
   }
   postAppearance() {

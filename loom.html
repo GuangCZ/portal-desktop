@@ -1301,8 +1301,9 @@ async function readJsonResponse(res) {
 }
 
 async function loadLlmConfig() {
+  const sbsRevision = sbsConfigRevision;
   try {
-    const res = await fetch(apiUrl('/api/llm/config'));
+    const res = await fetch(apiUrl('/api/llm/config'), { cache: 'no-store' });
     const cfg = await readJsonResponse(res);
     if (!res.ok) throw new Error(cfg.error || 'Failed to load config');
     renderLlmStep1(cfg.model, cfg.presets);
@@ -1314,7 +1315,7 @@ async function loadLlmConfig() {
     tempVal.textContent = Number(t).toFixed(1);
     // Someone may have flipped SBS elsewhere (attune, another Loom tab) —
     // resync the dot without animating a change the human did not just make.
-    if (typeof cfg.sbs_enabled === 'boolean') setSbsEnabled(cfg.sbs_enabled, false);
+    if (sbsRevision === sbsConfigRevision && typeof cfg.sbs_enabled === 'boolean') setSbsEnabled(cfg.sbs_enabled, false);
   } catch (e) {
     setConfigStatus('✗ ' + e.message, 'error');
   }
@@ -1708,6 +1709,8 @@ let sbsEnabled = true;
 let sbsTransition = '';   // '' | 'waking' | 'sleeping'
 let sbsTransitionTimer = null;
 let sbsToggling = false;
+let sbsConfigRevision = 0;
+let sbsLoading = null;
 
 function applyDotClass() {
   const base = effectiveDotClass();
@@ -1729,6 +1732,8 @@ function applyDotClass() {
 function setSbsEnabled(enabled, animate) {
   const changed = enabled !== sbsEnabled;
   sbsEnabled = enabled;
+  sbsConfigRevision++;
+  window.dispatchEvent(new CustomEvent('loom:sbs-state', { detail: enabled }));
   clearTimeout(sbsTransitionTimer);
   if (!animate || !changed) {
     sbsTransition = '';
@@ -1753,21 +1758,35 @@ async function toggleSbs() {
     const data = await applyConfigChange({ sbs_enabled: next ? 'on' : 'off' });
     // Trust the server's echo, not our optimistic guess: a rejected patch must
     // leave the dot showing what the being is actually doing.
-    if (data && data.ok && data.config) {
-      setSbsEnabled(!!data.config.sbs_enabled, true);
+    if (data && data.ok && typeof data.config?.sbs_enabled === 'boolean') {
+      setSbsEnabled(data.config.sbs_enabled, true);
     }
   } finally {
     sbsToggling = false;
   }
 }
 
-async function loadSbsState() {
-  try {
-    const res = await fetch(apiUrl('/api/llm/config'));
-    if (!res.ok) return;
-    const cfg = await readJsonResponse(res);
-    if (typeof cfg.sbs_enabled === 'boolean') setSbsEnabled(cfg.sbs_enabled, false);
-  } catch (_) {}
+function loadSbsState() {
+  // Initial loading and the desktop refresh can ask together. Share that read,
+  // and never let an older response undo a newer confirmed config change.
+  if (sbsLoading) return sbsLoading;
+  const revision = sbsConfigRevision;
+  sbsLoading = (async () => {
+    try {
+      const res = await fetch(apiUrl('/api/llm/config'), { cache: 'no-store' });
+      if (!res.ok) return;
+      const cfg = await readJsonResponse(res);
+      if (revision !== sbsConfigRevision) return sbsEnabled;
+      if (typeof cfg.sbs_enabled !== 'boolean') return;
+      setSbsEnabled(cfg.sbs_enabled, false);
+      return cfg.sbs_enabled;
+    } catch (_) {
+      return undefined;
+    } finally {
+      sbsLoading = null;
+    }
+  })();
+  return sbsLoading;
 }
 
 function setStatus(state) {
@@ -3334,6 +3353,7 @@ function scheduleHealth() {
 
 // 重连之后的恢复——不再无脑 loadHistory() 清屏重渲染
 async function onReconnected({ restarted = false } = {}) {
+  void loadSbsState();
   if (restarted) {
     // 进程重启 → 在途 stream 必死，本地状态全部作废
     console.warn('server restarted (commit changed), abandoning in-flight stream');
@@ -3381,10 +3401,11 @@ function abandonLiveStream() {
 
 let lastRefreshAt = 0;
 async function refreshOnRegainedAttention() {
-  if (isStreaming || pendingRecovery) return;
   const now = Date.now();
   if (now - lastRefreshAt < 1500) return;
   lastRefreshAt = now;
+  void loadSbsState();
+  if (isStreaming || pendingRecovery) return;
   await reconcileHistory();
   if (!isStreaming) await checkActiveStream();
 }

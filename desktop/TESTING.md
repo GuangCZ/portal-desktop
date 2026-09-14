@@ -13,6 +13,7 @@
 | 类型检查 | 桌面 IPC、设置、渲染器与后台服务的类型契约 | `npm run typecheck` |
 | 私信名称与小镇入口 | 真实 React/导航组件，本地 fixture：隐藏 ID、精确回复地址、横向入口展开/收起、键盘、窄屏、草稿保留 | `npm run test:town-names` |
 | Seed Garden / 弹窗切换 | 公开阅读、筛选、派生关系、经验墙、卷轴一致的链接栏；弹窗内切换、每次刷新、旧响应隔离、窄屏深色排版 | `npm run test:seed-garden` |
+| SBS 状态同步 | 真实 Loom 与桌面桥接、本地配置接口；刷新重新读取、慢响应、外部修改、切换失败、旧响应隔离与重试恢复 | `npm run test:sbs-refresh` |
 | Town SDK 协议界面 | 模拟配对、真实 SSE hello、三类消息 via 标记、发送身份及自身私信拦截；不向真实 Town 写入 | `npm run test:town-sdk` |
 | 客户端生命周期 | 关闭隐藏、菜单/再次启动恢复原窗口、明确退出；未连接 Being 时操作客户端自启开关（系统登录项 API 使用 fixture，不修改用户登录项） | `npm run test:client-lifecycle` |
 | Portal 窗口生命周期 | 关闭窗口后仍能调用真实 Portal、恢复原窗口、网络重连不重启引擎、明确停止 | `npm run test:portal-e2e` |
@@ -29,6 +30,8 @@
 `test:town-names` 使用无头 Chrome，不打开日常客户端；默认需要本机安装 Google Chrome，也可通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定 Chromium。截图写入 `test-results/town-names.png` 和 `test-results/chat-places-*.png`。
 
 `test:seed-garden` 使用相同的无头 Chrome 配置，在本地 fixture 中验证真实组件，截图为 `test-results/seed-garden.png` 与 `test-results/seed-garden-narrow.png`。`tests/seeds.test.ts` 随 `npm test` 检查固定公开路由、筛选参数编码、凭据隔离、深链接和过期详情响应。
+
+`test:sbs-refresh` 会先生成最新 Loom 资源，再用无头 Chrome 加载本地 HTTP fixture。使用真实顶部刷新按钮和 SBS 开关，只读写模拟配置，不连接真实 Being。与其他 Chrome fixture 一样，可通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定浏览器路径。
 
 ## CI 接入
 

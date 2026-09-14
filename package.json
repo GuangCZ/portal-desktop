@@ -24,6 +24,7 @@
     "test:town-sdk": "node tests/town-sdk.mjs",
     "test:town-names": "node tests/town-names.mjs",
     "test:seed-garden": "node tests/seed-garden.mjs",
+    "test:sbs-refresh": "npm run prepare:desktop && node tests/sbs-refresh.mjs",
     "test:browser": "node tests/browser-e2e.mjs"
   },
   "devDependencies": {
