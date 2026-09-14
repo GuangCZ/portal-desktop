@@ -95,7 +95,7 @@ try {
   await page.locator('#input').fill('本地记录验证'); await page.locator('#send-btn').click();
   await page.getByText('已持久化的流式回复', { exact: true }).waitFor();
   const initial = await waitCache(102);
-  assert.equal(sent[0].scene_id, undefined, 'No new source routing is imposed on sending');
+  assert.equal(sent[0].scene_id, undefined, 'This standalone browser fixture bypasses the desktop proxy that adds room metadata');
   assert.equal(JSON.stringify(initial).includes('must-not-be-cached'), false);
   assert.equal(JSON.stringify(initial).includes('not-history-fields'), false);
   assert.ok(initial.messages.some(m => m.scene_id === 'town-mail'));

@@ -50,6 +50,18 @@ DOM 引用仅用于焦点、原生 dialog、动画、滚动、选区测量和浏
 
 刷新对话会作废已确认的 SBS 状态，iframe 加载后通过 `beings:sbs-request` 实际读取 `/api/llm/config`；客户端和主进程代理均禁用配置缓存。Loom 的配置读取、切换回执、重新获得焦点及重连同步，通过运行时回调与 `beings:sbs-state` 消息回传顶部开关。状态未经确认时禁用开关，旧读取不能覆盖更新的配置回执，也不通过本地翻转猜测服务器状态。
 
+## 消息来源场景（sw 规范）
+
+字段结构参考 [loom-local a18812c 的发送实现](https://github.com/d5z/loom-local/blob/a18812c35d2e2322f745f841d1d94fdec6015893/loom.html#L3160)；上游普通发送和思考中追加都携带房间标识及客户端元信息。
+
+`main/chat/proxy.ts` 在所有 `POST /api/chat/stream` 请求的 JSON 顶层附加 `scene_id` 与 `scene_meta`，覆盖普通发送、附件、思考中追加和重试。`scene_id` 为 `desktop-<UUID>`，由 `main/chat/scene.ts` 首次生成并保存在当前客户端配置目录的 `chat-scene.json`；重启、升级、切换 Being、切换页面与修改 Portal 名称都沿用该房间，不同配置目录分别生成标识。元信息为 `{ client: "portal-desktop/<实际客户端版本>", scene_label: "桌面·<设备名>" }`。
+
+场景字段不添加到 `message` 正文，不携带协议提示、格式要求或要求 Being 翻译回执。服务端 SSE `meta` 原样透传，不渲染为聊天正文。历史仍统一展示服务端返回的所有来源。标识文件不可读、损坏或无法保存时保留原文件并展示启动提示，本次使用不带场景字段的旧协议。
+
+此协议报告消息来自哪个客户端房间。`renderer/shared/models/scene.ts` 中的页面、筛选和选中对象仍是本地观察，不随这两个字段上传；完整页面环境快照及 Heart 接收回执的讨论见 [共同工作空间](SHARED-WORKSPACE.md)。
+
+对话左上角以“桌面”短标签标明当前场景，点击可查看完整设备名、场景 ID、客户端版本并复制 ID。界面通过现有 snapshot IPC 读取主进程发送代理使用的同一份 `chatScene`，不在界面另行生成标识。此处说明消息将携带的来源，不将配置成功或发送成功显示为 Being 已感知；场景配置不可用时明确显示不可用。
+
 ## 与现有项目的适配
 
 Rust 引擎源码随 `heart-portal/` 目录一起版本管理，客户端与引擎由同一次提交记录，CI 和本机构建读取同一版本。来源见根目录 UPSTREAM.md；发布包只包含编译后的 Portal 可执行文件和许可，不包含源码或 Cargo 构建缓存。

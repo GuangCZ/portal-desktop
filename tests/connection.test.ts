@@ -31,17 +31,20 @@ describe('connection and credential boundary', () => {
   it('forwards request bodies and preserves streamed chunks without buffering', async () => {
     let push!: ReadableStreamDefaultController<Uint8Array>;
     let captured: RequestInit | undefined;
+    const scene = { scene_id: 'desktop-fixture', scene_meta: { client: 'portal-desktop/0.1.2', scene_label: '桌面·PC' } };
     const proxy = new ChatProxy(() => connection, async (_url, options) => {
       captured = options;
       return new Response(new ReadableStream({ start(controller) { push = controller; } }), { headers: { 'Content-Type': 'text/event-stream', 'Set-Cookie': 'private=1' } });
-    });
-    const response = await proxy.handle(new Request('beings://chat/api/chat/stream', { method: 'POST', body: JSON.stringify({ message: '你好', attachments: [{ data: 'YWJj', media_type: 'text/plain' }] }) }));
-    expect(JSON.parse(new TextDecoder().decode(captured!.body as ArrayBuffer)).message).toBe('你好');
+    }, scene);
+    const body = { message: '你好\n这是一条普通消息。', session_id: 'session-fixture', attachments: [{ data: 'YWJj', media_type: 'text/plain' }] };
+    const response = await proxy.handle(new Request('beings://chat/api/chat/stream', { method: 'POST', body: JSON.stringify({ ...body, scene_id: 'stale-room', scene_meta: { client: 'stale-client' } }) }));
+    expect(await new Request('https://fixture.test', captured).json()).toEqual({ ...body, ...scene });
     expect(captured!.redirect).toBe('error');
     expect(response.headers.has('set-cookie')).toBe(false);
     const reader = response.body!.getReader();
-    push.enqueue(new TextEncoder().encode('event: meta\ndata: {}\n\n'));
-    expect(new TextDecoder().decode((await reader.read()).value)).toContain('event: meta');
+    const meta = 'event: meta\ndata: {"scene_id":"desktop-fixture","trace_id":"trace-fixture"}\n\n';
+    push.enqueue(new TextEncoder().encode(meta));
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(meta);
     push.enqueue(new TextEncoder().encode('event: done\ndata: {}\n\n')); push.close();
     expect(new TextDecoder().decode((await reader.read()).value)).toContain('event: done');
     expect((await reader.read()).done).toBe(true);

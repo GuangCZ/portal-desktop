@@ -20,9 +20,10 @@ import { installerEvent, installerTarget, handleInstallerEvent } from './updates
 import { BackgroundPortal } from './portal/background';
 import { KitInstaller } from './kits/install';
 import { ChatProxy } from './chat/proxy';
+import { loadDesktopScene } from './chat/scene';
 import { verifyBeingConnection } from './chat/ready';
 import { redact } from './chat/connection';
-import type { SaveSettings } from '../shared/types';
+import type { ChatScene, SaveSettings } from '../shared/types';
 import { TownLive } from './town/live';
 import { TownClient, TownCredentials, TOWN_ORIGIN } from './town/client';
 import { registerTownIpc } from './town/ipc';
@@ -143,7 +144,11 @@ async function ready() {
   background = new BackgroundPortal(directory);
   await background.discover(store.settings, store.connection);
   if (!background.state.supported) store.settings.backgroundEnabled = false;
-  proxy = new ChatProxy(() => store.connection, net.fetch.bind(net) as typeof fetch);
+  let chatScene: ChatScene | undefined;
+  let chatSceneNotice: string | undefined;
+  try { chatScene = await loadDesktopScene(directory, app.getVersion(), os.hostname()); }
+  catch { chatSceneNotice = '桌面场景标识未能读取或保存，本次聊天暂不附带场景信息。请检查客户端配置目录后重启。'; }
+  proxy = new ChatProxy(() => store.connection, net.fetch.bind(net) as typeof fetch, chatScene);
   const assets = app.isPackaged ? path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`) : path.resolve('desktop/generated');
   registerLocalProtocol(assets, proxy);
   configureLocalSession();
@@ -286,7 +291,7 @@ async function ready() {
   handle('beings:check-updates', showUpdates);
   handle('beings:cancel-update', () => { updateDownload?.abort(); });
   handle('beings:update-state', () => updates.state);
-  const snapshot = () => ({ settings: store.settings, portal: portal.state, background: background.state, notice: startupNotice });
+  const snapshot = () => ({ settings: store.settings, portal: portal.state, background: background.state, chatScene, notice: [startupNotice, chatSceneNotice].filter(Boolean).join('\n') || undefined });
   const verifyConnection = async () => {
     await reusePreviousConfig();
     await verifyBeingConnection(store.connection, net.fetch.bind(net) as typeof fetch);

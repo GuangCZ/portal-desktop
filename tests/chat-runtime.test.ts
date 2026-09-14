@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatState } from "../desktop/renderer/chat/models/chat";
 import { createChatRuntime } from "../desktop/renderer/chat/services/runtime";
+import { ChatProxy } from "../desktop/main/chat/proxy";
+import { parseConnection } from "../desktop/main/chat/connection";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
@@ -119,6 +121,56 @@ describe("React chat runtime lifecycle", () => {
     expect(state.sbsEnabled).toBe(false);
     expect(state.sbsKnown).toBe(true);
     runtime.dispose();
+  });
+
+  it("sends the same desktop room through ordinary, retry and splice paths without rendering meta as conversation", async () => {
+    vi.stubGlobal("location", new URL("beings://chat/loom.html"));
+    const scene = { scene_id: "desktop-fixture", scene_meta: { client: "portal-desktop/0.1.2", scene_label: "桌面·PC" } };
+    const sent: Record<string, unknown>[] = [];
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const proxy = new ChatProxy(
+      () => parseConnection("https://fixture.test/alice/?token=fixture"),
+      async (url, init) => {
+        if (!String(url).includes("/chat/stream")) return response({ messages: [] });
+        sent.push(await new Request("https://fixture.test", init).json());
+        if (sent.length === 1) return new Response('event: content_block_delta\ndata: {"delta":{"text":"第一条回复"}}\n\nevent: message_stop\ndata: {"session_id":"session-fixture"}\n\n', { headers: { "Content-Type": "text/event-stream" } });
+        if (sent.length === 2) return new Response(null, { status: 503 });
+        if (sent.length === 4) return new Response(null, { status: 202 });
+        return new Response(new ReadableStream({
+          start(controller) {
+            stream = controller;
+            controller.enqueue(new TextEncoder().encode('event: meta\ndata: {"stream_id":"stream-fixture","scene_id":"desktop-fixture","trace_id":"trace-fixture"}\n\nevent: content_block_delta\ndata: {"delta":{"text":"正常回复"}}\n\n'));
+          },
+        }), { headers: { "Content-Type": "text/event-stream" } });
+      },
+      scene,
+    );
+    vi.stubGlobal("fetch", (url: string, init: RequestInit) => proxy.handle(new Request(url, init)));
+    const state = new ChatState(), runtime = createChatRuntime(state);
+    try {
+      // An ordinary completed request, then a retrying request held open for a splice.
+      await runtime.send("第一条");
+      const sending = runtime.send("继续讨论");
+      await flush();
+      expect(sent).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sent).toHaveLength(3);
+      await runtime.send("再补充一点", [{ name: "notes.txt", type: "text/plain", size: 3, base64: "YWJj" }]);
+      expect(sent).toEqual([
+        { message: "第一条", ...scene },
+        { message: "继续讨论", session_id: "session-fixture", ...scene },
+        { message: "继续讨论", session_id: "session-fixture", ...scene },
+        { message: "再补充一点", session_id: "session-fixture", attachments: [{ media_type: "text/plain", data: "YWJj" }], ...scene },
+      ]);
+      stream.enqueue(new TextEncoder().encode('event: message_stop\ndata: {}\n\n'));
+      stream.close();
+      await sending;
+      expect(state.items.some(item => item.kind === "message" && item.text === "正常回复")).toBe(true);
+      expect(JSON.stringify(state.items)).not.toMatch(/desktop-fixture|trace-fixture|scene_meta/);
+    } finally {
+      runtime.dispose();
+      proxy.abortAll();
+    }
   });
 });
 

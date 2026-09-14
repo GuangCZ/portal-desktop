@@ -1,4 +1,5 @@
 import type { Connection } from './connection';
+import type { ChatScene } from '../../shared/types';
 
 const routes: Record<string, string[]> = {
   '/health': ['GET'], '/api/status': ['GET'], '/api/history': ['GET'],
@@ -25,7 +26,7 @@ export function upstreamRequest(request: Request, connection: Connection) {
 
 export class ChatProxy {
   private requests = new Set<AbortController>();
-  constructor(private getConnection: () => Connection | null, private fetchUpstream: typeof fetch) {}
+  constructor(private getConnection: () => Connection | null, private fetchUpstream: typeof fetch, private scene?: ChatScene) {}
   abortAll() { for (const controller of this.requests) controller.abort(); this.requests.clear(); }
   async handle(request: Request): Promise<Response> {
     const connection = this.getConnection();
@@ -42,9 +43,24 @@ export class ChatProxy {
     // Header timeout only. Long-running chat streams must remain open.
     const timeout = setTimeout(abort, 30_000);
     try {
+      let body: ArrayBuffer | string | undefined = ['POST', 'PATCH'].includes(request.method) ? await request.arrayBuffer() : undefined;
+      if (this.scene && request.method === 'POST' && new URL(request.url).pathname === '/api/chat/stream') {
+        let message;
+        try {
+          message = JSON.parse(new TextDecoder().decode(body as ArrayBuffer));
+          if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error('Invalid chat body');
+        } catch {
+          clearTimeout(timeout); cleanup();
+          return Response.json({ error: '无效的聊天请求。' }, { status: 400 });
+        }
+        // All desktop sends (including splices and retries) report the same room.
+        // Scene protocol fields never become part of the user's message text.
+        body = JSON.stringify({ ...message, ...this.scene });
+        upstream.headers.set('content-type', 'application/json');
+      }
       const response = await this.fetchUpstream(upstream.url, {
         method: request.method, headers: upstream.headers, redirect: 'error', credentials: 'omit', cache: 'no-store',
-        body: ['POST', 'PATCH'].includes(request.method) ? await request.arrayBuffer() : undefined,
+        body,
         signal: controller.signal,
       });
       clearTimeout(timeout);

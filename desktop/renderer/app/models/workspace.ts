@@ -134,7 +134,7 @@ export class WorkspaceModel extends Store {
         message.ok === true ? "对话请求已被接受" : "对话请求未确认",
         envelope.environment.title,
         message.ok === true
-          ? "Heart 尚未接收环境元信息"
+          ? "页面环境快照仅保存在本机"
           : "请查看对话中的请求结果",
       );
       if (message.ok === true && message.hasSceneDraft) this.frozen = null;

@@ -40,7 +40,8 @@ export interface SaveSettings {
 export type PortalPhase = 'running' | 'stopped' | 'starting' | 'connected' | 'reconnecting' | 'stopping' | 'external' | 'error';
 export interface PortalState { phase: PortalPhase; pid?: number; managed?: boolean; runtimePath?: string; conflict?: boolean; message: string; logs: string[] }
 export interface BackgroundState { supported: boolean; installed: boolean; enabled: boolean; running: boolean; existing: boolean; label?: string; pid?: number; message: string }
-export interface Snapshot { settings: Settings; portal: PortalState; background?: BackgroundState; notice?: string }
+export interface ChatScene { scene_id: string; scene_meta: { client: string; scene_label: string } }
+export interface Snapshot { settings: Settings; portal: PortalState; background?: BackgroundState; chatScene?: ChatScene; notice?: string }
 export interface ClientStartup { supported: boolean; enabled: boolean; message: string }
 export interface BrowserState { open: boolean; address: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean; error?: string }
 export interface DiagnosticReport { version: string; build: string; platform: string; pid: number; startedAt: string; checkedAt: string; checks: { name: string; status: 'ok' | 'warning' | 'error'; detail: string }[]; logs: string[] }

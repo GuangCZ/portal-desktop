@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AppModel } from "../models/app";
 import { useModel } from "../../shared/hooks/use-model";
+import { ChatSceneIndicator } from "./chat-scene";
 export function Topbar({ model }: { model: AppModel }) {
   const app = useModel(model);
   const [expanded, setExpanded] = useState(false),
@@ -119,6 +120,14 @@ export function Topbar({ model }: { model: AppModel }) {
   const label = labels[app.connection] || "尚未连接";
   return (
     <header className="topbar">
+      <ChatSceneIndicator
+        scene={app.snapshot?.chatScene}
+        connected={hasToken}
+        onCopy={(id) => void app.run(async () => {
+          await app.api.copyText(id);
+          app.toast("场景 ID 已复制");
+        })}
+      />
       <div className="pair-name">
         <span className="pair-human">你</span>
         <span className="pair-link" aria-hidden="true">
