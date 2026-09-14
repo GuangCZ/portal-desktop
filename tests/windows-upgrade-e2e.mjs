@@ -89,6 +89,36 @@ async function clients() {
     ConvertTo-Json -InputObject $items -Compress
   `));
 }
+async function assertSingleClientWindow(pid) {
+  // A single Electron main process can still own two visible BrowserWindows.
+  // Count native windows as well as processes after each automatic launch.
+  const count = await powershell(`
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class PortalTestWindows {
+  delegate bool Visitor(IntPtr window, IntPtr data);
+  [DllImport("user32.dll")] static extern bool EnumWindows(Visitor visitor, IntPtr data);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder name, int length);
+  public static int Count(uint process) {
+    int count = 0;
+    EnumWindows((window, data) => {
+      uint owner; GetWindowThreadProcessId(window, out owner);
+      var name = new StringBuilder(256); GetClassName(window, name, name.Capacity);
+      if (owner == process && IsWindowVisible(window) && name.ToString() == "Chrome_WidgetWin_1") count++;
+      return true;
+    }, IntPtr.Zero);
+    return count;
+  }
+}
+'@
+[PortalTestWindows]::Count(${pid})
+  `);
+  assert.equal(Number(count), 1, `Client ${pid} must own exactly one visible window.`);
+}
 try {
   await Promise.all([mkdir(workspace), mkdir(kits)]);
   const baseline = path.join(root, 'baseline'), unpacked = path.join(root, 'asar');
@@ -104,11 +134,12 @@ try {
   await buildWindowsInstaller(baseline, baselineOutput, previous, false);
   await runProcess(path.join(baselineOutput, `portal-desktop-${previous}-windows-x64-Setup.exe`), [`/D=${installation.installedRoot}`], env);
   console.log('NSIS installation completed; checking automatic startup.');
-  await until('NSIS automatically opens the installed client window', async () => {
+  const firstClient = await until('NSIS automatically opens the installed client window', async () => {
     const opened = await clients();
-    return opened.length === 1 && opened[0].MainWindowHandle !== 0;
+    return opened.length === 1 && opened[0].MainWindowHandle !== 0 ? opened[0] : false;
   });
   await until('automatic startup retains the isolated profile', () => access(profile).then(() => true, () => false));
+  await assertSingleClientWindow(firstClient.ProcessId);
   await runProcess(installed(), ['--quit-for-update'], env, 30_000);
   await until('baseline client closes before controlled test launch', async () => (await clients()).length === 0);
   assert.equal(JSON.parse(asar.extractFile(path.join(path.dirname(installed(previous)), 'resources/app.asar'), 'package.json').toString()).version, previous);
@@ -183,6 +214,7 @@ try {
   assert.notEqual(execution.isError, true); assert(JSON.stringify(execution).includes('portal-upgrade-ok'));
   await pause(6000);
   assert.deepEqual((await clients()).map(p => p.ProcessId), [upgradedPid]);
+  await assertSingleClientWindow(upgradedPid);
   assert.equal((await json(path.join(service.root, '.portal-connection-status.json'))).pid, state.pid);
   const requests = (await readFile(path.join(root, 'requests.log'), 'utf8')).trim().split('\n');
   assert.equal(requests.length, 3);
@@ -202,6 +234,7 @@ try {
   assert.throws(() => process.kill(priorPortal, 0));
   assert.equal(await readFile(configPath, 'utf8'), config);
   assert.equal(await readFile(path.join(profile, 'retained.txt'), 'utf8'), 'Keep user profile');
+  await assertSingleClientWindow(upgradedPid);
   console.log('PASS: manually opening NSIS while the client and Portal run gracefully stops both, reinstalls, and automatically restores the same profile and Portal.');
   passed = true;
 } catch (error) {
