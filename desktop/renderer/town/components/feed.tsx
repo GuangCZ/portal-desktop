@@ -12,6 +12,8 @@ import {
 import { TownModel, list, str, type Data } from "../models/town";
 import { sceneExcerpt } from "../../shared/models/scene";
 import { Markdown, markdownText } from "../../shared/components/markdown";
+import { collectMentionNames, mentionText, type MentionNames } from '../models/mentions';
+import { MentionText } from './mention-text';
 export function TownFeed({
   town,
   data,
@@ -35,6 +37,10 @@ export function TownFeed({
     () => feedMessages(list(data, "messages"), { me, mail }),
     [data, me, mail],
   );
+  const mentionNames = useMemo(() => collectMentionNames([
+    ...list(data, 'messages'),
+    { town_id: town.me, display: town.live?.display },
+  ], town.mentionNames), [data, town.mentionNames, town.me, town.live?.display]);
   const authors = useMemo(
     () =>
       [
@@ -172,7 +178,7 @@ export function TownFeed({
           return (
             <Message
               key={id}
-              {...{ message, town, mail }}
+              {...{ message, town, mail, mentionNames }}
               selected={selected === id}
               onSelect={() => {
                 setSelected(id);
@@ -216,12 +222,14 @@ function Message({
   message: m,
   town,
   mail,
+  mentionNames,
   selected,
   onSelect,
 }: {
   message: FeedMessage;
   town: TownModel;
   mail?: "all" | "inbox" | "sent";
+  mentionNames: MentionNames;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -244,14 +252,15 @@ function Message({
   };
   const snippet = useMemo(
     () =>
-      markdownText(m.content)
+      markdownText(m.content, text => mentionText(text, mentionNames))
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, 240),
-    [m.content],
+    [m.content, mentionNames],
   );
   const body = (
-    <Markdown className="reading-text social-body" content={m.content} />
+    <Markdown className="reading-text social-body" content={m.content}
+      renderText={text => <MentionText text={text} names={mentionNames} />} />
   );
   return (
     <article
@@ -299,8 +308,7 @@ function Message({
               {replyAuthor}
             </strong>
             <span>
-              {str(m.entry.reply_to_preview).slice(0, 500) ||
-                "原消息预览不可用"}
+              <MentionText text={str(m.entry.reply_to_preview).slice(0, 500) || "原消息预览不可用"} names={mentionNames} />
             </span>
           </blockquote>
         )}

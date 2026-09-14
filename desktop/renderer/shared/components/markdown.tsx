@@ -69,31 +69,32 @@ function unescapeText(text: string) {
     },
   );
 }
-export function markdownText(content: string): string {
-  function text(tokens: Token[]): string {
+export function markdownText(content: string, transformText: (text: string) => string = text => text): string {
+  function text(tokens: Token[], decorate = true): string {
     return tokens
       .map((token) => {
         if (token.type === "image")
           return unescapeText((token as Tokens.Image).text);
         if (token.type === "list")
           return (token as Tokens.List).items
-            .map((item) => text(item.tokens))
+            .map((item) => text(item.tokens, decorate))
             .join(" ");
         if (token.type === "table") {
           const table = token as Tokens.Table;
           return [table.header, ...table.rows]
-            .map((row) => row.map((cell) => text(cell.tokens)).join(" "))
+            .map((row) => row.map((cell) => text(cell.tokens, decorate)).join(" "))
             .join(" ");
         }
         if ("tokens" in token && Array.isArray(token.tokens))
-          return text(token.tokens);
+          return text(token.tokens, decorate && token.type !== 'link');
         if (token.type === "html") return "";
-        return unescapeText(
+        const value = unescapeText(
           ("text" in token ? String(token.text) : token.raw).replace(
             /\n+/g,
             " ",
           ),
         );
+        return decorate && !['code', 'codespan'].includes(token.type) ? transformText(value) : value;
       })
       .join(" ");
   }
@@ -108,11 +109,13 @@ export const Markdown = memo(function Markdown({
   className = "reading-text",
   onPlace,
   chat = false,
+  renderText,
 }: {
   content: string;
   className?: string;
   onPlace?: (target: PlaceTarget) => void;
   chat?: boolean;
+  renderText?: (text: string) => ReactNode;
 }) {
   const tokens = useMemo(
     () => marked.lexer(content, { gfm: true, breaks: chat }),
@@ -141,14 +144,15 @@ export const Markdown = memo(function Markdown({
   collect(tokens);
   function words(value: string, decorate: boolean): ReactNode {
     const text = unescapeText(value);
-    if (!onPlace || !decorate) return text;
+    const plain = (value: string) => decorate && renderText ? renderText(value) : value;
+    if (!onPlace || !decorate) return plain(text);
     const parts: ReactNode[] = [];
     let end = 0;
     for (const match of text.matchAll(termPattern)) {
       const view = terms[match[0].toLowerCase()];
       if (linked.has(view)) continue;
       linked.add(view);
-      parts.push(text.slice(end, match.index));
+      parts.push(plain(text.slice(end, match.index)));
       parts.push(
         <button
           key={match.index}
@@ -166,10 +170,10 @@ export const Markdown = memo(function Markdown({
     return parts.length ? (
       <>
         {parts}
-        {text.slice(end)}
+        {plain(text.slice(end))}
       </>
     ) : (
-      text
+      plain(text)
     );
   }
   function code(value: string, language?: string): ReactNode {

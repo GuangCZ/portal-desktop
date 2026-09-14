@@ -262,6 +262,7 @@ describe("Town request and identity isolation", () => {
     model.sendTarget = { kind: "dm", beingId: "willow", generation: 1 };
     model.content = "private draft";
     model.recipient = "friend";
+    model.mentionNames = new Map([['t_Friend', { name: '私信伙伴', at: 0 }]]);
     model.sendOpen = true;
     const read = model.loadDetail({ kind: "scroll", id: "private" });
     model.receiveLive(live(2, 2, "river"));
@@ -272,6 +273,7 @@ describe("Town request and identity isolation", () => {
     expect(model.recipient).toBe("");
     expect(model.sendTarget).toBeUndefined();
     expect(model.sendOpen).toBe(false);
+    expect(model.mentionNames.size).toBe(0);
   });
   it("sends once and never retries an uncertain result automatically", async () => {
     const pending = deferred<TownResult>(),

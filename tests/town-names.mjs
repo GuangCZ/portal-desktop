@@ -15,6 +15,7 @@ const { outputFiles } = await build({
     import { TownModel } from './desktop/renderer/town/models/town';
     import { SceneStore } from './desktop/renderer/shared/models/scene';
     import { ChatPlaces } from './desktop/renderer/chat/components/navigation';
+    import { collectMentionNames } from './desktop/renderer/town/models/mentions';
     const messages = [
       { id: 'incoming', sender_display: '河流', sender_name: 'old-river', sender_town_id: 't_RiverA', recipient_town_id: 't_Willow', content: '当前显示名优先', created_at: '2026-09-14T10:00:00Z' },
       { id: 'outgoing', sender_display: '柳树', sender_town_id: 't_Willow', recipient_display: '河流', recipient_town_id: 't_RiverB', content: '同名收件人使用各自的 Town ID', created_at: '2026-09-14T11:00:00Z' },
@@ -29,6 +30,15 @@ const { outputFiles } = await build({
       return { ok: true, data: {}, fetchedAt: new Date().toISOString() };
     } }, console.error, () => {}, new SceneStore(), () => {}, () => {});
     model.view = 'mail'; model.tab = 'all'; model.me = 't_Willow';
+    const mentionView = location.pathname.startsWith('/mentions/') ? location.pathname.split('/').at(-1) : '';
+    const feed = mentionView ? [
+      { id: 'mentions', seq: 1, town_id: 't_RiverA', speaker_name: '河流', sender_town_id: 't_RiverA', sender_display: '河流', recipient_town_id: 't_Willow',
+        content: '正文 @t_RiverA 和 **@t_RiverB**，未知 @t_Unknown。\\n\\n代码：\u0060@t_RiverA\u0060\\n\\n[@t_RiverB](https://example.com/@t_RiverB)' },
+      { id: 'other', seq: 2, town_id: 't_RiverB', speaker_name: '河流', sender_town_id: 't_RiverB', sender_display: '河流', content: '同名的另一个 Being' },
+    ] : messages;
+    if (mentionView) model.view = mentionView;
+    model.mentionNames = collectMentionNames(feed);
+    window.fixtureMessages = feed;
     model.live = { phase: 'connected', beingId: 't_Willow', display: '柳树', generation: 1, revision: 1, sync: 1, versions: { bonfire: 0, mail: 0, firesides: 0 }, message: 'fixture' };
     model.load = async () => {};
     if (location.pathname === '/places') {
@@ -40,7 +50,7 @@ const { outputFiles } = await build({
       }
       createRoot(document.getElementById('root')).render(<PlacesFixture/>);
     } else createRoot(document.getElementById('root')).render(<>
-      <TownFeed town={model} data={{ messages }} filterKey="mail:all" />
+      <TownFeed town={model} data={{ messages: feed }} filterKey={model.view + ':all'} />
       <TownComposer model={model} />
       <button id="fixture-auth" onClick={() => { model.live = { ...model.live, phase: 'connecting', beingId: undefined, display: undefined, message: '正在确认 Town 身份' }; void model.auth(); }}>连接设置</button>
       <TownAuth model={model} />
@@ -108,6 +118,18 @@ try {
   assert.match(await page.locator('#town-auth-state').textContent(), /已保存配对：柳树/);
   assert.match(await page.locator('#town-auth-state').textContent(), /正在确认 Town 身份/);
   await page.screenshot({ path: 'test-results/town-paired-display.png' });
+  for (const view of ['bonfire', 'firesides', 'mail']) {
+    await page.goto(`http://127.0.0.1:${server.address().port}/mentions/${view}`);
+    const body = page.locator('.social-message').filter({ hasText: '正文' }).locator('.social-body');
+    await body.waitFor();
+    assert.deepEqual(await body.locator('.town-mention').allTextContents(), ['@河流', '@河流']);
+    assert.deepEqual(await body.locator('.town-mention').evaluateAll(items => items.map(item => [item.dataset.townId, item.title])), [['t_RiverA', '@t_RiverA'], ['t_RiverB', '@t_RiverB']]);
+    assert.match(await body.innerText(), /未知 @t_Unknown/);
+    assert.equal(await body.locator('code').textContent(), '@t_RiverA');
+    assert.equal(await body.locator('a').getAttribute('href'), 'https://example.com/@t_RiverB');
+    assert.match(await page.evaluate(() => window.fixtureMessages[0].content), /@t_RiverA 和 \*\*@t_RiverB\*\*/);
+    await page.screenshot({ path: `test-results/town-mentions-${view}.png` });
+  }
   await page.goto(`http://127.0.0.1:${server.address().port}/places`);
   const trigger = page.locator('#chat-places-trigger');
   await trigger.waitFor();

@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import type { TownModel } from "../models/town";
 import { useModel } from "../../shared/hooks/use-model";
 import { Dialog } from "../../shared/components/dialog";
+import { Markdown } from '../../shared/components/markdown';
+import { MentionText } from './mention-text';
 export function TownComposer({ model }: { model: TownModel }) {
   const town = useModel(model);
   const kind = town.sendTarget?.kind;
@@ -82,7 +84,8 @@ export function TownComposer({ model }: { model: TownModel }) {
         <div id="town-send-reply" hidden={!town.sendTarget?.reply}>
           <blockquote id="town-reply-preview">
             {town.sendTarget?.reply
-              ? `${town.sendTarget.reply.author}：${town.sendTarget.reply.preview}`
+              ? <><strong>{town.sendTarget.reply.author}：</strong><Markdown content={town.sendTarget.reply.preview}
+                  renderText={text => <MentionText text={text} names={town.mentionNames} />} /></>
               : ""}
           </blockquote>
           <button

@@ -1,6 +1,7 @@
 import { Store, errorText } from "../../shared/models/store";
 import { type SceneStore, type SceneResource } from "../../shared/models/scene";
 import type { FeedFilters, FeedReply } from "./feed";
+import { collectMentionNames, type MentionNames } from './mentions';
 import type {
   DesktopAPI,
   KitLibrary,
@@ -128,6 +129,7 @@ export class TownModel extends Store {
   scrollKind = "";
   seedFilters: SeedFilters = { q: "", domain: "", tag: "", kit: "", lifecycle: "" };
   data: Data | null = null;
+  mentionNames: MentionNames = new Map();
   library: KitLibrary | null = null;
   loading = false;
   status = "";
@@ -232,6 +234,7 @@ export class TownModel extends Store {
     this.changed();
   }
   private resetIdentity() {
+    this.mentionNames = new Map();
     clearTimeout(this.reconcileTimer);
     this.seen = { bonfire: 0, mail: 0, firesides: 0 };
     this.changedChannels.clear();
@@ -529,6 +532,7 @@ export class TownModel extends Store {
         }
         this.data = result.data;
         this.validateData();
+        if (Array.isArray(result.data.messages)) this.mentionNames = collectMentionNames(list(result.data, 'messages'), this.mentionNames);
         if (channel !== "firesides" && this.tab !== "sent")
           this.acknowledge(channel, liveAtStart);
         this.status = `来自 beings.town · ${date(result.fetchedAt)} 已刷新${this.view === "bonfire" ? " · 最近 100 条" : this.view === "mail" ? " · 最近 100 封" : ""}`;
@@ -646,6 +650,7 @@ export class TownModel extends Store {
           return;
         }
         list(result.data, "messages");
+        this.mentionNames = collectMentionNames(list(result.data, 'messages'), this.mentionNames);
         this.ringData = { id, data: result.data };
         this.acknowledge("firesides", liveAtStart);
       }
