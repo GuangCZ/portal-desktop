@@ -11,7 +11,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { desktopExecutable, backgroundCoverage, waitForChatReady, clickChatControl } from './support/desktop.mjs';
+import { desktopExecutable, backgroundCoverage, waitForChatReady, clickChatControl, clickWhenPointerReady } from './support/desktop.mjs';
 import { c as archive } from 'tar';
 
 const executablePath = await desktopExecutable();
@@ -86,10 +86,26 @@ let app;
 let pid;
 let backgroundTest = false;
 let cleanupPromise;
+let traceContext;
+async function saveTrace() {
+  if (!traceContext) return;
+  const context = traceContext; traceContext = null;
+  await mkdir('test-results', { recursive: true });
+  await context.tracing.stop({ path: 'test-results/desktop-trace.zip' });
+}
 async function openOptions(page) {
   const options = page.locator('#conversation-options');
-  if (await page.locator('#options-trigger').getAttribute('aria-expanded') !== 'true') await options.locator('summary').click();
+  if (await page.locator('#options-trigger').getAttribute('aria-expanded') !== 'true') await clickWhenPointerReady(page, options.locator('summary'));
+  await page.waitForFunction(() => document.querySelector('#options-trigger').getAttribute('aria-expanded') === 'true');
+  await options.locator('.options-menu').evaluate(async element => {
+    await Promise.all(element.getAnimations().map(animation => animation.finished.catch(() => {})));
+  });
   return options;
+}
+async function openClientSettings(page) {
+  const options = await openOptions(page);
+  await clickWhenPointerReady(page, options.locator('#client-settings-button'));
+  await page.locator('#client-settings-dialog').waitFor({ state: 'visible' });
 }
 async function openChatSearch(page) {
   const toggle = page.locator('#toggle-chat-search');
@@ -97,12 +113,12 @@ async function openChatSearch(page) {
 }
 async function openPlace(page, view) {
   if (view === 'chat') { await page.locator('#back-to-chat').click(); return; }
-  const options = await openOptions(page);
-  if (view === 'portal') { await options.locator('#client-settings-button').click(); await page.locator('#client-settings-dialog [data-view="portal"]').click(); }
-  else await options.locator(`[data-view="${view}"]`).click();
+  if (view === 'portal') { await openClientSettings(page); await page.locator('#client-settings-dialog [data-view="portal"]').click(); }
+  else await (await openOptions(page)).locator(`[data-view="${view}"]`).click();
 }
 function cleanup() {
   return cleanupPromise ??= (async () => {
+    await saveTrace().catch(() => {});
     if (app) await app.close().catch(() => {});
     if (backgroundTest) {
       const label = 'town.beings.portal-desktop.portal.' + createHash('sha256').update(path.join(dir, 'profile')).digest('hex').slice(0, 16);
@@ -122,6 +138,8 @@ for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
 try {
   app = await launchDesktop({ executablePath, env: { ...process.env, PORTAL_DESKTOP_USER_DATA: path.join(dir, 'profile') } });
   const page = await app.firstWindow();
+  traceContext = app.context();
+  await traceContext.tracing.start({ screenshots: true, snapshots: true });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.getByRole('button', { name: '连接我的 Being' }).click();
   await page.locator('#connection-link').fill(`http://127.0.0.1:${port}/willow/?token=${token}`);
@@ -258,7 +276,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   await mkdir('test-results', { recursive: true });
   await page.screenshot({ path: 'test-results/chat.png' });
   // Model settings and the compact options menu preserve the draft.
-  await (await openOptions(page)).locator('#client-settings-button').click();
+  await openClientSettings(page);
   await page.locator('[data-chat-action="model"]').click();
   await frame.locator('#settings-panel.active').waitFor();
   await frame.locator('#settings-panel .btn-close').dispatchEvent('click');
@@ -269,7 +287,13 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   assert.equal(await frame.locator('#input').inputValue(), 'unsent draft');
   await options.locator('summary').click();
   assert.equal(await frame.locator('#input').inputValue(), 'unsent draft');
-  await (await openOptions(page)).locator('#client-settings-button').click();
+  // Repeat the native dialog/menu transition that used to drop Intel CI input.
+  for (let round = 0; round < 3; round++) {
+    await openClientSettings(page);
+    await page.locator('#close-client-settings').click();
+    await page.locator('#client-settings-dialog').waitFor({ state: 'hidden' });
+  }
+  await openClientSettings(page);
   await page.locator('#settings-tab-appearance').click();
   await page.locator('#theme-toggle').click();
   await page.locator('#close-client-settings').click();
@@ -294,6 +318,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   await page.screenshot({ path: 'test-results/portal.png' });
   const saved = await readFile(path.join(dir, 'profile/connection.json'), 'utf8'); assert(!saved.includes(token));
   assert.equal(errors.length, 0, errors.join('\n'));
+  await saveTrace();
   await app.close(); app = null;
   assert.throws(() => process.kill(pid, 0), /ESRCH/);
   // Retire the index fixture from the server; synchronized local history should

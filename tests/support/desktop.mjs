@@ -21,10 +21,13 @@ export async function waitForChatReady(page) {
 }
 
 export async function clickChatControl(page, selector) {
-  const control = page.frameLocator('#chat-frame').locator(selector);
+  await clickWhenPointerReady(page, page.frameLocator('#chat-frame').locator(selector));
+}
+
+export async function clickWhenPointerReady(page, control) {
   // After a native dialog closes, DOM hit testing can become ready before
-  // Electron presents the iframe surface (observed on Intel macOS CI). Move
-  // the pointer until the iframe acknowledges hover, then click exactly once.
+  // Electron presents the new surface (observed on Intel macOS CI). Move
+  // the pointer until the control acknowledges hover, then click exactly once.
   // Retrying only pointer movement cannot open/close a place twice.
   const deadline = Date.now() + 15000;
   let moves = 0;
@@ -32,13 +35,13 @@ export async function clickChatControl(page, selector) {
     moves++;
     await control.hover({ timeout: Math.max(1, deadline - Date.now()) });
     if (await control.evaluate(element => element.matches(':hover'))) {
-      if (moves > 1) console.log(`Chat pointer ready after ${moves} moves: ${selector}`);
+      if (moves > 1) console.log(`Pointer ready after ${moves} moves: ${control}`);
       await control.click();
       return;
     }
     await page.waitForTimeout(50);
   }
-  throw new Error(`Chat control did not receive pointer input: ${selector}`);
+  throw new Error(`Control did not receive pointer input: ${control}`);
 }
 
 export function backgroundCoverage() {

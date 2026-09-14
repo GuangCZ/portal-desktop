@@ -28,6 +28,8 @@
 
 本地模拟 Being 能稳定复现协议及客户端行为，不代表真实云端当前可用，也不测试 LLM 回复质量或真实 Town token 的授权情况。登录项测试通过卸载/重新加载临时注册项模拟启动过程，不会重启或注销电脑。睡眠唤醒和 Windows 计划任务全生命周期仍需目标机器补充验收。Windows 专用 Rust 测试在 Mac 上按引擎声明跳过。
 
+Town 正文提及显示由 `tests/town-mentions.test.ts` 与 `test:town-names` 覆盖：篝火、围炉和私信使用已读取的服务端身份元数据，将完整且大小写一致的 `@Town ID` 显示为名称，悬停保留原 ID。名称缓存仅在当前配对身份内复用；未知 ID、短前缀、代码和链接保持原文。该转换不修改 API 原始正文、回复地址或发送内容，也不代表服务端已成功投递提及。
+
 `test:town-names` 使用无头 Chrome，不打开日常客户端；默认需要本机安装 Google Chrome，也可通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定 Chromium。截图写入 `test-results/town-names.png` 和 `test-results/chat-places-*.png`。
 
 `test:seed-garden` 使用相同的无头 Chrome 配置，在本地 fixture 中验证真实组件，截图为 `test-results/seed-garden.png` 与 `test-results/seed-garden-narrow.png`。`tests/seeds.test.ts` 随 `npm test` 检查固定公开路由、筛选参数编码、凭据隔离、深链接和过期详情响应。
@@ -57,7 +59,7 @@ Windows 的离线升级、坏引擎回滚与独立 Portal 接管另用 PowerShel
 - `test-results/unit.xml`：客户端单元测试的 JUnit 报告。
 - `test-results/*.log`：各阶段原始日志，包含 Rust 实际通过/忽略计数。
 - `test-results/*.png`：界面截图，桌面失败时保存 `failure.png`，Town 失败时保存 `town-failure.png`。
-- `test-results/town-trace.zip`：通过 `npx playwright show-trace test-results/town-trace.zip` 回放 Town 操作。
+- `test-results/town-trace.zip` 和 `desktop-trace.zip`：通过 `npx playwright show-trace <文件>` 回放 Town 操作和桌面首次启动的主流程。
 
 测试使用随机临时 profile、独立工作和 Kit 目录、模拟 token、本地随机端口。真实后台测试注册名按临时 profile 生成；正常结束、断言失败以及 SIGINT/SIGTERM 时清理自己的 macOS 登录项，不停止用户原有服务。强制杀死测试进程（SIGKILL）或主机断电无法执行 finally 清理；可按测试临时 profile 对应的 `portal-service.json` 定位残留登录项，不能按通用 Portal 进程名批量终止。
 
@@ -68,9 +70,9 @@ Windows 的离线升级、坏引擎回滚与独立 Portal 接管另用 PowerShel
 桌面 E2E 统一通过 `tests/support/electron-lifecycle.mjs` 启动：同一时间仅允许一个测试实例，单个测试设 5 分钟上限，退出等待最多 8 秒；超时仅清理该次 launch 返回的子进程。原生桌面 E2E 会显示窗口，不在日常使用客户端时自动运行。浏览器生命周期单元测试使用替身验证销毁窗口后不再访问 shell。
 
 原生弹窗关闭后，Intel macOS 上 DOM 就绪可能早于 Electron 画面提交。
-`tests/support/desktop.mjs` 的 `clickChatControl` 先确认 iframe 中的目标按钮收到鼠标悬停，
+`tests/support/desktop.mjs` 的 `clickWhenPointerReady` / `clickChatControl` 先确认目标按钮收到鼠标悬停，
 再单次点击；等待期间仅移动鼠标，不重试导航。`town-ui` 覆盖连续关闭弹窗后重开篝火和书架，
-`electron-smoke` 覆盖关闭搜索后回到最新消息，保留原有 15 秒等待上限。
+`electron-smoke` 覆盖关闭搜索后回到最新消息及连续开关设置。菜单入口等待展开动画完成后再点击，保留原有 15 秒等待上限。
 
 macOS 安装包与完整升级测试需要实际 Developer ID 签名包，签发条件见 [BUILDING.md](BUILDING.md)。完整升级测试会打开真实客户端窗口，运行前需退出日常客户端；它使用签名包构造较低版本基线，不代表覆盖所有历史发布版本。签名和升级通过也不代表 Apple 公证或首次下载的 Gatekeeper 检查通过，详见 [UPDATING.md](UPDATING.md#验证)。
 
