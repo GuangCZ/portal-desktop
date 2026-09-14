@@ -4,6 +4,7 @@ import { mkdir, open, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path';
 import { command, windowsModulePath } from './background';
 import { macInstallLocation, validateMacApp } from './mac-package';
+import windowsInstaller from './windows-installer.json';
 
 const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
 const ps = (s: string) => `'${s.replaceAll("'", "''")}'`;
@@ -71,13 +72,17 @@ try {
     $remaining | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Milliseconds 500
   }
-  $result=Start-Process -FilePath ${ps(setup)} -ArgumentList '--silent' -PassThru
+  $result=Start-Process -FilePath ${ps(setup)} -WindowStyle Normal -PassThru
   # Wait for Setup itself, not any newly launched long-lived client descendants.
   $result.WaitForExit()
   if ($result.ExitCode -ne 0) { throw 'Client installation failed' }
-  $updater=Join-Path $env:LOCALAPPDATA 'portal-desktop/Update.exe'
-  if (!(Test-Path -LiteralPath $updater)) { throw 'Installed client missing' }
-  Start-Process -FilePath $updater -ArgumentList '--processStart','portal-desktop.exe'
+  $location=(Get-ItemProperty -LiteralPath 'HKCU:\\Software\\${windowsInstaller.guid}' -Name InstallLocation).InstallLocation
+  $installed=Join-Path $location '${windowsInstaller.executableName}.exe'
+  if (!(Test-Path -LiteralPath $installed)) { throw 'Installed client missing' }
+  # NSIS starts the app normally. Also launch directly to retain an explicit
+  # profile/environment for managed installations; the single-instance lock
+  # ensures the standard NSIS launch never creates a second client.
+  Start-Process -FilePath $installed -WindowStyle Normal
 } catch {
   Start-Process -FilePath ${ps(oldExecutable)}
   throw
@@ -119,10 +124,30 @@ export async function stageInstaller(directory: string, version: string, reposit
     }
     await writeFile(scriptFile, script, { mode: 0o700 });
     const handoff = async () => {
+      if (process.platform === 'win32') {
+        // DETACHED_PROCESS makes Windows PowerShell exit before executing the
+        // script; an attached console can also close with the old client.
+        // Start-Process gives the worker its own hidden console and returns as
+        // soon as it starts, so the worker can wait for this client to exit.
+        const args = `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptFile}"`;
+        const launch = windowsModulePath + `$ErrorActionPreference='Stop'; Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -WindowStyle Hidden -ArgumentList ${ps(args)} -RedirectStandardOutput ${ps(path.join(root, 'install.log'))} -RedirectStandardError ${ps(path.join(root, 'install-error.log'))}`;
+        const log = await open(path.join(root, 'install-launch.log'), 'a', 0o600);
+        const bootstrap = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(launch, 'utf16le').toString('base64')],
+          { windowsHide: true, stdio: ['ignore', log.fd, log.fd] });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          // Wait for the bootstrap's exit, not inherited pipe handles held by
+          // the worker that is itself waiting for this client to exit.
+          await new Promise<void>((resolve, reject) => {
+            bootstrap.once('error', reject);
+            bootstrap.once('exit', code => code === 0 ? resolve() : reject(new Error('无法启动客户端安装助手，请查看 install-launch.log。')));
+            timer = setTimeout(() => { bootstrap.kill(); reject(new Error('启动客户端安装助手超时。')); }, 30_000);
+          });
+        } finally { clearTimeout(timer); await log.close(); }
+        return;
+      }
       const log = await open(path.join(root, 'install.log'), 'a', 0o600);
-      const child = spawn(process.platform === 'darwin' ? '/bin/sh' : 'powershell.exe',
-        process.platform === 'darwin' ? [scriptFile] : ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptFile],
-        { detached: true, windowsHide: true, stdio: ['ignore', log.fd, log.fd] });
+      const child = spawn('/bin/sh', [scriptFile], { detached: true, windowsHide: true, stdio: ['ignore', log.fd, log.fd] });
       try { await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref(); }
       finally { await log.close(); }
     };

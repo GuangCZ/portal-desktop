@@ -24,6 +24,7 @@
 | Town 界面 | 模拟 HTTPS 数据通过真实 IPC/代理，验证篝火、收发件箱、认证、正文净化、分页、Kit 参数及实际导入 | `npm run test:town-ui` |
 | macOS 安装包 | DMG 只读挂载、Applications 快捷方式、复制安装后的完整签名、DMG/ZIP 一致性及 ZIP 安装前检查，不启动客户端窗口 | `npm run test:macos-package` |
 | macOS 客户端升级 | 从 DMG 安装并全新启动签名包，在独立 profile 中从较低版本测试基线经 Release 请求、ZIP 下载、替换和 LaunchServices 启动新版；保留原配置、工作文件和工具能力，确认运行随包 Portal 且没有重复客户端 | `npm run test:macos-upgrade` |
+| Windows 客户端安装升级 | 实际 NSIS Setup 安装较低版本测试基线，通过客户端 Release 检查、摘要校验、Setup 安装及自动打开新版；保留配置、凭据、工作文件和工具能力，验证计划任务运行的 Portal 摘要与客户端随包清单一致 | `npm run make` 后执行 `npm run test:windows-upgrade` |
 
 本地模拟 Being 能稳定复现协议及客户端行为，不代表真实云端当前可用，也不测试 LLM 回复质量或真实 Town token 的授权情况。登录项测试通过卸载/重新加载临时注册项模拟启动过程，不会重启或注销电脑。睡眠唤醒和 Windows 计划任务全生命周期仍需目标机器补充验收。Windows 专用 Rust 测试在 Mac 上按引擎声明跳过。
 
@@ -32,6 +33,10 @@
 `test:seed-garden` 使用相同的无头 Chrome 配置，在本地 fixture 中验证真实组件，截图为 `test-results/seed-garden.png` 与 `test-results/seed-garden-narrow.png`。`tests/seeds.test.ts` 随 `npm test` 检查固定公开路由、筛选参数编码、凭据隔离、深链接和过期详情响应。
 
 `test:sbs-refresh` 会先生成最新 Loom 资源，再用无头 Chrome 加载本地 HTTP fixture。使用真实顶部刷新按钮和 SBS 开关，只读写模拟配置，不连接真实 Being。与其他 Chrome fixture 一样，可通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定浏览器路径。
+
+`test:all` 包含私信名称、Seed Garden、SBS 刷新和内置浏览器回归。Windows 安装升级测试单独执行，需要交互式桌面会话和已构建的 Setup。测试使用临时安装目录、独立 profile、本地模拟 Being 和真实计划任务；NSIS 的用户级快捷方式、缓存和卸载登记会在结束时恢复。如果该 Windows 账户已有日常 NSIS 安装，测试会拒绝运行，应换测试账户。旧版本由当前包构造，不代表覆盖所有历史发布版。失败时保留临时目录和 `installation-metadata.json` 供排查。
+
+Windows 的离线升级、坏引擎回滚与独立 Portal 接管另用 PowerShell 执行：`$env:PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS='1'; npx vitest run tests/background-native.test.ts tests/runtime-update-native.test.ts --maxWorkers=1`。这些检查需要真实计划任务权限，不能以普通单元测试中的跳过结果代替。
 
 ## CI 接入
 

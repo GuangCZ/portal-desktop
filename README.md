@@ -68,7 +68,7 @@ Check [Releases](https://github.com/d5z/portal-desktop/releases) for packages an
 | --- | --- |
 | macOS Apple Silicon | DMG installation and ZIP updates from GitHub Releases; tray behavior and client and Portal login startup |
 | macOS Intel | Requires a build on the matching architecture; not yet validated |
-| Windows | ZIP / Squirrel packaging, login tasks, and CI are configured; installation, upgrades, and the full lifecycle still require validation on Windows |
+| Windows | ZIP / NSIS one-click packaging, login tasks, and CI, with native installation, upgrade, and lifecycle tests |
 | Linux | ZIP packaging and temporary Portal operation are configured; desktop behavior is not yet validated, and client login startup and background Portal mode are not supported |
 
 macOS releases follow Heart Portal's signing policy: the same D5 Developer ID, stable identifiers, hardened runtime, and secure timestamps for the entire app and bundled Portal. Notarization is deferred, as in the upstream project; Windows Authenticode is not configured. See [Building and distribution](desktop/BUILDING.md) for signing prerequisites, contributor test builds, and installation steps.

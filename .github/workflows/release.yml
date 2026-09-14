@@ -104,11 +104,9 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/portal-signing.keychain-db" || true
           rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/DeveloperIDG2CA.cer"
-      - name: Verify Windows installer launches the new client
+      - name: Verify NSIS installation and client Portal upgrade
         if: runner.os == 'Windows'
-        env:
-          PORTAL_DESKTOP_NATIVE_INSTALLER_TESTS: '1'
-        run: npx vitest run tests/manual-installer-native.test.ts
+        run: npm run test:windows-upgrade
       - uses: actions/upload-artifact@v4
         with:
           name: portal-desktop-${{ matrix.os }}

@@ -3,7 +3,6 @@ import type { OsxSignOptions } from '@electron/packager';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { MakerZIP } from '@electron-forge/maker-zip';
 import { MakerDMG } from '@electron-forge/maker-dmg';
-import { MakerSquirrel } from '@electron-forge/maker-squirrel';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -73,7 +72,6 @@ const config: ForgeConfig = {
   makers: [
     new MakerZIP({}, ['darwin', 'linux', 'win32']),
     new MakerDMG({ title: 'Portal Desktop', icon: path.resolve('resources/branding/app.icns'), format: 'ULFO' }, ['darwin']),
-    new MakerSquirrel({ name: 'portal-desktop', setupIcon: path.resolve('resources/branding/app.ico') }),
   ],
   plugins: [new VitePlugin({
     build: [

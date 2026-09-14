@@ -3,7 +3,8 @@ import { existsSync } from 'node:fs';
 import type { App } from 'electron';
 import type { ClientStartup } from './shared';
 
-// Squirrel's stable launcher selects the current version after an upgrade.
+// NSIS keeps the executable path stable. Retain the legacy Squirrel launcher
+// lookup for clients still running from a versioned app-* directory.
 export function loginItemOptions(platform: string, executable: string, exists = existsSync) {
   if (platform !== 'win32') return {};
   const directory = path.win32.dirname(executable);

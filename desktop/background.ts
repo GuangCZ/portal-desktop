@@ -26,6 +26,21 @@ const ps = (value: string) => `'${value.replaceAll("'", "''")}'`;
 // A Node/Electron parent launched by pwsh inherits PS7 module paths. Native
 // Windows PowerShell must load its own compatible management/security modules.
 export const windowsModulePath = '$env:PSModulePath = "$PSHOME\\Modules"; ';
+export function windowsPowerShellScript(script: string) {
+  return windowsModulePath + `$ProgressPreference='SilentlyContinue';
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);
+function Find-PortalTask([string]$name) {
+  try { Get-ScheduledTask -TaskName $name -ErrorAction Stop }
+  catch {
+    # A saved runtime can outlive its task (uninstall, OS cleanup, migration).
+    # Only absence is normal; permission and scheduler failures must surface.
+    if ($_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound*') { throw }
+  }
+}
+try { $ErrorActionPreference='Stop'; ${script} }
+catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
+`;
+}
 export async function portableCommand(binary: string, action: 'stop' | 'status' | 'start', platform = process.platform, run: Command = command) {
   if (platform !== 'win32') return run(binary, action === 'start' ? [] : [action]);
   const script = windowsModulePath + `& ${ps(binary)} ${action === 'start' ? '' : action}; if ($LASTEXITCODE -ne 0) { throw 'Portal lifecycle command failed' }`;
@@ -164,7 +179,7 @@ export class BackgroundPortal {
   }
   private get domain() { return `gui/${process.getuid?.() ?? 0}`; }
   private powershell(script: string, input?: string) {
-    return this.run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(windowsModulePath + "$ErrorActionPreference='Stop'; " + script, 'utf16le').toString('base64')], input);
+    return this.run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(windowsPowerShellScript(script), 'utf16le').toString('base64')], input);
   }
   async discover(settings: Settings, connection: Connection | null) {
     this.connection = connection;
@@ -231,7 +246,7 @@ export class BackgroundPortal {
       loaded = Boolean(status); enabled = enabled && loaded;
       running = /state = running/.test(status); pid = Number(status.match(/\bpid = (\d+)/)?.[1]) || undefined;
     } else if (this.platform === 'win32') {
-      const status = JSON.parse(await this.powershell(`$t=Get-ScheduledTask -TaskName ${ps(service.label)};
+      const status = JSON.parse(await this.powershell(`$t=Find-PortalTask ${ps(service.label)};
 $childRunning=$false; $portalId=0; $pidFile=${ps(path.join(service.root, 'pid'))};
 if ([string]$t.State -eq 'Running' -and (Test-Path -LiteralPath $pidFile)) {
   if ([int]::TryParse((Get-Content -LiteralPath $pidFile -Raw).Trim(), [ref]$portalId)) {
@@ -239,12 +254,12 @@ if ([string]$t.State -eq 'Running' -and (Test-Path -LiteralPath $pidFile)) {
     $childRunning=($null -ne $p -and $p.Path -eq ${ps(path.join(service.root, 'heart-portal.exe'))});
   }
 }
-@{ enabled=$t.Settings.Enabled; running=$childRunning; pid=$portalId } | ConvertTo-Json -Compress`));
-      enabled = status.enabled; running = status.running;
+@{ loaded=($null -ne $t); enabled=[bool]$t.Settings.Enabled; running=$childRunning; pid=$portalId } | ConvertTo-Json -Compress`));
+      loaded = status.loaded !== false; enabled = status.enabled; running = status.running;
       if (running) pid = Number(status.pid) || undefined;
     }
     this.state = { supported: this.state.supported, installed: true, enabled, running, existing: service.existing, label: service.label, pid,
-      message: !loaded ? '后台服务当前未加载，可点击启动 Portal 重试' : enabled ? `登录后自动启动 · 退出客户端后继续运行 · 连续异常退出最多重试 5 次${service.existing ? '（沿用已有服务）' : ''}` : '后台服务已停用，不会随登录启动' };
+      message: !loaded ? '后台服务当前未注册或未加载，配置已保留，可点击启动 Portal 恢复' : enabled ? `登录后自动启动 · 退出客户端后继续运行 · 连续异常退出最多重试 5 次${service.existing ? '（沿用已有服务）' : ''}` : '后台服务已停用，不会随登录启动' };
     return this.state;
   }
   async portalState(): Promise<PortalState> {
@@ -378,7 +393,14 @@ Register-ScheduledTask -TaskName ${ps(service.label)} -Action $a ${service.login
         await this.run('/bin/launchctl', ['kickstart', `${this.domain}/${service.label}`]);
       }
     } else {
-      const status = await this.powershell(`[string](Get-ScheduledTask -TaskName ${ps(service.label)}).State`);
+      const status = await this.powershell(`$t=Find-PortalTask ${ps(service.label)}; if ($t) { [string]$t.State } else { 'Missing' }`);
+      if (status.trim() === 'Missing') {
+        if (service.existing) throw new Error('原 Portal 计划任务已不存在，请先恢复原服务或迁入客户端管理。');
+        // Recreate only the client's saved runtime when explicitly loading it.
+        // A read-only status query never creates a task or enables login startup.
+        for (const file of ['run.ps1', 'heart-portal.exe', 'connection.dpapi']) await access(path.join(service.root, file));
+        await this.registerWindows(service);
+      }
       if (status.trim() !== 'Running' && !service.existing) await this.resetRecovery(service);
       await this.powershell(`Enable-ScheduledTask -TaskName ${ps(service.label)} | Out-Null; Start-ScheduledTask -TaskName ${ps(service.label)}`);
     }
@@ -418,7 +440,7 @@ Register-ScheduledTask -TaskName ${ps(service.label)} -Action $a ${service.login
         if (attempt >= 120) throw new Error('旧 Portal 进程尚未退出，已中止安装。');
         await new Promise(resolve => setTimeout(resolve, 250));
       }
-    } else await this.powershell(`$task=Get-ScheduledTask -TaskName ${ps(service.label)} -ErrorAction SilentlyContinue;
+    } else await this.powershell(`$task=Find-PortalTask ${ps(service.label)};
 if ($task) { Disable-ScheduledTask -TaskName ${ps(service.label)} | Out-Null; Stop-ScheduledTask -TaskName ${ps(service.label)}; }
 # The runner may have started the engine before its PID file was written.
 # Select only this installation's executable, never a global process name kill.
@@ -433,7 +455,7 @@ foreach ($child in $children) {
 }
 if (@(Get-CimInstance Win32_Process -Filter "Name='heart-portal.exe'" | Where-Object { $_.ExecutablePath -eq $engine }).Count) { throw 'Old Portal is still running' }
 $deadline=[DateTime]::UtcNow.AddSeconds(15);
-while (($task=Get-ScheduledTask -TaskName ${ps(service.label)} -ErrorAction SilentlyContinue) -and $task.State -eq 'Running') {
+while (($task=Find-PortalTask ${ps(service.label)}) -and $task.State -eq 'Running') {
   if ([DateTime]::UtcNow -ge $deadline) { throw 'Portal supervisor task is still running' }
   Start-Sleep -Milliseconds 200;
 }`);

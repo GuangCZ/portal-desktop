@@ -63,7 +63,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
   }, (await readFile(bundle)).toString('base64'));
   // Wait for the chat document to finish initial focus before opening shell menus.
   await page.frameLocator('#chat-frame').locator('#input').waitFor();
-  await page.waitForFunction(() => document.querySelector('#connection-light').dataset.state === 'online');
+  await page.waitForFunction(() => document.querySelector('#refresh-chat')?.getAttribute('aria-busy') === 'false');
   const nav = async name => {
     if (await page.locator('#place-sheet').evaluate(element => element.open)) await page.locator('#back-to-chat').click();
     if (['town', 'kits', 'portal'].includes(name)) {

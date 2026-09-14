@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { clientStartup, loginItemOptions } from '../desktop/client-startup';
 
 describe('client login startup', () => {
-  it('uses the stable Squirrel launcher after version updates and the exe for portable builds', () => {
+  it('uses the stable NSIS executable and preserves legacy Squirrel launcher compatibility', () => {
+    expect(loginItemOptions('win32', 'C:\\Programs\\portal-desktop\\portal-desktop.exe', () => true)).toEqual({ path: 'C:\\Programs\\portal-desktop\\portal-desktop.exe', args: [] });
     expect(loginItemOptions('win32', 'C:\\portal-desktop\\app-1.2.3\\portal-desktop.exe', () => true)).toEqual({ path: 'C:\\portal-desktop\\portal-desktop.exe', args: [] });
     expect(loginItemOptions('win32', 'C:\\Portable\\portal-desktop.exe', () => true)).toEqual({ path: 'C:\\Portable\\portal-desktop.exe', args: [] });
     expect(loginItemOptions('win32', 'C:\\portal-desktop\\app-1.2.3\\portal-desktop.exe', () => false)).toEqual({ path: 'C:\\portal-desktop\\app-1.2.3\\portal-desktop.exe', args: [] });

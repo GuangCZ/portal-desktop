@@ -1,7 +1,8 @@
 // Real packaged Electron UI; replace only the OS login registration API so this
 // test never enables startup for a temporary build or changes the user's login items.
 import { launchDesktop } from './support/electron-lifecycle.mjs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -10,6 +11,14 @@ import { desktopExecutable } from './support/desktop.mjs';
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'beings-client-lifecycle-'));
 let app;
 try {
+  let savedRuntime;
+  if (process.platform === 'win32') {
+    // An older installation can leave this metadata after Windows removes its
+    // task. The real packaged client must still open its UI and keep the record.
+    const label = 'town.beings.portal-desktop.portal.' + createHash('sha256').update(path.resolve(temporary)).digest('hex').slice(0, 16);
+    savedRuntime = JSON.stringify({ label, root: path.join(temporary, 'old-runtime'), file: '', existing: false });
+    await writeFile(path.join(temporary, 'portal-service.json'), savedRuntime);
+  }
   app = await launchDesktop({ executablePath: await desktopExecutable(), env: { ...process.env, PORTAL_DESKTOP_USER_DATA: temporary } });
   const page = await app.firstWindow();
   page.setDefaultTimeout(10000);
@@ -22,6 +31,12 @@ try {
     if (['error', 'warning'].includes(message.type()) && message.text() !== initialFrameWarning) errors.push(message.text());
   });
   await page.getByRole('button', { name: '连接我的 Being' }).waitFor();
+  if (savedRuntime) {
+    const state = (await page.evaluate(() => window.beings.snapshot())).background;
+    assert.equal(state.enabled, false); assert.equal(state.running, false);
+    assert.equal(await readFile(path.join(temporary, 'portal-service.json'), 'utf8'), savedRuntime);
+    console.log('PASS: packaged Windows client opens with saved Portal metadata and a missing scheduled task, retaining configuration without enabling background startup.');
+  }
   const nativeChrome = await app.evaluate(({ BrowserWindow, Menu }) => {
     const window = BrowserWindow.getAllWindows()[0];
     return { menu: Menu.getApplicationMenu() !== null, menuBarVisible: window.isMenuBarVisible(), menuBarAutoHide: window.isMenuBarAutoHide() };

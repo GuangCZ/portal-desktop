@@ -13,6 +13,6 @@ export async function desktopExecutable() {
 
 export function backgroundCoverage() {
   if (process.env.PORTAL_DESKTOP_TEST_BACKGROUND === '0') return { enabled: false, reason: 'PORTAL_DESKTOP_TEST_BACKGROUND=0：当前运行环境不执行真实系统登录服务测试' };
-  if (process.platform !== 'darwin') return { enabled: false, reason: '真实系统服务生命周期测试目前仅支持 macOS；Windows 守护逻辑有单元测试，仍需 Windows 实机验收' };
+  if (process.platform !== 'darwin') return { enabled: false, reason: '本桌面 E2E 的系统登录服务分支仅支持 macOS；Windows 真实计划任务与 Portal 安装升级由 test:windows-upgrade 和 native upgrade tests 单独验证' };
   return { enabled: true };
 }

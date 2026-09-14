@@ -7,7 +7,7 @@
 | 环境 | 前置条件 | 当前交付状态 |
 | --- | --- | --- |
 | macOS | Git、Node.js 22.12+、npm、Rust stable、Xcode Command Line Tools | Apple Silicon 支持 `.app` / DMG / ZIP；Intel 需对应 x64 机器另行构建 |
-| Windows | Git、Node.js 22.12+、npm、Rust stable MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK | 使用 Electron Forge 默认 Squirrel Setup；Portal 兼容分支由本地维护并合并主分支；Windows 原生构建、安装和后台任务仍需实机验收 |
+| Windows | Git、Node.js 22.12+、npm、Rust stable MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK | Forge 打包客户端，electron-builder 生成 NSIS 一键安装包；安装升级验证见 `npm run test:windows-upgrade` |
 | Linux | Git、Node.js 22.12+、npm、Rust stable、本机 C/C++ 链接工具及 Electron 桌面运行依赖、密钥库 | 配置了 ZIP；后台常驻未实现，未完成 Linux 桌面验收 |
 
 这些是源码构建条件。使用已打包客户端进行聊天、运行内置 Portal 不需要另装 Node 或 Rust。特定 Kit 可能另需 Node/Python、账号凭据或外部 CLI，安装窗口会说明依赖。
@@ -69,9 +69,10 @@ npm run make
 | package / macOS | `out/Portal Desktop-darwin-<arch>/Portal Desktop.app` |
 | package / Windows | `out/Portal Desktop-win32-<arch>/portal-desktop.exe`，必须连同所在目录的其他文件使用 |
 | package / Linux | `out/Portal Desktop-linux-<arch>/portal-desktop`，必须连同所在目录的其他文件使用 |
-| make / ZIP | `out/make/zip/<platform>/<arch>/Portal Desktop-<platform>-<arch>-<version>.zip` |
+| make / macOS、Linux ZIP | `out/make/zip/<platform>/<arch>/Portal Desktop-<platform>-<arch>-<version>.zip` |
+| make / Windows ZIP | `out/make/nsis/portal-desktop-<version>-windows-x64.zip` |
 | make / macOS DMG | `out/make/Portal Desktop-<version>-<arch>.dmg` |
-| make / Windows Setup | `out/make/squirrel.windows/<arch>/Portal Desktop-<version> Setup.exe`，同目录另有 `RELEASES` 和 `portal-desktop-<version>-full.nupkg` |
+| make / Windows Setup | `out/make/nsis/portal-desktop-<version>-windows-x64-Setup.exe` |
 
 DMG 和 ZIP 均含完整客户端和内置 Portal；macOS 的 DMG 用于拖拽安装，ZIP 用于客户端内升级。不要只拷贝 Windows 的单个 exe 或 macOS `.app` 中的单个可执行文件。当前没有 MSI、AppImage、deb/rpm。版本标签触发 macOS / Windows 配套构建，全部验证通过后才发布 GitHub Release。
 
@@ -79,7 +80,9 @@ macOS 打开 DMG，将 `Portal Desktop.app` 拖到其中的 Applications 快捷�
 
 ### Windows 安装包的明确边界
 
-客户端已处理 Squirrel 安装、更新和卸载事件，由 Electron Forge 默认 Squirrel 安装程序创建或移除快捷方式；这些短进程不会启动 Portal。Windows Setup 升级及后台任务仍需实机验收。
+Windows 使用 electron-builder 标准 NSIS 一键安装：无目录选择页，有安装进度，按当前用户安装，无需管理员权限，完成后启动客户端。默认目录为当前用户的 Programs 下的 `portal-desktop`；升级复用注册的安装目录，卸载保留用户数据。客户端内更新仍先校验 Release 摘要、停止 Portal，再显示 NSIS 安装进度；手动覆盖安装也会请求运行中的客户端先保存运行记录并停止 Portal。
+
+NSIS 使用固定 appId / GUID（`desktop/windows-installer.json`），不要随版本更改。旧 Squirrel 的事件及启动器识别仅用于兼容已有安装，新包不生成或依赖 Squirrel。Windows 发布文件名保持兼容，客户端安装助手从 NSIS 注册的 InstallLocation 启动稳定路径下的新客户端。
 
 macOS 签发与 [Portal 源仓](https://github.com/d5z/heart-portal/blob/main/scripts/package-portal-macos.py) 保持一致：使用 `Developer ID Application: D5 Inc. (7N8XHQWCNN)`、固定标识、Hardened Runtime 和安全时间戳。客户端及 Electron Helpers/Frameworks 由同一证书签名；客户端标识为 `town.beings.portal-desktop`，内置 Portal 保留源仓的 `com.aspect.heart-portal`。签名身份和标识记录在 `desktop/macos-signing.json`，升级时保持稳定。
 

@@ -126,7 +126,13 @@ try {
   assert.equal(await page.locator('.via-tag img').count(), 0);
   assert((await page.locator('.via-tag').allTextContents()).includes('借 <img src=x onerror=alert(1)>'));
   await page.screenshot({ path: path.join(os.tmpdir(), 'town-sdk-via.png') });
-  assert.equal(await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).count(), 0);
+  assert.equal(await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).count(), 4);
+  await partner.getByRole('button', { name: '回复', exact: true }).click();
+  await page.locator('#town-reply-preview').getByText('服务端展示名：伙伴代发消息', { exact: true }).waitFor();
+  await page.locator('#town-send-content').fill('SDK 篝火回复');
+  await page.locator('#town-send-submit').click();
+  await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
+  assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites), [{ path: '/api/bonfire/speak', body: { message: 'SDK 篝火回复', reply_to: 2 } }]);
   await partner.getByRole('button', { name: '一起看', exact: true }).click();
   await page.locator('#scene-compose').click();
   const chatInput = page.frameLocator('#chat-frame').locator('#input');
@@ -147,21 +153,35 @@ try {
   await page.locator('#town-send-content').fill('SDK 测试消息');
   await page.locator('#town-send-submit').click();
   await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
-  assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites), [{ path: '/api/bonfire/speak', body: { message: 'SDK 测试消息' } }]);
+  assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites), [
+    { path: '/api/bonfire/speak', body: { message: 'SDK 篝火回复', reply_to: 2 } },
+    { path: '/api/bonfire/speak', body: { message: 'SDK 测试消息' } },
+  ]);
   await open('私信');
   await page.getByText('来自伙伴的私信', { exact: true }).waitFor();
   assert.equal(await page.locator('.via-tag').textContent(), '借 tablet');
-  assert.equal(await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).count(), 0);
+  await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).click();
+  assert.equal(await page.locator('#town-recipient').inputValue(), 'river');
+  assert.equal(await page.locator('#town-recipient').evaluate(el => el.readOnly), true);
+  await page.locator('#town-send-content').fill('SDK 私信回复');
+  await page.locator('#town-send-submit').click();
+  await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
+  assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites.at(-1)), { path: '/api/messages', body: { recipient: 'river', content: 'SDK 私信回复', reply_to: 'dm-1' } });
   await page.locator('#town-write').click();
   await page.locator('#town-recipient').fill('willow');
   await page.locator('#town-send-content').fill('不能发给自己');
   await page.locator('#town-send-submit').click();
   await page.locator('#town-send-error').getByText(/不能给当前 Being 自己/).waitFor();
-  assert.equal(await app.evaluate(() => globalThis.sdkWrites.length), 1);
+  assert.equal(await app.evaluate(() => globalThis.sdkWrites.length), 3);
   await page.locator('#town-send-close').click();
   await open('围炉');
   await page.locator('.social-message').getByText('伙伴代发消息', { exact: true }).waitFor();
   assert.equal(await page.locator('.via-tag').textContent(), '借 my-phone');
+  await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).click();
+  await page.locator('#town-send-content').fill('SDK 围炉回复');
+  await page.locator('#town-send-submit').click();
+  await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
+  assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites.at(-1)), { path: '/api/fireside/speak', body: { fireside_id: 10, message: 'SDK 围炉回复', reply_to: 2 } });
   assert.deepEqual(errors, []);
   console.log('PASS: compact menu, interrupted motion, keyboard/reduced motion, grouped settings, clean quote draft and existing-draft preservation; SDK pairing + SSE hello, server display names, via badges in all three feeds, inert via text, explicit author context, fixture-only send, self-DM blocked before network');
 } finally {

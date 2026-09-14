@@ -67,7 +67,7 @@ Portal 支持刷新 Kit 清单。清单存在、进程运行与第三方服务�
 | --- | --- |
 | macOS Apple Silicon | 支持 DMG 安装、从 GitHub Release 获取 ZIP 升级、托盘、客户端及 Portal 登录自启 |
 | macOS Intel | 需在对应架构机器构建；尚未完成验收 |
-| Windows | 已配置 ZIP / Squirrel 安装包、登录任务和 CI；安装、升级与完整生命周期仍需实机验收 |
+| Windows | ZIP / NSIS 一键安装包、登录任务和 CI；提供真实安装升级及完整生命周期测试 |
 | Linux | 已配置 ZIP 与临时 Portal；尚未完成桌面验收，不支持当前的客户端登录自启和 Portal 后台常驻 |
 
 macOS 发布与 Portal 源仓的签发策略一致：整个客户端及内置 Portal 使用同一 D5 Developer ID、固定标识、Hardened Runtime 和安全时间戳。公证与源仓一样暂缓；Windows Authenticode 尚未配置。签名前置条件、贡献者测试构建与安装方式见 [构建与交付说明](desktop/BUILDING.md)。
