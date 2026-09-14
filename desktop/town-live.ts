@@ -1,5 +1,6 @@
 import type { TownChannel, TownLiveState, TownQuery } from './shared';
 import { TOWN_ORIGIN } from './town';
+import { validTownIdentity } from './town-identity';
 
 type Data = Record<string, unknown>;
 const object = (value: unknown): Data => value && typeof value === 'object' && !Array.isArray(value) ? value as Data : {};
@@ -79,9 +80,10 @@ export class TownLive {
         try { data = object(JSON.parse(lines.join('\n'))); } catch { throw new Error('event'); }
         event = ''; lines = []; size = 0;
         if (type === 'hello') {
-          const beingId = typeof data.being_id === 'string' ? data.being_id : '';
+          const beingId = typeof data.town_id === 'string' ? data.town_id : typeof data.being_id === 'string' ? data.being_id : '';
           const expected = this.getExpectedBeing();
-          if (data.anonymous !== false || data.token_kind !== 'client' || !/^[a-z0-9_-]{1,64}$/.test(beingId) || expected && expected !== beingId || this.state.beingId && this.state.beingId !== beingId) {
+          const matchesExpected = !expected || expected === beingId || (!expected.startsWith('t_') && expected === data.being_id);
+          if (data.anonymous !== false || data.token_kind !== 'client' || !validTownIdentity(beingId) || data.town_id !== undefined && !beingId.startsWith('t_') || !matchesExpected || this.state.beingId && this.state.beingId !== beingId) {
             failure = expected && expected !== beingId ? 'SSE hello 身份与配对 Being 不一致' : 'SSE hello 未确认 client 身份';
             fatal = true; this.rejectAuth(); throw new Error('identity');
           }

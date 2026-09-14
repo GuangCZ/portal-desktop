@@ -55,7 +55,7 @@ export function TownComposer({ model }: { model: TownModel }) {
         <p
           id="town-send-context"
           className="field-help"
-        >{`你将以 @${town.sendTarget?.beingId} 的身份代发 · ${kind === "dm" ? "仅收件 Being 可见" : kind === "fireside" ? "围炉 #" + town.sendTarget?.firesideId + " · 成员可见" : "公开发布到篝火"}`}</p>
+        >{`你将以已配对 Being 的身份代发 · ${kind === "dm" ? "仅收件 Being 可见" : kind === "fireside" ? "围炉成员可见" : "公开发布到篝火"}`}</p>
         <label
           id="town-recipient-label"
           htmlFor="town-recipient"
@@ -67,12 +67,13 @@ export function TownComposer({ model }: { model: TownModel }) {
           id="town-recipient"
           autoComplete="off"
           maxLength={160}
-          placeholder="Being ID 或准确显示名"
+          placeholder="Town ID（t_…）或准确显示名"
           ref={recipient}
           hidden={kind !== "dm"}
           required={kind === "dm"}
-          value={town.recipient}
+          value={town.sendTarget?.reply?.recipientName || town.recipient}
           disabled={town.sendBusy}
+          readOnly={Boolean(town.sendTarget?.reply)}
           onChange={(event) => {
             town.recipient = event.target.value;
             town.changed();

@@ -95,6 +95,37 @@ const settle = async () => {
 };
 afterEach(() => vi.useRealTimers());
 describe("React desktop state lifecycle", () => {
+  it("refreshes each place navigation and clears pending details when changing features", async () => {
+    const pending = deferred<TownResult>();
+    const query = vi.fn<DesktopAPI['town']>(async query => {
+      if (query.kind === 'seed') return pending.promise;
+      if (query.kind === 'seeds') return result({ seeds: [], count: 0 });
+      return result({ messages: [{ content: 'fresh bonfire' }] });
+    });
+    const app = new AppModel(api({ town: query }).value);
+    app.navigate('seeds', 'pending-seed');
+    await settle();
+    expect(app.town.detailLoading).toBe(true);
+    app.navigate('bonfire');
+    await settle();
+    expect(app.view).toBe('bonfire');
+    expect(app.town.directId).toBeUndefined();
+    expect(app.town.detailLoading).toBe(false);
+    app.navigate('seeds');
+    await settle();
+    expect(app.town.detailLoading).toBe(false);
+    expect(app.town.data).toEqual({ seeds: [], count: 0 });
+    pending.resolve(result({ brief: 'old seed' }));
+    await settle();
+    expect(app.town.detail).toBeUndefined();
+    app.navigate('bonfire');
+    await settle();
+    app.navigate('bonfire');
+    await settle();
+    expect(query.mock.calls.filter(([query]) => query.kind === 'bonfire')).toHaveLength(3);
+    expect(app.town.data?.messages).toEqual([{ content: 'fresh bonfire' }]);
+  });
+
   it("releases IPC subscriptions and ignores startup reads from an earlier mount", async () => {
     const old = deferred<Snapshot>(),
       fresh = deferred<Snapshot>();
@@ -359,6 +390,16 @@ describe("shared reading behavior", () => {
       { me: "willow", mail: "all" },
     );
     expect(flat.author).toBe("河流");
+  });
+  it("does not fall back to unknown when private payload only has identity ids", () => {
+    const [message] = feedMessages(
+      [{ id: "letter-3", sender_id: "weiguo_being", recipient_town_id: "t_Fqm2l4", content: "好" }],
+      { me: "t_Fqm2l4", mail: "all" },
+    );
+    expect(message.author).toBe("weiguo_being");
+    expect(message.author).not.toBe("未知");
+    expect(message.recipient).toBe("t_Fqm2l4");
+    expect(message.received).toBe(true);
   });
   it("only drafts private references for the matching Being", () => {
     const post = vi.fn(),

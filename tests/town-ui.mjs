@@ -73,7 +73,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
       else await options.locator(`[data-view="${name}"]`).click();
     } else {
       const frame = page.frameLocator('#chat-frame');
-      await frame.locator('#chat-places-trigger').click();
+      if (await frame.locator('#chat-places-trigger').getAttribute('aria-expanded') !== 'true') await frame.locator('#chat-places-trigger').click();
       await frame.locator(`[data-place="${name}"]`).click();
     }
     await page.waitForFunction(() => !document.querySelector('#town-body').hasAttribute('aria-busy'));

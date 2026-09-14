@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import { TownModel, definitions, list, str } from "../models/town";
 import { useModel } from "../models/store";
 import {
@@ -9,15 +10,19 @@ import {
   DetailError,
 } from "./town-catalog";
 import { TownFeed } from "./town-feed";
+import { SeedGarden, SeedDetail, SeedSearch } from "./town-seeds";
 export function Town({ model }: { model: TownModel }) {
   const town = useModel(model),
     definition = definitions[town.view],
     channel = town.channel(),
-    social = Boolean(channel);
+    social = Boolean(channel),
+    root = useRef<HTMLElement>(null);
+  useLayoutEffect(() => { if (root.current) root.current.scrollTop = 0; }, [town.view, town.directId]);
   return (
     <section
       id="town-view"
-      className={`view${social ? " social-view" : ""}${town.view === "embers" ? " bookshelf-view" : ""}${town.view === "kits" && town.tab === "grove" && !town.directId ? " kit-catalog" : ""}`}
+      ref={root}
+      className={`view${social ? " social-view" : ""}${town.view === "embers" ? " bookshelf-view" : ""}${town.view === "kits" && town.tab === "grove" && !town.directId ? " kit-catalog" : ""}${town.view === "seeds" && !town.directId ? " seed-catalog" : ""}`}
       hidden={!definition}
     >
       <div className="town-content">
@@ -35,7 +40,7 @@ export function Town({ model }: { model: TownModel }) {
             id="town-tabs"
             className="segmented"
             role="tablist"
-            hidden={Boolean(town.directId)}
+            hidden={Boolean(town.directId) || !definition?.tabs.length}
           >
             {definition?.tabs.map(([value, label]) => (
               <button
@@ -79,10 +84,11 @@ export function Town({ model }: { model: TownModel }) {
             type="search"
             aria-label={social ? "搜索已加载的消息与作者" : "筛选当前列表"}
             placeholder={social ? "搜索消息、作者…" : "筛选当前列表…"}
-            hidden={Boolean(town.directId)}
+            hidden={Boolean(town.directId) || town.view === "seeds"}
             value={town.search}
             onChange={(event) => town.setSearch(event.target.value)}
           />
+          {town.view === "seeds" && !town.directId && <SeedSearch town={town} />}
           <div className="town-header-actions">
             <button
               id="town-write"
@@ -100,6 +106,7 @@ export function Town({ model }: { model: TownModel }) {
             <button
               id="town-auth-button"
               className="secondary"
+              hidden={town.view === "seeds"}
               onClick={() => void town.auth()}
             >
               {town.authLabel}
@@ -121,13 +128,13 @@ export function Town({ model }: { model: TownModel }) {
             role="status"
             data-phase={town.live?.phase || "connecting"}
           >
-            {town.live?.message || "正在读取 Town 连接状态"}
+            {town.view === "seeds" ? "Seed Garden · 公开经验" : town.live?.message || "正在读取 Town 连接状态"}
           </span>
           <button
             id="town-live-retry"
             className="text-button"
             hidden={
-              !town.live ||
+              town.view === "seeds" || !town.live ||
               !["reconnecting", "auth-error"].includes(town.live.phase)
             }
             onClick={() => void town.run(() => town.api.reconnectTown())}
@@ -193,7 +200,7 @@ function TownBody({ town }: { town: TownModel }) {
       <div className="direct-reading">
         <FiresideThread town={town} />
       </div>
-    ) : (
+    ) : town.view === "seeds" ? <SeedDetail town={town} direct /> : (
       <CatalogDetail town={town} direct />
     );
   if (town.library) return <LocalKits town={town} />;
@@ -209,6 +216,7 @@ function TownBody({ town }: { town: TownModel }) {
       />
     );
   if (town.view === "firesides") return <Firesides town={town} />;
+  if (town.view === "seeds") return <SeedGarden town={town} data={town.data} />;
   return <Catalog town={town} data={town.data} />;
 }
 function Firesides({ town }: { town: TownModel }) {

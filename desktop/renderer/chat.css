@@ -109,19 +109,22 @@ body{-webkit-font-smoothing:antialiased;background:var(--bg)}
 .message.user .content{border-radius:15px 15px 4px 15px;background:var(--bg-softer)}
 #input-area{background:var(--bg-soft);border-radius:12px 12px 4px 12px;box-shadow:none}
 
-/* Small, contextual doorway from the conversation into the town. */
-#chat-places{position:relative;flex-shrink:0}
+/* Collapsible, single-row town shortcuts beside the composer. */
+#chat-places{display:flex;align-items:center;min-width:0;max-width:100%;gap:2px}
 #desktop-composer-tools #chat-places-trigger{width:30px;height:30px;justify-content:center;padding:5px}
-#desktop-composer-tools #chat-places-trigger svg{width:17px;height:17px}
-#chat-places-trigger[aria-expanded=true]{background:var(--hover-overlay);color:var(--text)}
-#chat-places-popup{position:absolute;bottom:100%;left:0;padding-bottom:8px;z-index:30}
+#desktop-composer-tools #chat-places-trigger{flex:0 0 30px}
+#desktop-composer-tools #chat-places-trigger svg{width:14px;height:14px;transition:transform .16s ease}
+#chat-places-trigger[aria-expanded=false] svg{transform:rotate(180deg)}
+#chat-places-popup{min-width:0;overflow:hidden}
 #chat-places-popup[hidden]{display:none}
-#chat-places-menu{width:156px;max-height:calc(100vh - 150px);overflow-y:auto;padding:6px;border:1px solid var(--border);border-radius:12px;background:var(--bg);box-shadow:0 8px 28px #0002;animation:places-appear .14s ease-out;transform-origin:bottom left}
-#desktop-composer-tools #chat-places-menu button{width:100%;padding:8px 10px;gap:11px;font-size:12px;color:var(--text);text-align:left}
-#desktop-composer-tools #chat-places-menu svg{width:16px;height:16px;flex-shrink:0;color:var(--text-dim)}
+#chat-places-menu{display:flex;align-items:center;gap:2px;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;animation:places-appear .16s ease-out}
+#chat-places-menu::-webkit-scrollbar{display:none}
+#desktop-composer-tools #chat-places-menu button{flex:0 0 auto;height:30px;padding:5px 8px;gap:5px;font-size:11px;color:var(--text-dim)}
+#desktop-composer-tools #chat-places-menu svg{width:14px;height:14px;flex-shrink:0}
 #chat-places-menu button:focus-visible,#chat-places-trigger:focus-visible{outline:2px solid var(--accent-border);outline-offset:-2px;background:var(--hover-overlay)}
-@keyframes places-appear{from{opacity:0;transform:translateY(4px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes places-appear{from{opacity:0;transform:translateX(-4px)}to{opacity:1;transform:none}}
 @media(prefers-reduced-motion:reduce){#chat-places-menu{animation:none}}
+@media(max-width:520px){#desktop-composer-tools #chat-places-menu svg{display:none}#desktop-composer-tools #chat-places-menu button{padding:5px 6px}}
 
 /* A writing surface, with the town just a small gesture away. */
 :root{--bg:#faf9f6;--border:#e4e5dc}
@@ -153,7 +156,7 @@ body{-webkit-font-smoothing:antialiased;background:var(--bg)}
 .message .content code .chat-code-link:hover{background:var(--hover-overlay)}
 .message .content code .chat-code-link:focus-visible{outline:2px solid var(--accent-border);outline-offset:3px;border-radius:2px}
 #chat-places-trigger.has-town-activity{position:relative}
-#chat-places-trigger.has-town-activity:after{content:'';position:absolute;right:4px;top:4px;width:5px;height:5px;background:var(--accent,#587058);border-radius:50%}
+#chat-places-trigger.has-town-activity[aria-expanded=false]:after{content:'';position:absolute;right:4px;top:4px;width:5px;height:5px;background:var(--accent,#587058);border-radius:50%}
 #chat-places-menu .has-town-activity:after{content:'';margin-left:auto;width:5px;height:5px;background:var(--accent,#587058);border-radius:50%}
 
 /* Match desktop controls; keep attachment hover visible despite its ID rule. */

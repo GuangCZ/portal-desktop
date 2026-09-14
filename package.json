@@ -22,6 +22,8 @@
     "test:macos-package": "PORTAL_DESKTOP_MAC_PACKAGE_TESTS=1 vitest run tests/macos-package.test.ts",
     "test:macos-upgrade": "node tests/macos-upgrade-e2e.mjs",
     "test:town-sdk": "node tests/town-sdk.mjs",
+    "test:town-names": "node tests/town-names.mjs",
+    "test:seed-garden": "node tests/seed-garden.mjs",
     "test:browser": "node tests/browser-e2e.mjs"
   },
   "devDependencies": {

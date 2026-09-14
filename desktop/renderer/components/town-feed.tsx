@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   feedMessages,
+  feedDisplayName,
   filterMessages,
+  mailReply,
   newFeedFilters,
   type FeedFilters,
   type FeedMessage,
@@ -38,7 +40,7 @@ export function TownFeed({
         ...new Map(
           messages.map((message) => [
             message.authorId || message.author,
-            message.author,
+            feedDisplayName(message.author, message.authorId),
           ]),
         ).entries(),
       ].sort((a, b) => a[1].localeCompare(b[1], "zh-CN")),
@@ -158,7 +160,7 @@ export function TownFeed({
       <div
         className="feed-summary"
         role="status"
-      >{`${filtered.length} / ${messages.length} 条 · 最近 ${limit} 条内筛选${me ? " · 当前身份 " + me.toLowerCase() : " · 配对后可识别 @我和我的发言"}`}</div>
+      >{`${filtered.length} / ${messages.length} 条 · 最近 ${limit} 条内筛选${me ? "" : " · 配对后可识别 @我和我的发言"}`}</div>
       <div className="social-messages">
         {filtered.map((message) => {
           const id = str(
@@ -226,10 +228,13 @@ function Message({
     preview = useRef<HTMLElement>(null);
   const via = str(m.entry.via),
     validTime = Number.isFinite(m.time),
-    replyId = mail
-      ? str(m.entry.id || m.entry.message_id || m.entry.seq)
-      : Number(m.entry.seq),
+    replyId = Number(m.entry.seq),
     state = str(m.entry.delivery_status);
+  const reply = mail ? mailReply(m) : Number.isSafeInteger(replyId) && replyId > 0
+    ? { id: replyId, author: feedDisplayName(m.author, m.authorId), preview: m.content.slice(0, 500) }
+    : undefined;
+  const authorName = feedDisplayName(m.author, m.authorId);
+  const replyAuthor = str(m.entry.reply_to_being || m.entry.reply_to_sender);
   const labels: Record<string, string> = {
     delivered: "已送达",
     pending: "待送达",
@@ -252,16 +257,13 @@ function Message({
       className={`social-message${m.mentioned ? " mentions-me" : ""}${selected ? " scene-selected" : ""}`}
     >
       <span className="social-avatar" aria-hidden="true">
-        {m.author.slice(0, 1)}
+        {authorName === '未命名 Being' ? '·' : authorName.slice(0, 1)}
       </span>
       <div className="social-content">
         <div className="social-meta">
           <strong className="social-author" title={m.authorId}>
-            {m.author}
+            {authorName}
           </strong>
-          {m.authorId && m.authorId !== m.author.toLowerCase() && (
-            <span className="social-author-id">@{m.authorId}</span>
-          )}
           {via.startsWith("client:") && (
             <span
               className="relation-tag via-tag"
@@ -273,8 +275,8 @@ function Message({
           {m.mine && <span className="relation-tag">本 Being 发送</span>}
           {m.received && <span className="relation-tag">发给我</span>}
           {m.mentioned && <span className="relation-tag mention-tag">@我</span>}
-          {mail && m.recipient && (
-            <span className="social-recipient">→ {m.recipient}</span>
+          {mail && m.recipient && !m.received && (
+            <span className="social-recipient" title={m.recipientId}>→ {feedDisplayName(m.recipient, m.recipientId)}</span>
           )}
           <time
             dateTime={validTime ? new Date(m.time).toISOString() : undefined}
@@ -293,11 +295,7 @@ function Message({
           <blockquote className="feed-reply-preview">
             <strong>
               回复{" "}
-              {str(
-                m.entry.reply_to_being ||
-                  m.entry.reply_to_sender ||
-                  "#" + str(m.entry.reply_to),
-              )}
+              {replyAuthor && !replyAuthor.startsWith('t_') ? replyAuthor : '原消息'}
             </strong>
             <span>
               {str(m.entry.reply_to_preview).slice(0, 500) ||
@@ -329,27 +327,14 @@ function Message({
         <div className="social-foot">
           {mail
             ? labels[state] || state
-            : `#${str(m.entry.seq)}${m.entry.revised_at ? " · 已编辑" : ""}`}
+            : m.entry.revised_at ? '已编辑' : ''}
           {(town.view === "firesides" || town.view === "bonfire" || mail) &&
             town.live?.phase === "connected" &&
-            Boolean(replyId) &&
-            ((mail && Boolean(m.recipient || m.authorId)) ||
-              (!mail && Number.isSafeInteger(Number(replyId)) && Number(replyId) > 0)) && (
+            reply && (
               <button
                 className="scene-select"
                 type="button"
-                onClick={() =>
-                  town.compose({
-                    id: replyId,
-                    author: m.author,
-                    preview: m.content.slice(0, 500),
-                    recipient: mail
-                      ? m.mine
-                        ? m.recipient
-                        : m.authorId || m.author
-                      : undefined,
-                  })
-                }
+                onClick={() => town.compose(reply)}
               >
                 回复
               </button>

@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { SecretStorage } from './settings';
 import type { TownPost, TownQuery, TownResult } from './shared';
+import { normalizeTownIdentity, validTownIdentity } from './town-identity';
 
 export const TOWN_ORIGIN = 'https://beings.town';
 const idPattern = /^[a-zA-Z0-9_-]{1,160}$/;
@@ -11,6 +12,22 @@ export function townRoute(query: TownQuery, beingId = ''): { route: string; priv
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > 100000) throw new Error('无效的分页。');
   switch (query.kind) {
     case 'home': return { route: '/api', private: false };
+    case 'seeds': {
+      const params = new URLSearchParams({ limit: '24', offset: String(offset) });
+      for (const field of ['q', 'domain', 'tag', 'kit', 'lifecycle'] as const) {
+        const value = query[field];
+        if (value === undefined || value === '') continue;
+        if (typeof value !== 'string' || value.length > 300 || /[\u0000-\u001f]/.test(value)) throw new Error('无效的种子筛选条件。');
+        if (field === 'lifecycle' && !['seed', 'stale', 'superseded'].includes(value)) throw new Error('无效的种子状态。');
+        if (value.trim()) params.set(field, value.trim());
+      }
+      return { route: '/api/seeds?' + params, private: false };
+    }
+    case 'seed': case 'seed-lineage': case 'seed-absorbs': {
+      if (typeof query.id !== 'string' || !idPattern.test(query.id) || query.id === 'help') throw new Error('无效的种子编号。');
+      const suffix = query.kind === 'seed-lineage' ? '/lineage' : query.kind === 'seed-absorbs' ? '/absorb' : '';
+      return { route: `/api/seeds/${query.id}${suffix}`, private: false };
+    }
     case 'bonfire': return { route: '/api/bonfire/hear?limit=100', private: true };
     case 'firesides': return { route: '/api/fireside/list', private: true };
     case 'fireside': {
@@ -23,8 +40,8 @@ export function townRoute(query: TownQuery, beingId = ''): { route: string; priv
     case 'scrolls': case 'my-scrolls': {
       const kind = query.scrollKind || '';
       if (typeof kind !== 'string' || kind && !['note', 'procedure', 'lesson', 'pattern', 'guide', 'skill'].includes(kind)) throw new Error('无效的卷轴类型。');
-      if (query.kind === 'my-scrolls' && !/^[a-z0-9_-]{1,64}$/.test(beingId)) throw new Error('请先配对 Being，以查看我的卷轴。');
-      const scope = query.kind === 'my-scrolls' ? `being_id=${beingId}` : 'visibility=public';
+      if (query.kind === 'my-scrolls' && !validTownIdentity(beingId)) throw new Error('请先配对 Being，以查看我的卷轴。');
+      const scope = query.kind === 'my-scrolls' ? `${beingId.startsWith('t_') ? 'author' : 'being_id'}=${beingId}` : 'visibility=public';
       return { route: `/api/scrolls?${scope}&limit=24&offset=${offset}${kind ? '&kind=' + kind : ''}`, private: true };
     }
     case 'grove': return { route: `/api/grove?limit=24&offset=${offset}`, private: false };
@@ -45,13 +62,13 @@ export class TownCredentials {
     try {
       const data = JSON.parse(await readFile(path.join(this.directory, 'town-credential.json'), 'utf8'));
       this.token = this.storage.decryptString(Buffer.from(data.credential, 'base64'));
-      this.beingId = typeof data.beingId === 'string' && /^[a-z0-9_-]{1,64}$/.test(data.beingId) ? data.beingId : '';
+      this.beingId = validTownIdentity(data.beingId) ? data.beingId : '';
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Town 凭据无法解密，请在 Town 设置中重新保存。'); }
   }
   async save(token: string, beingId = '') {
     if (typeof token !== 'string' || (token && !/^[a-zA-Z0-9._~-]{16,2048}$/.test(token))) throw new Error('请输入有效的 Town 专用凭据。');
     if (!this.storage.isEncryptionAvailable()) throw new Error('系统密钥库不可用。');
-    if (beingId && !/^[a-z0-9_-]{1,64}$/.test(beingId)) throw new Error('无效的 Being 名。');
+    if (beingId && !validTownIdentity(beingId)) throw new Error('无效的 Town ID 或 Being 名。');
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const file = path.join(this.directory, 'town-credential.json');
     await writeFile(file + '.tmp', JSON.stringify({ credential: this.storage.encryptString(token).toString('base64'), beingId: token ? beingId : '' }), { mode: 0o600 });
@@ -65,13 +82,14 @@ export class TownClient {
   constructor(private getToken: () => string, private fetcher: typeof fetch = fetch, private origin = TOWN_ORIGIN, private getBeingId: () => string = () => '') {}
   async pair(input: { beingId: string; code: string }): Promise<{ token: string; beingId: string }> {
     if (!input || typeof input.beingId !== 'string' || typeof input.code !== 'string') throw new Error('请输入 Being 名和配对码。');
-    const beingId = input.beingId.trim().toLowerCase(), code = input.code.trim().toUpperCase();
-    if (!/^[a-z0-9_-]{1,64}$/.test(beingId) || !/^[A-Z0-9]{6}$/.test(code)) throw new Error('Being 名只能包含小写字母、数字、下划线和短横线；配对码须为 6 位字母或数字。');
+    const beingId = normalizeTownIdentity(input.beingId), code = input.code.trim().toUpperCase();
+    if (!validTownIdentity(beingId) || !/^[A-Z0-9]{6}$/.test(code)) throw new Error('请输入有效的 Town ID 或 Being 名；配对码须为 6 位字母或数字。');
+    const townIdInput = beingId.startsWith('t_');
     let response: Response;
     try {
       response = await this.fetcher(this.origin + '/api/client/pair/confirm', {
         method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ being_id: beingId, code }), credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(20000),
+        body: JSON.stringify({ [townIdInput ? 'town_id' : 'being_id']: beingId, code }), credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(20000),
       });
     } catch { throw new Error('配对请求未完成，请检查网络；若配对码已失效，请获取新码。'); }
     if (!response.ok) {
@@ -81,8 +99,9 @@ export class TownClient {
     let data: Record<string, unknown>;
     try { data = await readTownJson(response); } catch { throw new Error('配对响应格式不正确，请稍后重试。'); }
     if (data.ok !== true || typeof data.token !== 'string' || !/^[a-zA-Z0-9._~-]{16,2048}$/.test(data.token)) throw new Error('配对未成功，请核对 Being 名与配对码。');
-    if (data.being_id !== undefined && data.being_id !== beingId) throw new Error('配对返回的 Being 身份不匹配。');
-    return { token: data.token, beingId };
+    if (data.town_id !== undefined && (!validTownIdentity(data.town_id) || !data.town_id.startsWith('t_'))) throw new Error('配对返回的 Town ID 无效。');
+    if (townIdInput ? data.town_id !== beingId : data.being_id !== undefined && data.being_id !== beingId) throw new Error('配对返回的 Being 身份不匹配。');
+    return { token: data.token, beingId: typeof data.town_id === 'string' ? data.town_id : beingId };
   }
   async send(input: TownPost): Promise<TownResult> {
     const token = this.getToken();
@@ -96,7 +115,7 @@ export class TownClient {
     }
     if (input.kind === 'bonfire') { route = '/api/bonfire/speak'; body = { message: input.content }; }
     else if (input.kind === 'dm') {
-      if (typeof input.recipient !== 'string' || !input.recipient.trim() || input.recipient.length > 160) throw new Error('请输入收件 Being 的 ID 或显示名。');
+      if (typeof input.recipient !== 'string' || !input.recipient.trim() || input.recipient.length > 160) throw new Error('请输入收件 Being 的 Town ID 或准确显示名。');
       if (input.recipient.trim() === this.getBeingId()) throw new Error('不能给当前 Being 自己发送私信，请选择其他收件人。');
       route = '/api/messages'; body = { recipient: input.recipient.trim(), content: input.content };
     } else if (input.kind === 'fireside') {

@@ -5,8 +5,9 @@ export function mountChatLinks(send: (message: Record<string, unknown>) => void)
   if (!messages) return;
   const terms: Record<string, PlaceView> = { 篝火: 'bonfire', 围炉: 'firesides', 私信: 'mail', 邮局: 'mail', 收件箱: 'mail',
     书架: 'embers', 卷轴: 'scrolls', 工具库: 'kits', 本机连接: 'portal', bonfire: 'bonfire', fireside: 'firesides',
+    种子花园: 'seeds', 'seed garden': 'seeds', seeds: 'seeds',
     embers: 'embers', scrolls: 'scrolls', kit: 'kits', kits: 'kits', portal: 'portal' };
-  const pattern = /篝火|围炉|私信|邮局|收件箱|书架|卷轴|工具库|本机连接|\b(?:bonfire|fireside|embers|scrolls|kits?|portal)\b/gi;
+  const pattern = /篝火|围炉|私信|邮局|收件箱|书架|卷轴|工具库|本机连接|种子花园|\b(?:seed garden|seeds|bonfire|fireside|embers|scrolls|kits?|portal)\b/gi;
   const targets = new WeakMap<Element, PlaceTarget>();
   const pending = new Set<HTMLElement>();
   let timer: ReturnType<typeof setTimeout> | undefined;

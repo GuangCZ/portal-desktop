@@ -32,15 +32,15 @@ export function TownAuth({ model }: { model: TownModel }) {
           ></button>
         </div>
         <p className="connection-description">
-          用 Being 名和 6 位配对码连接，直接查看篝火、围炉和私信。
+          用 Town ID 或 Being 名和 6 位配对码连接，直接查看篝火、围炉和私信。
         </p>
-        <label htmlFor="town-being">Being 名</label>
+        <label htmlFor="town-being">Town ID 或 Being 名</label>
         <input
           id="town-being"
           autoComplete="username"
           spellCheck={false}
           maxLength={64}
-          placeholder="例如 weiguo_being"
+          placeholder="例如 t_pX4Dut 或 weiguo_being"
           value={town.authBeing}
           disabled={town.authBusy}
           onChange={(event) => {

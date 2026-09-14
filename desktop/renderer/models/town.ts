@@ -11,6 +11,7 @@ import type {
   TownKind,
   TownQuery,
   KitInstallPlan,
+  SeedFilters,
 } from "../../shared";
 
 export type Data = Record<string, unknown>;
@@ -85,6 +86,12 @@ export const definitions: Record<
       "Being 与人类伙伴共同经历的故事。由 Being 选择讲述，任何人都能阅读。",
     tabs: [],
   },
+  seeds: {
+    title: "种子花园",
+    eyebrow: "SEED GARDEN",
+    description: "读一颗经验的种子，少走一次重复的弯路。",
+    tabs: [],
+  },
   scrolls: {
     title: "卷轴",
     eyebrow: "SCROLLS",
@@ -119,6 +126,7 @@ export class TownModel extends Store {
   offset = 0;
   search = "";
   scrollKind = "";
+  seedFilters: SeedFilters = { q: "", domain: "", tag: "", kit: "", lifecycle: "" };
   data: Data | null = null;
   library: KitLibrary | null = null;
   loading = false;
@@ -382,6 +390,17 @@ export class TownModel extends Store {
     });
     this.changed();
   }
+  filterSeeds(filters: SeedFilters) {
+    this.seedFilters = filters;
+    this.directId = undefined;
+    this.offset = 0;
+    void this.load();
+  }
+  seedWall(kit: string) {
+    this.seedFilters = { q: "", domain: "", tag: "", kit, lifecycle: "" };
+    if (this.view === "seeds") this.filterSeeds(this.seedFilters);
+    else this.navigate("seeds");
+  }
   matches(...values: unknown[]) {
     const query = this.search.toLocaleLowerCase().trim();
     return (
@@ -398,6 +417,7 @@ export class TownModel extends Store {
       kind: (this.view === "town" ? "home" : this.tab) as TownKind,
       offset: this.offset,
       ...(this.view === "scrolls" ? { scrollKind: this.scrollKind } : {}),
+      ...(this.view === "seeds" ? this.seedFilters : {}),
     };
   }
   private async queryMail(tab: "all" | "inbox" | "sent") {
@@ -443,7 +463,7 @@ export class TownModel extends Store {
       selection: undefined,
       count: undefined,
       scope: "正在读取当前页",
-      filters: { tab: this.tab, offset: String(this.offset) },
+      filters: { tab: this.tab, offset: String(this.offset), ...(this.view === "seeds" ? this.seedFilters : {}) },
     });
     this.data = null;
     this.library = null;
@@ -451,6 +471,7 @@ export class TownModel extends Store {
     this.detail = undefined;
     this.localKit = undefined;
     this.selectedId = "";
+    this.detailLoading = false;
     this.detailError = undefined;
     this.error = undefined;
     this.loading = true;
@@ -476,7 +497,7 @@ export class TownModel extends Store {
                 ? "kit"
                 : this.view === "embers"
                   ? "ember"
-                  : "scroll",
+                  : this.view === "seeds" ? "seed" : "scroll",
             id,
           });
         return;
@@ -549,7 +570,7 @@ export class TownModel extends Store {
     } else
       list(
         this.data,
-        this.channel() ? "messages" : this.tab === "grove" ? "kits" : "scrolls",
+        this.channel() ? "messages" : this.tab === "grove" ? "kits" : this.view === "seeds" ? "seeds" : "scrolls",
       );
   }
   rooms() {
@@ -666,6 +687,7 @@ export class TownModel extends Store {
         this.scenes.update({ status: "error", scope: "详情读取失败" });
         return;
       }
+      if (query.kind === "seed" && typeof result.data.brief !== "string") throw new Error("种子详情格式不正确，请稍后重试。");
       this.scenes.update({
         title: str(
           result.data.title,

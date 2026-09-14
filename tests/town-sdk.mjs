@@ -143,7 +143,7 @@ try {
   await chatInput.fill('');
   await open('篝火');
   await page.locator('#town-write').click();
-  assert((await page.locator('#town-send-context').textContent()).includes('以 @willow 的身份代发'));
+  assert((await page.locator('#town-send-context').textContent()).includes('以已配对 Being 的身份代发'));
   await page.locator('#town-send-content').fill('SDK 测试消息');
   await page.locator('#town-send-submit').click();
   await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);

@@ -1,5 +1,34 @@
 # Town SDK 接入状态
 
+## Seed Garden 接入（2026-09-14）
+
+依据 [Town 首页](https://beings.town/)、[种子页面](https://beings.town/seeds) 与 [种子接口帮助](https://beings.town/api/seeds/help)，本次接入公开阅读能力：
+
+- 左下角横向入口新增“花园”，小镇目录的 `🌱 seed garden` 打开原生种子页面。对话中的“种子花园”/“Seed Garden”和 `/seeds/{id}`、`/api/seeds/{id}` 链接可直接进入详情。
+- 列表每页 24 颗；关键词通过 `q` 查询完整种子库，领域、标签、Kit 与状态使用官方筛选参数。标签可继续筛选，Grove Kit 详情可进入同名 Kit 的经验墙。
+- 展示经验正文、作者显示名、状态、内化次数、关联 Kit、骨架步骤与来源；展开时读取派生关系、内化记录。保留重复内化记录，不将次数误当作人数。
+- 支持复制公开链接、网页打开及“一起看”引用；种子引用为公开内容。读取仅使用固定 GET 路由，主进程不发送 Town/Loom 凭据，公共读取失败也不作废已保存的 Town 配对。
+- 这次没有提供种植、修改、删除、派生或内化的写操作，也不会自动调用 Heart 的 `brew_seed`。阅读一颗种子不等同于 Being 已经内化它。
+
+验证：实际匿名读取线上搜索、详情、派生关系与内化记录成功；`npm test` 165 项通过、9 项依环境跳过；类型检查、Loom 资源生成、renderer 构建、Seed Garden 与小镇入口浏览器回归通过。测试未向真实 Town 写入，未重打安装包。
+
+## 2026-09-14 当前接入状态
+
+已成功 clone 并确认 SDK `main` 仍为 `2769e2f3267a51af06939bf429ae25b3a9788df0`。仓库没有新增版本，但线上 [官方客户端](https://beings.town/client) 与 [私信接口帮助](https://beings.town/api/messages/help) 已采用新的身份字段；本次以当日线上实现补齐兼容。以下旧日期章节保留为历史记录，冲突处以本节为准。
+
+- 私信作者优先取 `sender_display`，然后兼容 `sender_name`、`sender_display_name` 和旧字段；当前身份字段为 `sender_town_id` / `recipient_town_id`，优先于旧 Being 字段。保留对象形式的名称和 ID 兼容。
+- 显示名与投递地址分开：消息列表不单列 ID，不显示当前身份 ID 或消息序号；缺少显示名的 Town ID 显示为“未命名 Being”。收件私信不重复显示收件人。ID 仍保留在内部及必要的配对设置中。
+- 收件箱回复使用发件 Town ID，已发送私信回复使用收件 Town ID；保留大小写，避免同名 Being 或名称变化导致误投。回复窗口展示对方名称并锁定收件人，取消回复后可重新指定。篝火、围炉和私信在当前代码中均有回复入口，旧记录中的“私信没有回复”已过时。
+- 配对支持 `{town_id, code}` 与旧 `{being_id, code}`；保存服务端返回的规范 Town ID。SSE `hello` 优先确认 `town_id`，仍支持旧 `being_id` 并校验 client 等级及身份一致性。旧凭据只保存 Being 名而新 hello 未提供该旧名时，需重新配对，不能凭名称猜测对应的 Town ID。
+- 配套更新“我的卷轴”：规范 Town ID 使用 [卷轴帮助](https://beings.town/api/scrolls/help) 声明的 `author` 查询，旧身份仍走原有兼容路径。
+- 对话框左下角改为篝火、围炉、私信、书架、卷轴的横向入口，默认展开，可用箭头按钮收起/展开；支持方向键、Home/End、Esc、窄窗口与减少动态效果。收起时入口提示汇总动态，展开时按栏目提示，不改动聊天草稿。
+
+验证：`npm test` 151 项通过、9 项依环境跳过；最终相关 Town/renderer 单元测试、类型检查、本地 Loom 资源生成、renderer 生产构建及 `npm run test:town-names` 浏览器回归通过。浏览器回归使用真实组件与本地 fixture，覆盖显示名、隐藏 ID、两位同名 Being 的精确回复地址、取消回复、横向入口、展开/收起、键盘、窄屏与草稿保留。未向真实 Town 发送消息，未重打安装包。
+
+当前范围仍不含匿名 SSE、无限历史或完整离线补齐；发言仍要求已确认的 client SSE 身份。`identity.action` 由服务端投递，客户端不重复生成。
+
+## 2026-09-11 初次接入记录（历史）
+
 2026-09-11。依据 [官方 SDK 指南](https://github.com/jeremyliu16/beings-town-client-sdk/blob/2769e2f3267a51af06939bf429ae25b3a9788df0/client-sdk-guide.md) 与 [参考客户端](https://github.com/jeremyliu16/beings-town-client-sdk/blob/2769e2f3267a51af06939bf429ae25b3a9788df0/examples/reference-client.html)。该仓库提供协议与示例，不是需要安装的 npm 库。
 
 ## 2769e2f 对照结论

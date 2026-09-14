@@ -93,6 +93,7 @@ export function Topbar({ model }: { model: AppModel }) {
       motion.current?.cancel();
     };
   }, []);
+  const hasToken = Boolean(app.snapshot?.settings.hasToken);
   const labels: Record<string, string> = {
     online: "已连接",
     connecting: "正在连接",
@@ -101,7 +102,6 @@ export function Topbar({ model }: { model: AppModel }) {
     offline: "已离线",
   };
   const label = labels[app.connection] || "尚未连接";
-  const hasToken = Boolean(app.snapshot?.settings.hasToken);
   return (
     <header className="topbar">
       <div className="pair-name">
@@ -121,18 +121,8 @@ export function Topbar({ model }: { model: AppModel }) {
           disabled={!hasToken}
           onClick={() => app.toggleSbs()}
         >
-          <span className="sbs-header-track" aria-hidden="true">
-            <span className="sbs-header-thumb" />
-          </span>
+          <span className="sbs-header-dot" aria-hidden="true" />
         </button>
-        <span
-          id="connection-light"
-          className="connection-light"
-          role="img"
-          data-state={app.connection}
-          aria-label={label}
-          title={label}
-        />
       </div>
       <div className="topbar-actions">
         <button

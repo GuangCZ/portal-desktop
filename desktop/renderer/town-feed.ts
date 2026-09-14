@@ -1,3 +1,5 @@
+import { normalizeTownIdentity } from '../town-identity';
+
 type Entry = Record<string, unknown>;
 export interface FeedFilters {
   relation: string;
@@ -10,6 +12,7 @@ export interface FeedReply {
   author: string;
   preview: string;
   recipient?: string;
+  recipientName?: string;
 }
 export const newFeedFilters = (): FeedFilters => ({
   relation: "all",
@@ -25,16 +28,18 @@ const record = (value: unknown): Entry =>
     : {};
 const identity = (value: unknown): string =>
   text(
-    record(value).being_id ||
+    record(value).town_id ||
+      record(value).townId ||
+      record(value).being_id ||
       record(value).beingId ||
       record(value).id ||
       record(value).name ||
       value,
-  ).toLowerCase();
+  ).trim();
 const displayName = (value: unknown): string => {
   const item = record(value);
   return (
-    text(item.display_name || item.displayName || item.name || value) ||
+    text(item.display || item.display_name || item.displayName || item.name || value) ||
     (item.being !== undefined ? displayName(item.being) : "") ||
     (item.identity !== undefined ? displayName(item.identity) : "") ||
     ""
@@ -52,15 +57,24 @@ export function feedMessages(
   entries: Entry[],
   options: { me: string; mail?: "all" | "inbox" | "sent" },
 ) {
-  const me = options.me.toLowerCase();
+  const me = normalizeTownIdentity(options.me);
   return entries.map((entry, index) => {
     const authorId = identity(
       options.mail
-        ? entry.sender_being_id || entry.sender || entry.from || entry.author
-        : entry.being_id || entry.being,
+        ? entry.sender_town_id ||
+          entry.sender_being_id ||
+          entry.sender_beingId ||
+          entry.sender_id ||
+          entry.from_id ||
+          entry.author_id ||
+          entry.sender ||
+          entry.from ||
+          entry.author
+        : entry.town_id || entry.being_id || entry.being,
     );
     const author =
       firstText(
+        entry.sender_display,
         entry.sender_name,
         entry.sender_display_name,
         entry.speaker_name,
@@ -70,36 +84,50 @@ export function feedMessages(
         entry.from,
         entry.author,
         entry.being,
+        entry.sender_id,
+        entry.sender_town_id,
+        entry.from_id,
+        entry.author_id,
         entry.being_id,
       ) ||
       authorId ||
       "未知";
     const recipientId = identity(
-      entry.recipient_being_id || entry.recipient || entry.to,
+      entry.recipient_town_id ||
+        entry.recipient_being_id ||
+        entry.recipient_beingId ||
+        entry.recipient_id ||
+        entry.to_id ||
+        entry.recipient ||
+        entry.to,
     );
     const recipient =
       firstText(
+        entry.recipient_display,
         entry.recipient_name,
         entry.recipient_display_name,
         entry.recipient,
         entry.recipient_being,
         entry.to,
+        entry.recipient_id,
+        entry.recipient_town_id,
+        entry.to_id,
       ) ||
       recipientId;
     const content = text(entry.message || entry.content);
     const mentionedIds = Array.isArray(entry.mentions)
-      ? entry.mentions.map(identity)
+      ? entry.mentions.map((value) => normalizeTownIdentity(identity(value)))
       : [];
     // Exact @identifier tokens avoid matching e.g. alice in @alice_work.
     const textMentions = [...content.matchAll(/@([a-zA-Z0-9_-]+)/g)].map(
-      (match) => match[1].toLowerCase(),
+      (match) => normalizeTownIdentity(match[1]),
     );
     const mentioned = Boolean(
       me && (mentionedIds.includes(me) || textMentions.includes(me)),
     );
-    const mine = Boolean(me && authorId === me);
+    const mine = Boolean(me && normalizeTownIdentity(authorId) === me);
     const received = Boolean(
-      options.mail === "inbox" || (me && recipientId === me),
+      options.mail === "inbox" || (me && normalizeTownIdentity(recipientId) === me),
     );
     const sent = Boolean(options.mail === "sent" || mine);
     const rawDate = text(entry.at || entry.created_at);
@@ -110,6 +138,7 @@ export function feedMessages(
       authorId,
       author,
       recipient,
+      recipientId,
       content,
       mentioned,
       mine: sent,
@@ -121,6 +150,22 @@ export function feedMessages(
   });
 }
 export type FeedMessage = ReturnType<typeof feedMessages>[number];
+export const feedDisplayName = (name: string, id: string) =>
+  !name || (name === id && id.startsWith('t_')) ? '未命名 Being' : name;
+export function mailReply(message: FeedMessage): FeedReply | undefined {
+  const id = text(message.entry.id || message.entry.message_id);
+  const recipient = message.mine
+    ? message.recipientId || message.recipient
+    : message.authorId || message.author;
+  if (!/^[a-zA-Z0-9_-]{1,160}$/.test(id) || !recipient || recipient === '未知') return;
+  return {
+    id, author: feedDisplayName(message.author, message.authorId),
+    preview: message.content.slice(0, 500), recipient,
+    recipientName: message.mine
+      ? feedDisplayName(message.recipient, message.recipientId)
+      : feedDisplayName(message.author, message.authorId),
+  };
+}
 export function filterMessages(
   messages: FeedMessage[],
   filters: FeedFilters,

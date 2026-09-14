@@ -1,7 +1,7 @@
 import type { ClientBrowser } from './browser';
 import type { SecretStorage, SettingsStore } from './settings';
 import type { TownClient, TownCredentials } from './town';
-import { TOWN_ORIGIN } from './town';
+import { TOWN_ORIGIN, townRoute } from './town';
 import type { TownLive } from './town-live';
 import type { TownPost, TownQuery } from './shared';
 
@@ -27,7 +27,7 @@ export function registerTownIpc(options: TownIpcOptions) {
     const result = await town.query(query);
     if (generation !== townLive.state.generation) return { ok: false, code: 'auth', message: 'Town 身份已变更，请刷新。' };
     if (result.ok) townLive.remember(query, result.data);
-    else if (result.code === 'auth' && townCredentials.token && query.kind !== 'my-scrolls') townLive.rejectAuth();
+    else if (result.code === 'auth' && townCredentials.token && query.kind !== 'my-scrolls' && townRoute(query).private) townLive.rejectAuth();
     return result;
   });
   handle('beings:town-live', () => townLive.state);
@@ -50,7 +50,7 @@ export function registerTownIpc(options: TownIpcOptions) {
   }));
   handle('beings:town-token', (token: string) => exclusive(async () => { await townCredentials.save(token); options.clearWarning(); townLive.restart(); }));
   handle('beings:town-open', async (route: string) => {
-    if (typeof route !== 'string' || !/^\/(?:api\/(?:[a-z]+\/help|grove\/[a-zA-Z0-9_-]+\/download)|(?:embers|scrolls)\/[a-zA-Z0-9_-]{1,160})?$/.test(route)) throw new Error('不支持的 Town 链接。');
+    if (typeof route !== 'string' || !/^\/(?:api\/(?:[a-z]+\/help|grove\/[a-zA-Z0-9_-]+\/download)|(?:embers|scrolls|seeds)\/[a-zA-Z0-9_-]{1,160})?$/.test(route)) throw new Error('不支持的 Town 链接。');
     options.open(TOWN_ORIGIN + route);
   });
 }

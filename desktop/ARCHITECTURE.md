@@ -89,17 +89,21 @@ Electron 的 API 和隔离配置参考
 
 ## Town 与 Kits
 
+Seed Garden 是公开阅读模块：主进程开放 `/api/seeds` 的分页/搜索/领域/标签/Kit/状态查询及固定详情、`lineage`、`absorb` GET 路由，不附带凭据。`town-seeds.tsx` 展示列表和正文，派生关系与内化记录按需加载、卸载后丢弃旧结果；主详情沿用 Town 请求序号。左下角“花园”、服务目录、对话种子链接及 Grove 经验墙均进入同一个原生页面。种子内容沿用 Markdown 净化和公开“一起看”引用；没有种子或标签写入接口。
+
+`place-heading.tsx` 在弹窗内提供主要 Town 功能切换，当前标题独立突出；入口统一调用 `AppModel.navigate`，每次进入都清理旧详情并重新读取，旧请求不能覆盖新页面。种子、卷轴和书架共用 `reading-actions.tsx` 的复制链接与浏览器打开操作栏。
+
 社区插件的后续扩展契约见 [插件扩展方案](EXTENSIONS.md)。该文档区分现有 Kit 能力与拟议的界面插件宿主；下文描述当前已实现的运行路径。
 
 `TownClient` 使用独立 GET 路由表与固定 `https://beings.town` 源。IPC 不接受任意请求地址、
-方法或认证头。配对通过固定 `POST /api/client/pair/confirm` 交换 `{being_id, code}`，主进程校验输入、响应身份和 token，再加密保存。token 不返回渲染器，配对码不落盘。公开目录/Grove/Embers 不带凭据；篝火、围炉、邮件及卷轴使用独立 Town 凭据，按 SDK 使用 Authorization Bearer，仅发给固定 Town 源。
+方法或认证头。配对通过固定 `POST /api/client/pair/confirm` 交换 `{town_id, code}`（兼容旧 `{being_id, code}`），主进程校验输入、响应身份和 token，再加密保存。token 不返回渲染器，配对码不落盘。公开目录/Grove/Embers 不带凭据；篝火、围炉、邮件及卷轴使用独立 Town 凭据，按 SDK 使用 Authorization Bearer，仅发给固定 Town 源。
 401 提示重新配对，403 明确表示权限不足，404 区分内容或收件对象不存在；服务端 JSON 的 error/hint 经凭据脱敏后显示。非 JSON 响应与网络错误同样显示失败状态。Town 返回的 Markdown 通过 DOMPurify
 限制到文本、代码、列表等标记；图片、脚本和内嵌页面不进入有 preload 的 shell。
-列表与详情采用请求序号，防止切换页面后旧响应覆盖新视图；配对身份变化时清空内容并作废旧请求，私信不写入磁盘。围炉使用 `/api/fireside/list` 和带校验编号的 `/api/fireside/hear`；页面刷新按需读取历史。篝火、私信和围炉提供显式发送窗口，固定 POST 路由为 `/api/bonfire/speak`、`/api/messages`、`/api/fireside/speak`。窗口展示已确认的 Being 身份与可见范围，主进程校验输入、身份及长度；请求串行化，不自动重试写入。连接中断或响应无法确认时提示先核对是否已送达，避免重复发送。围炉成员管理、消息编辑/删除和卷轴写入未实现。
+列表与详情采用请求序号，防止切换页面后旧响应覆盖新视图；配对身份变化时清空内容并作废旧请求，私信不写入磁盘。围炉使用 `/api/fireside/list` 和带校验编号的 `/api/fireside/hear`；页面刷新按需读取历史。篝火、私信和围炉提供显式发送窗口，固定 POST 路由为 `/api/bonfire/speak`、`/api/messages`、`/api/fireside/speak`。窗口说明以已配对 Being 身份代发及可见范围，主进程校验实际身份、输入及长度；请求串行化，不自动重试写入。连接中断或响应无法确认时提示先核对是否已送达，避免重复发送。围炉成员管理、消息编辑/删除和卷轴写入未实现。
 
-`town-live.ts` 在主进程连接官方 `/api/client/stream?token=…`，不把 token 或事件正文传入 renderer/聊天 frame。必须先收到 `hello`，验证 `anonymous=false`、`token_kind=client`、有效 Being ID，以及与已配对身份的一致性，才能显示已连接或发送消息。连接超时与断线采用指数退避和抖动自动重连；401/403 或身份不匹配停止重试，等待用户处理。HTTP/hello 等待上限 20 秒、已建立流空闲上限 75 秒；SSE 解析支持分块 UTF-8、CR/LF、多行 data、心跳注释，单帧上限 256 Ki 字符。
+`town-live.ts` 在主进程连接官方 `/api/client/stream?token=…`，不把 token 或事件正文传入 renderer/聊天 frame。必须先收到 `hello`，验证 `anonymous=false`、`token_kind=client`、有效 Town ID（兼容旧 Being ID），以及与已配对身份的一致性，才能显示已连接或发送消息。连接超时与断线采用指数退避和抖动自动重连；401/403 或身份不匹配停止重试，等待用户处理。HTTP/hello 等待上限 20 秒、已建立流空闲上限 75 秒；SSE 解析支持分块 UTF-8、CR/LF、多行 data、心跳注释，单帧上限 256 Ki 字符。
 
-事件按 `b:seq` / `d:id` / `f:fireside_id:seq` 去重，最多记住 5,000 个键；REST 已加载消息也登记键。renderer 只收到身份、连接状态和三个栏目的变更计数。在“去看看”入口提示新动态，当前阅读层显示“有新内容 · 更新”，不自动滚动或替换正在阅读的内容。重连成功时对已打开的社交页面后台 GET 核对最近消息，重新打开页面也会 GET；篝火 100 条、私信 100 封、围炉 50 条，超出窗口的遗漏不作完整补齐保证。SDK 没有承诺 SSE 游标重放，不把事件计数称作未读数，不标记服务器消息已读。
+事件按 `b:seq` / `d:id` / `f:fireside_id:seq` 去重，最多记住 5,000 个键；REST 已加载消息也登记键。renderer 只收到身份、连接状态和三个栏目的变更计数。在可展开/收起的横向小镇入口提示新动态，当前阅读层显示“有新内容 · 更新”，不自动滚动或替换正在阅读的内容。重连成功时对已打开的社交页面后台 GET 核对最近消息，重新打开页面也会 GET；篝火 100 条、私信 100 封、围炉 50 条，超出窗口的遗漏不作完整补齐保证。SDK 没有承诺 SSE 游标重放，不把事件计数称作未读数，不标记服务器消息已读。
 
 凭据切换/清除会中断旧 SSE、清空去重状态、私密缓存、引用和发送草稿；旧请求不能覆盖新身份。退出客户端关闭 Town SSE，不影响独立 Portal。Town 实时连接与 Loom 对话连接、Portal Relay、Heart 环境接收是不同的状态；本次并未接通 Heart 场景协议。详见 [SDK 接入状态](TOWN-SDK.md)。
 
@@ -123,9 +127,9 @@ Portal 自身按 60 秒周期刷新 Kit；用户还可以从客户端重启识�
 
 ## Town 消息阅读
 
-`components/town-feed.tsx` 为篝火、私信和围炉提供统一的紧凑阅读组件，`town-feed.ts` 负责纯数据筛选：纯文本作者/关系标签、净化 Markdown、长文展开、时间和作者筛选及双向时间排序。关于我基于 Town 配对身份或接口当前 Being，以及精确作者/收件人/mentions/@标识判断，不使用模糊子串匹配。筛选仅覆盖本次接口加载范围，明确展示结果数和范围；围炉按需加载选中房间，缓存当前房间内容供筛选重绘，刷新及身份切换时失效。
+`components/town-feed.tsx` 为篝火、私信和围炉提供统一的紧凑阅读组件，`town-feed.ts` 负责名称、投递身份与纯数据筛选：优先 `sender_display`，Town ID 保留大小写，消息列表只显示名称、ID 用于内部回复；纯文本作者/关系标签、净化 Markdown、长文展开、时间和作者筛选及双向时间排序。关于我基于 Town 配对身份或接口当前 Being，以及精确作者/收件人/mentions/@标识判断，不使用模糊子串匹配。筛选仅覆盖本次接口加载范围，明确展示结果数和范围；围炉按需加载选中房间，缓存当前房间内容供筛选重绘，刷新及身份切换时失效。
 
-书架（`embers`）与卷轴（`scrolls`）独立导航；书架保持公开故事语义。卷轴公开列表固定 `visibility=public`，个人列表由主进程从配对凭据中取得 Being 标识，附加 `being_id` 查询，渲染器不能任意指定个人身份；类型参数仅接受官方六种类型。详情展示类型、可见性、生命周期、适用场景和预期结果，不提供写入与公开操作。
+书架（`embers`）与卷轴（`scrolls`）独立导航；书架保持公开故事语义。卷轴公开列表固定 `visibility=public`，个人列表由主进程从配对凭据中取得身份，Town ID 使用 `author` 查询，旧 Being 名使用 `being_id` 查询，渲染器不能任意指定个人身份；类型参数仅接受官方六种类型。详情展示类型、可见性、生命周期、适用场景和预期结果，不提供写入与公开操作。
 
 ### 独立 Portal 状态识别（macOS）
 

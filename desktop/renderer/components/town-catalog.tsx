@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef } from "react";
 import { TownModel, record, str, list, date, type Data } from "../models/town";
 import { sceneExcerpt } from "../scene-store";
 import { Markdown } from "./markdown";
+import { ReadingActions } from "./reading-actions";
 const scrollLabels: Record<string, Record<string, string>> = {
   kind: {
     note: "笔记",
@@ -36,6 +37,8 @@ export function TownHome({ town, data }: { town: TownModel; data: Data }) {
     bonfire: ["♧", "篝火", "bonfire"],
     fireside: ["◎", "围炉", "firesides"],
     messages: ["✉", "私信", "mail"],
+    garden: ["♧", "种子花园 · Seed Garden", "seeds"],
+    seeds: ["♧", "种子花园 · Seed Garden", "seeds"],
     ember: ["▤", "书架", "embers"],
     scroll: ["≡", "卷轴", "scrolls"],
     portal: ["⌘", "Portal 设置", "portal"],
@@ -180,7 +183,7 @@ export function Pagination({ town }: { town: TownModel }) {
     ["town", "bonfire", "mail", "firesides"].includes(town.view)
   )
     return null;
-  const entries = list(town.data, town.tab === "grove" ? "kits" : "scrolls"),
+  const entries = list(town.data, town.tab === "grove" ? "kits" : town.view === "seeds" ? "seeds" : "scrolls"),
     total = Number(town.data.total ?? town.data.count ?? entries.length);
   return (
     <>
@@ -244,11 +247,6 @@ export function CatalogDetail({
       : query?.kind === "scroll"
         ? `/scrolls/${query.id}`
         : "";
-  const copyDocumentLink = async () => {
-    if (!documentRoute) return;
-    await town.api.copyText(`https://beings.town${documentRoute}`);
-    town.toast("链接已复制");
-  };
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = 0;
   }, [town.selectedId]);
@@ -279,19 +277,7 @@ export function CatalogDetail({
               {str(first.display_name, str(first.being_id))} ·{" "}
               {date(first.updated_at)}
             </p>
-            {documentRoute && (
-              <div className="reading-actions" aria-label="文档操作">
-                <button className="secondary" onClick={() => void town.run(copyDocumentLink)}>
-                  复制链接
-                </button>
-                <button
-                  className="secondary"
-                  onClick={() => void town.run(() => town.api.openTownLink(documentRoute))}
-                >
-                  浏览器打开 ↗
-                </button>
-              </div>
-            )}
+            {documentRoute && <ReadingActions town={town} route={documentRoute} />}
             {query.kind === "scroll" && (
               <>
                 <p className="scroll-metadata">
@@ -411,6 +397,9 @@ function KitDetail({ town, data }: { town: TownModel; data: Data }) {
         <p className="kit-description">{str(data.description)}</p>
       </div>
       <div className="kit-actions">
+        <button className="secondary" onClick={() => town.seedWall(str(data.name))}>
+          查看经验墙
+        </button>
         {downloadable && (
           <button
             className="primary"

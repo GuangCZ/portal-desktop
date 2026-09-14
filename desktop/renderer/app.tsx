@@ -15,18 +15,8 @@ import { ConnectionSettings } from "./components/connection-settings";
 import { ClientSettings } from "./components/client-settings";
 import { Diagnostics } from "./components/diagnostics";
 import { Dialog } from "./components/dialog";
+import { PlaceHeading } from "./components/place-heading";
 import logo from "../../resources/branding/logo.png";
-const titles: Record<string, string> = {
-  chat: "对话",
-  portal: "Portal 设置",
-  town: "小镇广场",
-  bonfire: "篝火",
-  firesides: "围炉",
-  mail: "私信",
-  embers: "书架",
-  scrolls: "卷轴",
-  kits: "Kit 工具库",
-};
 export function App({ model }: { model: AppModel }) {
   const app = useModel(model),
     frame = useRef<HTMLIFrameElement>(null);
@@ -163,16 +153,7 @@ export function App({ model }: { model: AppModel }) {
         onClose={() => app.navigate("chat")}
         dismissOnBackdrop
       >
-        <div className="place-sheet-heading">
-          <h1 id="view-title">{titles[app.view] || "对话"}</h1>
-          <button
-            id="back-to-chat"
-            className="icon-button close"
-            aria-label="回到对话"
-            title="回到对话"
-            onClick={() => app.navigate("chat")}
-          />
-        </div>
+        <PlaceHeading view={app.view} navigate={app.navigate} />
         <Portal model={app} />
         <Town model={app.town} />
       </Dialog>
