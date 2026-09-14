@@ -10,6 +10,7 @@ import { RuntimeUpdater, digest, restoreRuntimeMode, type RuntimeBundle } from '
 import { parseConnection } from '../desktop/connection';
 import type { Settings } from '../desktop/shared';
 import { PortalSupervisor } from '../desktop/portal';
+import { PortalTakeover } from '../desktop/portal-takeover';
 
 it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.platform !== 'darwin')('returns an upgraded saved service to foreground mode without leaving login startup enabled', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'portal-foreground-upgrade-'));
@@ -165,12 +166,12 @@ it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || !['darwin',
     expect(external[0]).toMatchObject({ name: settings.portalName });
     expect(await realpath(external[0].configPath!)).toBe(await realpath(configPath));
     expect(await realpath(external[0].cwd!)).toBe(await realpath(oldRoot));
-    // Reproduce a stale client-owned service beside the active independent one.
-    await background.enable(settings, connection);
-    const version = /\b(\d+\.\d+\.\d+)\b/.exec(await command(binary, ['--version']))![1];
-    const bundle: RuntimeBundle = { schema: 1, id: 'd'.repeat(64), clientVersion: '0.1.4', portalVersion: version, sha256: digest(await readFile(binary)), platform: process.platform, arch: process.arch };
+    const manager = new PortalTakeover(directory, { discover: () => observer.conflicts(connection, background.installedService?.root), preflight: async () => {}, stop: target => background.unload(target.service!) });
     const updater = new RuntimeUpdater(directory, background);
-    expect((await updater.sync(binary, bundle, settings, connection)).phase).toBe('updated');
+    await manager.run(connection, 'automatic', async () => {
+      await background.enable({ ...settings, portalConfigPath: configPath }, connection);
+      await updater.waitReady(background.installedService!);
+    });
     expect(background.state.running).toBe(true);
     expect(await readFile(background.installedService!.configPath!, 'utf8')).toBe(original);
     expect(await observer.forUpgrade(connection, background.label, background.installedService!.root)).toEqual([]);

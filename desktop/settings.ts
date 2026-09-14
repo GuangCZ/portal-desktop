@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile, rename, stat } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { parse } from 'smol-toml';
 import { parseConnection, type Connection } from './connection';
 import type { Settings, SaveSettings } from './shared';
 
@@ -9,7 +10,7 @@ interface Stored { version: 1; settings: Omit<Settings, 'hasToken'>; credential:
 export class SettingsStore {
   connection: Connection | null = null;
   settings: Settings;
-  constructor(private directory: string, private storage: SecretStorage, binary: string) {
+  constructor(private directory: string, private storage: SecretStorage, private binary: string) {
     this.settings = { endpoint: '', being: '', hasToken: false, workspace: path.join(os.homedir(), 'portal-desktop Workspace'),
       portalBinary: binary, portalName: `portal-desktop-${os.hostname().replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 50)}`,
       autoStart: false, backgroundEnabled: true, allowExec: true, kitsEnabled: true };
@@ -24,14 +25,35 @@ export class SettingsStore {
     const connection = parseConnection(secrets.link);
     connection.relaySecret = secrets.relaySecret || connection.token;
     this.connection = connection;
-    this.settings = { ...this.settings, ...saved.settings, endpoint: connection.endpoint, being: connection.being, hasToken: true };
+    this.settings = { ...this.settings, ...saved.settings, portalBinary: this.binary, endpoint: connection.endpoint, being: connection.being, hasToken: true };
+  }
+  async reusePortalConfig(candidates: string[]) {
+    if (this.settings.portalConfigPath) return;
+    for (const file of candidates) {
+      let raw: string;
+      try { raw = await readFile(file, 'utf8'); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+      const config = parse(raw.replace(/^\uFEFF/, ''));
+      const security = config.security as Record<string, unknown> | undefined;
+      const tools = config.tools as Record<string, unknown> | undefined;
+      const workspace = config.workspace ?? security?.workspace_root;
+      const expand = (value: string) => value === '~' ? os.homedir() : /^[~][\\/]/.test(value) ? path.join(os.homedir(), value.slice(2)) : value;
+      const connection = !this.connection && typeof config.connect === 'string' && config.connect.trim() ? parseConnection(config.connect) : null;
+      this.settings = { ...this.settings, portalConfigPath: file,
+        ...(!this.settings.hasToken && typeof config.name === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(config.name) ? { portalName: config.name } : {}),
+        ...(typeof workspace === 'string' && workspace ? { workspace: path.resolve(path.dirname(file), expand(workspace)) } : {}),
+        ...(typeof tools?.exec === 'boolean' ? { allowExec: tools.exec } : {}),
+        ...(typeof config.kits_enabled === 'boolean' ? { kitsEnabled: config.kits_enabled } : {}),
+        ...(connection ? { endpoint: connection.endpoint, being: connection.being, hasToken: true } : {}) };
+      if (connection) this.connection = connection;
+      return;
+    }
   }
   async save(input: SaveSettings) {
     if (!input || typeof input !== 'object') throw new Error('无效的设置。');
     const connection = this.resolveConnection(input);
     if (!this.storage.isEncryptionAvailable()) throw new Error('系统密钥库不可用，无法安全保存连接。请启用系统密钥库后重试。');
     if (typeof input.workspace !== 'string' || !path.isAbsolute(input.workspace)) throw new Error('请选择绝对路径的工作目录。');
-    if (typeof input.portalBinary !== 'string' || !path.isAbsolute(input.portalBinary)) throw new Error('请选择 Portal 可执行文件。');
     if (typeof input.portalName !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(input.portalName)) throw new Error('Portal 名称仅支持 1–80 个字母、数字、横线和下划线。');
     for (const key of ['autoStart', 'allowExec', 'kitsEnabled'] as const) if (typeof input[key] !== 'boolean') throw new Error('无效的开关设置。');
     if (input.backgroundEnabled !== undefined && typeof input.backgroundEnabled !== 'boolean') throw new Error('无效的后台运行设置。');
@@ -40,7 +62,7 @@ export class SettingsStore {
     await mkdir(input.workspace, { recursive: true });
     if (!(await stat(input.workspace)).isDirectory()) throw new Error('工作路径不是目录。');
     const next: Settings = { endpoint: connection.endpoint, being: connection.being, hasToken: true,
-      workspace: input.workspace, portalBinary: input.portalBinary, portalName: input.portalName,
+      workspace: input.workspace, portalBinary: this.binary, portalName: input.portalName,
       autoStart: input.autoStart, allowExec: input.allowExec, kitsEnabled: input.kitsEnabled,
       backgroundEnabled: input.backgroundEnabled ?? this.settings.backgroundEnabled,
       portalConfigPath: input.portalConfigPath || undefined, portalEnvironmentPath: input.portalEnvironmentPath || undefined };

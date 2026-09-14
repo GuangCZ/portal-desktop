@@ -5,7 +5,6 @@ import { BackgroundPortal, atomic, fingerprint, unixRunner, windowsRunner, type 
 import type { Connection } from './connection';
 import type { Settings } from './shared';
 import { readPortalSample, readPortalReady } from './portal-status';
-import { ExternalPortalObserver } from './external-portal';
 
 export interface RuntimeBundle { schema: 1; id: string; clientVersion: string; portalVersion: string; sha256: string; platform: string; arch: string }
 interface Journal { schema: 1; previous: Service; candidate: Service; enabled: boolean; previousPlist?: string; external?: Service[] }
@@ -50,7 +49,6 @@ export class RuntimeUpdater {
   constructor(private directory: string, private background: BackgroundPortal,
     private platform = process.platform,
     private ready: (service: Service) => Promise<void> = service => this.waitReady(service),
-    private discoverExternal = (connection: Connection, exclude?: string) => new ExternalPortalObserver(undefined, platform).forUpgrade(connection, background.label, exclude),
   ) { this.journal = path.join(directory, 'runtime-update.json'); }
 
   async recover() {
@@ -72,14 +70,18 @@ export class RuntimeUpdater {
   private async restore(t: Journal) {
     // Never start the old engine until the candidate's entire service is stopped.
     await this.background.unload(t.candidate);
-    if (t.previous.kind === 'portable') {
-      if (this.platform === 'darwin') await rm(t.candidate.file, { force: true });
-    } else if (this.platform === 'darwin') {
+    if (t.previous.existing || t.previous.kind === 'portable') {
+      // Old migration journals can survive an app update. Keep their files,
+      // but never resume an independent engine or its guardian.
+      await this.background.forget();
+      await rm(this.journal);
+      return;
+    }
+    if (this.platform === 'darwin') {
       if (t.previousPlist === undefined) throw new Error('旧服务登记备份缺失。');
       await atomic(t.previous.file, t.previousPlist);
       if (t.candidate.file !== t.previous.file) await rm(t.candidate.file, { force: true });
     } else await this.background.installRegistration(t.previous);
-    for (const service of t.external || []) await this.background.load(service);
     if (t.enabled) await this.background.load(t.previous);
     await this.background.setService(t.previous);
     await rm(this.journal);
@@ -87,45 +89,36 @@ export class RuntimeUpdater {
     await rm(t.candidate.root, { recursive: true, force: true });
   }
   async sync(binary: string, bundle: RuntimeBundle, settings: Settings, connection: Connection): Promise<RuntimeUpdateResult> {
-    const installed = this.background.installedService;
-    const external = await this.discoverExternal(connection, installed?.kind === 'portable' ? undefined : installed?.root);
-    const previous = installed?.kind === 'portable' ? external.find(s => s.root === installed.root) || installed : installed || external[0];
-    if (!previous) return { phase: 'skipped', message: '尚未安装客户端管理的后台服务。' };
+    const previous = this.background.installedService;
+    if (!previous || previous.existing || previous.kind === 'portable') return { phase: 'skipped', message: '尚未安装客户端管理的后台服务。' };
     if (digest(await readFile(binary)) !== bundle.sha256) throw new Error('Portal 文件校验失败，旧服务未修改。');
-    const primary = external[0] || previous;
-    const additional = external.filter(s => s.root !== previous.root);
     // A client release owns one tested engine/runner pair. Preserve the user's
     // configuration, but always activate the binary covered by this manifest.
-    if (!additional.length && previous.kind !== 'portable' && previous.bundleId === bundle.id && digest(await readFile(path.join(previous.root, this.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal'))) === bundle.sha256) return { phase: 'current', message: '客户端、Portal 与守护程序已同步。', portalVersion: bundle.portalVersion };
-    const config = primary.configPath || settings.portalConfigPath || path.join(primary.root, 'portal.toml');
+    if (previous.bundleId === bundle.id && digest(await readFile(path.join(previous.root, this.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal'))) === bundle.sha256) return { phase: 'current', message: '客户端、Portal 与守护程序已同步。', portalVersion: bundle.portalVersion };
+    const config = settings.portalConfigPath || previous.configPath || path.join(previous.root, 'portal.toml');
     await access(config);
-    const wasEnabled = previous.kind === 'portable' || (await this.background.refresh()).enabled;
+    const wasEnabled = (await this.background.refresh()).enabled;
     const root = path.join(this.background.runtimeDirectory, randomUUID());
-    const candidate: Service = { label: previous.label, file: previous.kind === 'portable' ? path.join(root, 'launch.plist') : previous.file, root, existing: false, login: previous.login,
-      name: primary.name || settings.portalName, environment: primary.environment, bundleId: bundle.id, configPath: config, cwd: primary.cwd || (primary.existing ? primary.root : settings.workspace),
-      fingerprint: fingerprint({ ...settings, portalBinary: path.join(root, this.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal'), portalConfigPath: config, workspace: primary.cwd || settings.workspace, portalEnvironmentPath: primary.environment?.PATH || settings.portalEnvironmentPath, portalName: primary.name || settings.portalName }, connection) };
+    const candidate: Service = { label: previous.label, file: previous.file, root, existing: false,
+      name: settings.portalName, environment: previous.environment, bundleId: bundle.id, configPath: config, cwd: settings.workspace,
+      fingerprint: fingerprint({ ...settings, portalConfigPath: config }, connection) };
     await mkdir(root, { recursive: true, mode: 0o700 });
     try {
       const target = path.join(root, this.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal');
       await copyFile(binary, target); await chmod(target, 0o700);
       if (digest(await readFile(target)) !== bundle.sha256) throw new Error('暂存 Portal 校验失败。');
       // Preserve stored credentials exactly for already-owned services.
-      if (!primary.existing) await copyFile(path.join(primary.root, this.platform === 'win32' ? 'connection.dpapi' : 'connection.url'), path.join(root, this.platform === 'win32' ? 'connection.dpapi' : 'connection.url'));
-      else if (this.platform === 'darwin') {
-        await copyFile(path.join(primary.root, '.portal-connection.url'), path.join(root, 'connection.url')).catch(() => this.background.protectCredential(root, connection));
-        await chmod(path.join(root, 'connection.url'), 0o600);
-      } else await this.background.protectCredential(root, connection);
-      const launchSettings = { ...settings, workspace: candidate.cwd!, portalEnvironmentPath: primary.environment?.PATH || settings.portalEnvironmentPath, portalName: candidate.name! };
+      await copyFile(path.join(previous.root, this.platform === 'win32' ? 'connection.dpapi' : 'connection.url'), path.join(root, this.platform === 'win32' ? 'connection.dpapi' : 'connection.url'));
+      const launchSettings = { ...settings, portalConfigPath: config };
       await atomic(path.join(root, this.platform === 'win32' ? 'run.ps1' : 'run.sh'), this.platform === 'win32'
-        ? '\ufeff' + windowsRunner(root, config, launchSettings, primary.environment) : unixRunner(root, config, launchSettings, primary.environment));
+        ? '\ufeff' + windowsRunner(root, config, launchSettings, previous.environment) : unixRunner(root, config, launchSettings, previous.environment));
       await atomic(path.join(root, 'runtime-bundle.json'), JSON.stringify(bundle));
-      const transaction: Journal = { schema: 1, previous, candidate, enabled: wasEnabled, external: additional,
-        ...(this.platform === 'darwin' && previous.kind !== 'portable' ? { previousPlist: await readFile(previous.file, 'utf8') } : {}) };
+      const transaction: Journal = { schema: 1, previous, candidate, enabled: wasEnabled,
+        ...(this.platform === 'darwin' ? { previousPlist: await readFile(previous.file, 'utf8') } : {}) };
       await atomic(this.journal, JSON.stringify(transaction));
     } catch (error) { await rm(root, { recursive: true, force: true }); throw error; }
     try {
       await this.background.unload(previous);
-      for (const service of additional) await this.background.unload(service);
       await this.background.installRegistration(candidate);
       await this.background.load(candidate);
       await this.background.setService(candidate);
@@ -146,13 +139,7 @@ export class RuntimeUpdater {
       const nonce = await readFile(path.join(service.root, '.portal-status-nonce'), 'utf8').catch(() => '');
       const sample = state.running && state.pid ? await readPortalSample(path.join(service.root, '.portal-connection-status.json'), state.pid, nonce.trim()) : null;
       // Cloud availability is not an installation health test.
-      if (service.legacyProcessHealth && state.running && state.pid) {
-        // OS-owned engine PID must stay alive across the supervisor's restart
-        // interval. This proves local startup only, never relay connectivity.
-        const current = String(state.pid);
-        if (identity !== current) { identity = current; since = Date.now(); }
-        if (Date.now() - since >= 6000) return;
-      } else if (state.running && state.pid &&
+      if (state.running && state.pid &&
           (!sample || !['starting', 'invalid'].includes(sample.state)) &&
           (sample && !sample.native || await readPortalReady(path.join(service.root, '.portal-ready.json'), state.pid, nonce.trim()))) {
         const current = `${state.pid}:${sample?.boot_id || nonce.trim()}`;

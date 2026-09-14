@@ -94,31 +94,8 @@ export function ConnectionSettings({ model }: { model: AppModel }) {
             选择…
           </button>
         </div>
-        <label htmlFor="binary-input">Portal 可执行文件</label>
-        <div className="picker">
-          <input
-            id="binary-input"
-            required
-            value={form?.portalBinary || ""}
-            onChange={(event) =>
-              app.editForm("portalBinary", event.target.value)
-            }
-          />
-          <button
-            type="button"
-            data-pick="binary"
-            onClick={() =>
-              void app.run(async () => {
-                const value = await app.api.choose("binary");
-                if (value) app.editForm("portalBinary", value);
-              })
-            }
-          >
-            选择…
-          </button>
-        </div>
         <p className="field-help">
-          默认使用随客户端附带的 Rust 引擎，也可以选择已有的 heart-portal。
+          使用客户端自带的 Portal，安装和升级后自动使用配套版本，沿用已有配置。
         </p>
         <p className="field-help" id="existing-config-note" hidden={!imported}>
           {imported

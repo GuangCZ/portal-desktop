@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
-import { access, chmod, copyFile, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { parseConnection, redact, type Connection } from './connection';
+import { redact, type Connection } from './connection';
 import { portalConfig } from './portal';
 import { readPortalSample, readPortalReady, portalSampleState } from './portal-status';
 import type { BackgroundState, PortalState, Settings } from './shared';
@@ -33,7 +33,7 @@ export async function portableCommand(binary: string, action: 'stop' | 'status' 
 }
 const xml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 const hash = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 16);
-export interface Service { label: string; file: string; root: string; existing: boolean; kind?: 'portable'; login?: boolean; name?: string; environmentPath?: string; environment?: Record<string, string>; fingerprint?: string; bundleId?: string; configPath?: string; cwd?: string; binary?: string; legacyProcessHealth?: boolean }
+export interface Service { label: string; file: string; root: string; existing: boolean; kind?: 'portable'; login?: boolean; name?: string; environmentPath?: string; environment?: Record<string, string>; fingerprint?: string; bundleId?: string; configPath?: string; cwd?: string; binary?: string }
 export function fingerprint(settings: Settings, connection: Connection) {
   return hash(JSON.stringify([connection.link, settings.portalBinary, settings.portalConfigPath, settings.portalName,
     settings.workspace, settings.portalEnvironmentPath, settings.allowExec, settings.kitsEnabled, 'bounded-recovery-v1']));
@@ -166,51 +166,15 @@ export class BackgroundPortal {
   private powershell(script: string, input?: string) {
     return this.run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(windowsModulePath + "$ErrorActionPreference='Stop'; " + script, 'utf16le').toString('base64')], input);
   }
-  async discover(settings: Settings, connection: Connection | null) {
+  async discover(_settings: Settings, connection: Connection | null) {
     this.connection = connection;
     try { this.service = JSON.parse(await readFile(path.join(this.directory, 'portal-service.json'), 'utf8')); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    // Old adoption records are configuration sources, never runtime ownership.
+    if (this.service && (this.service.existing || this.service.kind || this.service.label !== this.label)) this.service = null;
     if (this.service && this.platform === 'darwin' && this.service.kind !== 'portable') {
       try { await access(this.service.file); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') this.service = null; else throw error; }
-    }
-    if (!this.service && this.platform === 'darwin' && settings.portalConfigPath && connection) {
-      const root = path.dirname(settings.portalConfigPath);
-      const agents = path.join(this.home, 'Library/LaunchAgents');
-      for (const name of await readdir(agents).catch(() => [])) {
-        if (!/^town\.beings\.heart-portal\.[a-f0-9]+\.plist$/.test(name)) continue;
-        try {
-          const file = path.join(agents, name);
-          const data = JSON.parse(await this.run('/usr/bin/plutil', ['-convert', 'json', '-o', '-', file]));
-          if (data.WorkingDirectory !== root || data.Label !== name.slice(0, -6) || !data.KeepAlive || !data.RunAtLoad) continue;
-          if (!data.ProgramArguments?.includes(path.join(root, 'scripts/portal-launchagent.sh'))) continue;
-          const link = parseConnection(await readFile(path.join(root, '.portal-connection.url'), 'utf8'));
-          if (link.link !== connection.link) continue;
-          this.service = { label: data.Label, root, file, existing: true, cwd: root, environment: Object.fromEntries(environmentEntries(data.EnvironmentVariables || {})), fingerprint: fingerprint(settings, connection) };
-          await atomic(path.join(this.directory, 'portal-service.json'), JSON.stringify(this.service));
-          break;
-        } catch { /* Unrelated or unreadable services are never modified. */ }
-      }
-    }
-    if (!this.service && connection && settings.portalConfigPath && this.platform === 'darwin') {
-      const root = path.dirname(settings.portalConfigPath);
-      try {
-        await access(path.join(root, '.portal-supervisor.json'));
-        const resolved = await realpath(settings.portalBinary);
-        const expectedRoot = path.basename(path.dirname(resolved)) === 'release' && path.basename(path.dirname(path.dirname(resolved))) === 'target'
-          ? path.dirname(path.dirname(path.dirname(resolved))) : path.dirname(resolved);
-        if (expectedRoot !== await realpath(root)) return this.refresh();
-        const savedLink = parseConnection(await readFile(path.join(root, '.portal-connection.url'), 'utf8'));
-        const savedName = (await readFile(path.join(root, '.portal-name'), 'utf8')).trim();
-        if (savedLink.link === connection.link && savedName === settings.portalName) {
-          const status = JSON.parse(await this.run(settings.portalBinary, ['status']));
-          if (this.platform === 'darwin' && status.supervisor?.kind === 'inherited-session' && !status.launchagent_loaded && Array.isArray(status.portal_pids) && status.portal_pids.length === 1) {
-            this.service = { label: this.label, root, file: '', existing: true, kind: 'portable', login: false,
-              binary: settings.portalBinary, configPath: settings.portalConfigPath, cwd: settings.workspace,
-              name: settings.portalName, environmentPath: settings.portalEnvironmentPath, fingerprint: fingerprint(settings, connection) };
-          }
-        }
-      } catch { /* Unknown supervision cannot be safely replaced. */ }
     }
     return this.refresh();
   }
@@ -244,7 +208,7 @@ if ([string]$t.State -eq 'Running' -and (Test-Path -LiteralPath $pidFile)) {
       if (running) pid = Number(status.pid) || undefined;
     }
     this.state = { supported: this.state.supported, installed: true, enabled, running, existing: service.existing, label: service.label, pid,
-      message: !loaded ? '后台服务当前未加载，可点击启动 Portal 重试' : enabled ? `登录后自动启动 · 退出客户端后继续运行 · 连续异常退出最多重试 5 次${service.existing ? '（沿用已有服务）' : ''}` : '后台服务已停用，不会随登录启动' };
+      message: !loaded ? '后台服务当前未加载，可点击启动 Portal 重试' : enabled ? '登录后自动启动 · 退出客户端后继续运行 · 连续异常退出最多重试 5 次' : '后台服务已停用，不会随登录启动' };
     return this.state;
   }
   async portalState(): Promise<PortalState> {
@@ -278,8 +242,8 @@ if ([string]$t.State -eq 'Running' -and (Test-Path -LiteralPath $pidFile)) {
     this.connection = connection;
     const signature = fingerprint(settings, connection);
     const previous = this.service;
-    if (previous?.existing && previous.fingerprint !== signature) throw new Error('当前沿用已有系统服务。请在原 Portal 配置中更新连接、名称或运行路径，客户端不会覆盖原服务配置。');
-    if (previous && (previous.existing || previous.fingerprint === signature)) {
+    if (previous?.existing || previous?.kind === 'portable') throw new Error('请先停止旧 Portal，再启动客户端 Portal。');
+    if (previous && previous.fingerprint === signature) {
       await this.load(previous); return this.refresh();
     }
     await access(settings.portalBinary, this.platform === 'win32' ? constants.F_OK : constants.X_OK);
@@ -345,20 +309,7 @@ $s=New-ScheduledTaskSettingsSet -RestartCount 5 -RestartInterval (New-TimeSpan -
 Register-ScheduledTask -TaskName ${ps(service.label)} -Action $a ${service.login === false ? '' : '-Trigger $t'} -Principal $p -Settings $s -Force | Out-Null`);
   }
   async load(service: Service) {
-    if (service.kind === 'portable') {
-      const status = JSON.parse(await portableCommand(service.binary!, 'status', this.platform, this.run));
-      if (status.supervisor || status.launchagent_loaded || status.supervised) return;
-      if (status.portal_pids?.length || status.ready) throw new Error('旧 Portal 尚未完全停止，未重复启动。');
-      if (this.platform === 'win32') { await portableCommand(service.binary!, 'start', this.platform, this.run); return; }
-      if (!this.connection) throw new Error('恢复原 Portal 缺少连接配置。');
-      const child = spawn(service.binary!, ['--config', service.configPath!, '--name', service.name!], {
-        cwd: service.cwd, detached: true, stdio: 'ignore', windowsHide: true,
-        env: { ...process.env, ...service.environment, ...(service.environmentPath ? { PATH: service.environmentPath } : {}), PORTAL_CONNECT_LINK: this.connection.link, HEART_PORTAL_SUPERVISED: undefined, HEART_PORTAL_MACOS_SUPERVISOR: undefined },
-      });
-      await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-      child.unref();
-      return;
-    }
+    if (service.existing || service.kind || service.label !== this.label) throw new Error('仅支持启动客户端 Portal。');
     if (this.platform === 'darwin') {
       await this.run('/bin/launchctl', ['enable', `${this.domain}/${service.label}`]);
       const status = await this.run('/bin/launchctl', ['print', `${this.domain}/${service.label}`]).catch(() => '');

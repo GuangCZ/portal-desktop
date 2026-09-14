@@ -65,7 +65,7 @@ export interface DesktopAPI {
   snapshot(): Promise<Snapshot>;
   save(input: SaveSettings): Promise<Snapshot>;
   connectionDefaults(input: Pick<SaveSettings, 'connectionLink'>): Promise<{ portalName: string; source?: string }>;
-  choose(kind: 'workspace' | 'binary'): Promise<string | null>;
+  choose(kind: 'workspace'): Promise<string | null>;
   startPortal(): Promise<PortalState>;
   stopPortal(): Promise<PortalState>;
   openWorkspace(): Promise<void>;

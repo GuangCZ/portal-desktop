@@ -30,8 +30,8 @@ async function localPortalName(root: string): Promise<string | undefined> {
 // Read-only discovery. Finding a process does not grant the desktop ownership of it.
 export class ExternalPortalObserver {
   constructor(private run: Command = command, private platform = process.platform, private home = os.homedir()) {}
-  // Upgrade ownership is explicit: same OS user, live binary and exact Being
-  // credential, plus the original launch configuration. Stop through its CLI.
+  // Identify a conflicting guardian by OS user, live binary and Being.
+  // Its configuration is optional: it may already be gone after installation.
   async forUpgrade(connection: Connection, label: string, excludeRoot?: string, attempt = 0, matchBeing = false): Promise<Service[]> {
     let processes: { pid: number; binary: string }[];
     if (this.platform === 'darwin') {
@@ -80,9 +80,7 @@ export class ExternalPortalObserver {
       } catch { continue; }
       const argument = (name: string) => { const i = launch.arguments.indexOf(name); return i >= 0 ? launch.arguments[i + 1] : launch.arguments.find(a => a.startsWith(name + '='))?.slice(name.length + 1); };
       const config = argument('--config');
-      if (!config || !path.isAbsolute(launch.cwd)) throw new Error('无法保留独立 Portal 的原配置或工作目录，未停止服务。');
-      const configPath = path.resolve(launch.cwd, config);
-      await access(configPath);
+      const configPath = config && path.isAbsolute(launch.cwd) ? path.resolve(launch.cwd, config) : undefined;
       const status = JSON.parse(await portableCommand(binary, 'status', this.platform, this.run));
       if (this.platform === 'darwin' ? !status.portal_pids?.includes(process.pid) : Number(status.pid) !== process.pid) {
         // Windows start/status helpers use the same executable as the engine.
@@ -93,7 +91,7 @@ export class ExternalPortalObserver {
       const environment = Object.fromEntries(Object.entries(launch.environment).filter(([key, value]) =>
         !key.startsWith('HEART_PORTAL_') && key !== 'PORTAL_CONNECT_LINK' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && typeof value === 'string' && !value.includes('\0')));
       found.push({ label, root, binary, file: '', existing: true, kind: 'portable', login: Boolean(status.launchagent_loaded),
-        configPath, cwd: launch.cwd, name: argument('--name') || (await readFile(path.join(root, '.portal-name'), 'utf8')).trim(), environment });
+        configPath, cwd: launch.cwd, name: argument('--name') || (await readFile(path.join(root, '.portal-name'), 'utf8').catch(() => '')).trim(), environment });
     }
     if (changing && !found.length) {
       if (attempt >= 3) throw new Error('Portal 仍在启动或重启，未停止服务，请稍后重试升级。');
@@ -198,7 +196,7 @@ export class ExternalPortalObserver {
         const sample = await readPortalSample(path.join(root, '.portal-connection-status.json'), pid, nonce);
         const state = portalSampleState(sample);
         return { ...state, phase: sample ? state.phase : 'external', pid, managed: false, runtimePath: root,
-          message: `${state.message} 点击「使用客户端 Portal」可确认关闭旧服务及其守护程序。`, logs: [] };
+          message: `${state.message} 点击「使用客户端 Portal」将关闭已识别的旧服务及其守护程序。`, logs: [] };
       } catch { /* Incomplete, unrelated or changing runtimes are not adopted. */ }
     }
     return null;

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
@@ -46,5 +46,65 @@ it('persists credentials encrypted, reloads and preserves them on workspace-only
     await expect(unavailable.save({ ...store.settings, connectionLink: 'https://echo.example/alice/?token=test' })).rejects.toThrow('密钥库');
     await expect(store.save({ ...store.settings, portalName: 'bad\nname' })).rejects.toThrow();
     await expect(store.save({ ...store.settings, workspace: '../outside' })).rejects.toThrow();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+it('uses the current client binary after reinstall, upgrade and saves while retaining configuration', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'portal-client-settings-'));
+  const storage = { isEncryptionAvailable: () => true, encryptString: (value: string) => Buffer.from(value), decryptString: (value: Buffer) => value.toString() };
+  const config = path.join(dir, 'original.toml');
+  const source = 'workspace = "./work"\nkits_enabled = false\n[tools]\nexec = false\n';
+  try {
+    await writeFile(config, source);
+    const old = new SettingsStore(dir, storage, '/removed/old-portal');
+    await old.save({ ...old.settings, workspace: dir, portalName: 'original-name', portalConfigPath: config,
+      portalEnvironmentPath: '/my/tools', allowExec: false, kitsEnabled: false, backgroundEnabled: false, autoStart: true,
+      connectionLink: 'https://example.org/alice/?token=fixture&secret=relay-fixture' });
+    for (const binary of ['/client/reinstalled/heart-portal', '/client/upgraded/heart-portal']) {
+      const current = new SettingsStore(dir, storage, binary);
+      await current.load();
+      expect(current.settings).toEqual({ ...old.settings, portalBinary: binary });
+      expect(current.connection).toEqual(old.connection);
+      await current.save({ ...current.settings, portalBinary: '/another/standalone-portal' });
+      expect(current.settings.portalBinary).toBe(binary);
+      expect(JSON.parse(await readFile(path.join(dir, 'connection.json'), 'utf8')).settings.portalBinary).toBe(binary);
+      expect(await readFile(config, 'utf8')).toBe(source);
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+it('reuses a stopped Portal configuration and connection without requiring its executable', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'portal-config-only-'));
+  const storage = { isEncryptionAvailable: () => true, encryptString: (value: string) => Buffer.from(value), decryptString: (value: Buffer) => value.toString() };
+  const config = path.join(dir, 'portal.toml');
+  const source = '\uFEFFname = "old-name"\nconnect = "https://example.org/alice/?token=fixture"\nworkspace = "./中文 workspace"\nkits_enabled = false\nkits_dir = "./kits"\n[tools]\nexec = false\nscreenshot = true\n';
+  try {
+    await writeFile(config, source);
+    const store = new SettingsStore(dir, storage, '/client/heart-portal');
+    await store.reusePortalConfig([path.join(dir, 'missing.toml'), config]);
+    expect(store.settings).toMatchObject({ portalBinary: '/client/heart-portal', portalConfigPath: config,
+      portalName: 'old-name', workspace: path.join(dir, '中文 workspace'), allowExec: false, kitsEnabled: false, hasToken: true });
+    expect(store.connection?.being).toBe('alice');
+    await store.save(store.settings);
+    await store.reusePortalConfig([path.join(dir, 'another.toml')]);
+    expect(store.settings.portalConfigPath).toBe(config);
+    expect(await readFile(config, 'utf8')).toBe(source);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+it('preserves client name and credentials when reusing a legacy TOML and reports invalid files', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'portal-config-priority-'));
+  const storage = { isEncryptionAvailable: () => true, encryptString: (value: string) => Buffer.from(value), decryptString: (value: Buffer) => value.toString() };
+  const config = path.join(dir, 'portal.toml');
+  try {
+    const store = new SettingsStore(dir, storage, '/client/heart-portal');
+    await store.save({ ...store.settings, workspace: dir, portalName: 'chosen-name', connectionLink: 'https://example.org/alice/?token=current' });
+    await writeFile(config, 'invalid toml');
+    await expect(store.reusePortalConfig([config])).rejects.toThrow();
+    expect(store.settings.portalConfigPath).toBeUndefined();
+    await writeFile(config, 'name = "old-name"\nconnect = "invalid old link"\n[security]\nworkspace_root = "~/my-work"\n');
+    await store.reusePortalConfig([config]);
+    expect(store.settings).toMatchObject({ portalName: 'chosen-name', workspace: path.join(os.homedir(), 'my-work'), portalConfigPath: config });
+    expect(store.connection?.token).toBe('current');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

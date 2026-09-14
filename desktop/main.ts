@@ -112,6 +112,22 @@ async function ready() {
   let startupNotice: string | undefined;
   try { await store.load(); }
   catch { startupNotice = '原连接配置未能读取，Portal 未启动。配置文件已保留，请检查系统密钥库或连接设置。'; }
+  let configCandidates: string[] = [];
+  const reusePreviousConfig = async () => {
+    await store.reusePortalConfig(configCandidates);
+    if (store.connection && store.settings.portalConfigPath) await store.save(store.settings);
+  };
+  try {
+    const savedService = JSON.parse(await readFile(path.join(directory, 'portal-service.json'), 'utf8').catch(error => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'null';
+      throw error;
+    }));
+    if (savedService && (savedService.existing || savedService.kind || savedService.label !== new BackgroundPortal(directory).label)) {
+      configCandidates.push(savedService.configPath || path.join(savedService.root, 'portal.toml'));
+    }
+    if (!store.connection) configCandidates.push(path.join(os.homedir(), '.heart-portal/portal.toml'), path.join(os.homedir(), '.heart-portal/runtime/portal.toml'));
+    await reusePreviousConfig();
+  } catch { startupNotice = '已有 Portal 配置未能读取，请检查原配置文件后重试。'; }
   const townCredentials = new TownCredentials(directory, secretStorage);
   let townWarning: string | undefined;
   try { await townCredentials.load(); } catch (error) { townWarning = (error as Error).message; }
@@ -212,7 +228,7 @@ async function ready() {
       const state = await updates.check();
       const answer = await dialog.showMessageBox(window, { type: state.phase === 'available' ? 'info' : 'none', title: '客户端更新',
         message: state.phase === 'available' ? `发现 ${CLIENT_NAME} ${state.latestVersion}` : state.message,
-        detail: `当前客户端：${app.getVersion()}${runtimeUpdate.portalVersion ? ` · Portal：${runtimeUpdate.portalVersion}` : ''}\n${runtimeUpdate.message}\n\n下载并校验安装包后，先停止旧 Portal 和对应守护，再安装客户端。安装完成自动打开新版，沿用原配置启动最新 Portal。请先完成本机任务并保存草稿。`,
+        detail: `当前客户端：${app.getVersion()}${runtimeUpdate.portalVersion ? ` · Portal：${runtimeUpdate.portalVersion}` : ''}\n${runtimeUpdate.message}\n\n下载并校验安装包后，先停止客户端 Portal 和对应守护，再安装客户端。安装完成自动打开新版，沿用原配置启动最新 Portal。请先完成本机任务并保存草稿。`,
         buttons: state.phase === 'available' && app.isPackaged ? ['稍后', '下载并升级', '打开发布页'] : ['关闭', '打开发布页'], defaultId: 0, cancelId: 0 });
       if (state.phase === 'available' && app.isPackaged && answer.response === 1) {
         window?.setProgressBar(2);
@@ -246,16 +262,12 @@ async function ready() {
   handle('beings:update-state', () => updates.state);
   const snapshot = () => ({ settings: store.settings, portal: portal.state, background: background.state, notice: startupNotice });
   const verifyConnection = async () => {
+    await reusePreviousConfig();
     await verifyBeingConnection(store.connection, net.fetch.bind(net) as typeof fetch);
     startupNotice = undefined;
   };
   const externalPortal = new ExternalPortalObserver();
   const ownedRoot = () => background.installedService?.label === background.label && !background.installedService.existing ? background.installedService.root : undefined;
-  const observeExternal = async () => {
-    const state = await externalPortal.read(store.connection, background.installedService?.root);
-    if (!state) return false;
-    portal.state = state; portal.emit('state', state); return true;
-  };
   const publishBackground = async () => {
     const state = await background.portalState();
     if (takeover.holdMessage) {
@@ -263,25 +275,17 @@ async function ready() {
       portal.state = { ...state, phase: 'error', managed: false, message: takeover.holdMessage };
       portal.emit('state', portal.state); return;
     }
-    if (!background.state.running && await observeExternal()) return;
     portal.state = state;
     portal.emit('state', portal.state);
   };
   const takeover = new PortalTakeover(directory, {
     discover: connection => externalPortal.conflicts(connection, ownedRoot()),
-    preflight: async () => {
+    preflight: async targets => {
       await verifyConnection();
+      await store.reusePortalConfig(targets.map(item => item.service?.configPath || path.join(item.root, 'portal.toml')));
+      await store.save(store.settings);
       if (app.isPackaged) await loadRuntimeBundle(process.resourcesPath);
       else await access(binary);
-    },
-    confirm: async targets => {
-      if (!window || quitting) return false;
-      const review = await dialog.showMessageBox(window, { type: 'question', title: '切换到客户端 Portal',
-        message: `检测到 ${store.settings.being} 的旧 Portal，是否关闭并使用客户端版本？`,
-        detail: targets.map(item => `${item.label}${item.pid ? ` · PID ${item.pid}` : ''}\n${item.root}`).join('\n\n') +
-          `\n\n确认后会先停用以上旧服务的自启和守护，确认进程退出，再用当前客户端附带的 Portal 和本机设置启动。旧配置和工作文件保留，正在执行的工具任务会被中断。\n工作目录：${store.settings.workspace}\n取消或切换失败时暂停，不会反复弹窗或自动切回旧服务。`,
-        buttons: ['取消', '关闭旧服务并启动客户端 Portal'], defaultId: 1, cancelId: 0, noLink: true });
-      return review.response === 1;
     },
     stop: async target => { await background.unload(target.service!); },
   });
@@ -291,12 +295,9 @@ async function ready() {
       await portal.stop();
       if (!store.settings.backgroundEnabled && background.state.enabled) await background.disable();
     }
-    if (replacing) {
-      const selected = app.isPackaged ? (await loadRuntimeBundle(process.resourcesPath)).binary : binary;
-      await portal.stop();
-      if (background.installedService && (!ownedRoot())) await background.forget();
-      await store.save({ ...store.settings, portalBinary: selected });
-    }
+    if (app.isPackaged) await loadRuntimeBundle(process.resourcesPath);
+    if (replacing) await portal.stop();
+    await store.save(store.settings);
     if (store.settings.backgroundEnabled) {
       await portal.stop();
       try {
@@ -308,7 +309,11 @@ async function ready() {
         throw error;
       }
       await publishBackground();
-    } else await portal.start(store.settings, store.connection, background.installedService?.environment);
+    } else {
+      if (background.state.enabled) await background.disable();
+      await portal.start(store.settings, store.connection);
+      if (replacing) await portal.waitReady();
+    }
   };
   const publishCurrentPortal = async () => { if (takeover.holdMessage || !portal.managing) await publishBackground(); };
   handle('beings:connection-defaults', async (input: Pick<SaveSettings, 'connectionLink'>) => {
@@ -354,9 +359,8 @@ async function ready() {
     proxy.abortAll(); return snapshot();
   }));
   handle('beings:choose', async (kind: string) => {
-    if (!['workspace', 'binary'].includes(kind)) throw new Error('Invalid dialog');
-    const result = await dialog.showOpenDialog(window!, { title: kind === 'workspace' ? '选择 Being 工作目录' : '选择 heart-portal 可执行文件',
-      properties: kind === 'workspace' ? ['openDirectory', 'createDirectory'] : ['openFile'] });
+    if (kind !== 'workspace') throw new Error('Invalid dialog');
+    const result = await dialog.showOpenDialog(window!, { title: '选择 Being 工作目录', properties: ['openDirectory', 'createDirectory'] });
     return result.canceled ? null : result.filePaths[0];
   });
   handle('beings:portal-start', () => exclusive(async () => {
@@ -391,7 +395,7 @@ async function ready() {
   portal.on('state', state => {
     if (window && !window.isDestroyed()) window.webContents.send('beings:portal-state', state);
     // A competing service can start between discovery and launch. Resolve that
-    // race once through the same confirmation path, never from a retry timer.
+    // race once through the same stop/start path, never from a retry timer.
     if (state.conflict && !handlingConflict && !takeover.holdMessage && !quitting) {
       handlingConflict = true;
       void exclusive(async () => {
@@ -409,8 +413,8 @@ async function ready() {
   async function restoreStartup(intent: 'manual' | 'automatic' = 'automatic') {
     if (!store.connection) {
       if (installIntent) {
-        await clientInstall.resume(installIntent);
-        runtimeUpdate = { phase: 'current', message: installIntent.from === installIntent.target ? '客户端已重新安装；原 Portal 运行方式已恢复。' : '客户端已更新；连接配置完成后可启动 Portal。' };
+        await clientInstall.finish();
+        runtimeUpdate = { phase: 'current', message: '客户端已安装；连接配置完成后使用客户端 Portal。' };
       }
       return;
     }
@@ -426,25 +430,10 @@ async function ready() {
     try {
       const connection = store.connection;
       await takeover.run(connection, intent, async replacing => {
-        if (replacing) { await startClientPortal(true); return; }
-        if (installIntent && app.getVersion() === installIntent.from) {
-          await clientInstall.resume(installIntent);
-          if (installIntent.foreground) await portal.start(store.settings, connection);
-          else await publishBackground();
-          runtimeUpdate = installIntent.from === installIntent.target
-            ? { phase: 'current', message: '客户端已重新安装，已恢复原 Portal。' }
-            : { phase: 'error', message: '客户端安装未完成，已恢复安装前的 Portal。' };
-          return;
-        }
-        const updater = new RuntimeUpdater(directory, background, process.platform, undefined,
-          async () => {
-            const saved = installIntent?.services.map(s => s.service).filter(s => s.kind === 'portable') || [];
-            // New external services must go through the confirmation above.
-            // Saved install targets were already reviewed before installation.
-            return saved;
-          });
+        if (replacing) { await startClientPortal(true); if (installIntent) await clientInstall.finish(); return; }
+        const updater = new RuntimeUpdater(directory, background);
         const recovered = await updater.recover();
-        if (recovered) {
+        if (recovered && background.installedService) {
           runtimeUpdate = { phase: 'error', message: '已恢复上次未完成升级前的 Portal；本次启动不再自动重试升级。' };
           await publishBackground();
           return;
@@ -455,9 +444,9 @@ async function ready() {
           if (runtimeUpdate.phase !== 'skipped') {
             if (runtimeUpdate.phase === 'current' || runtimeUpdate.phase === 'updated') {
               const service = background.installedService!;
-              await store.save({ ...store.settings, portalBinary: path.join(service.root, process.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal'), portalConfigPath: service.configPath, workspace: service.cwd || store.settings.workspace, portalEnvironmentPath: service.environment?.PATH || store.settings.portalEnvironmentPath, portalName: service.name || store.settings.portalName });
+              await store.save({ ...store.settings, portalConfigPath: service.configPath, workspace: service.cwd || store.settings.workspace });
               await restoreRuntimeMode(background, store.settings, async () => {
-                await portal.start(store.settings, connection, service.environment);
+                await portal.start(store.settings, connection);
                 await portal.waitReady();
               },
                 runtimeUpdate.phase === 'updated' || Boolean(installIntent));
@@ -467,16 +456,11 @@ async function ready() {
             // The replacement follows the existing background/foreground preference.
             return;
           }
-          if (await observeExternal()) {
-            runtimeUpdate = { phase: 'skipped', message: '发现未能确认管理方式的独立 Portal，未改动其进程和文件。请先迁入客户端管理。' };
-            return;
-          }
           await store.save({ ...store.settings, portalBinary: bundledBinary });
           runtimeUpdate = { phase: 'current', message: '已选择随客户端附带的 Portal，下次启动按原配置运行。', portalVersion: bundle.portalVersion };
         }
         if (installIntent || store.settings.backgroundEnabled || store.settings.autoStart) {
-          if (await observeExternal()) { /* Only identity-verified supervision is migrated. */ }
-          else if (store.settings.backgroundEnabled) {
+          if (store.settings.backgroundEnabled) {
             await background.enable(store.settings, connection); await publishBackground();
           } else {
             await portal.start(store.settings, connection);

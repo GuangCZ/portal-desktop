@@ -71,7 +71,7 @@ it.skipIf(process.platform === 'win32')('renders connection progress without exp
   expect((await f.service.portalState()).phase).not.toBe('connected');
   await f.service.disable(); expect((await f.service.portalState()).phase).toBe('stopped');
 });
-it.skipIf(process.platform === 'win32')('adopts only the matching existing service without rewriting or restarting it', async () => {
+it.skipIf(process.platform === 'win32')('does not adopt an existing service even when its configuration matches', async () => {
   const f = await fixture(); const runtime = path.join(f.root, 'runtime'); await mkdir(runtime);
   const agents = path.join(f.root, 'Library/LaunchAgents'); await mkdir(agents, { recursive: true });
   const label = 'town.beings.heart-portal.123abc'; const file = path.join(agents, label + '.plist');
@@ -84,11 +84,12 @@ it.skipIf(process.platform === 'win32')('adopts only the matching existing servi
     return args[0] === 'print' ? 'state = running\npid = 123' : '';
   };
   const service = new BackgroundPortal(path.join(f.root, 'profile'), run, 'darwin', f.root);
-  await service.discover(settings, f.connection); await service.enable(settings, f.connection);
-  expect(service.state).toMatchObject({ existing: true, running: true });
+  await service.discover(settings, f.connection);
+  expect(service.installedService).toBeNull();
+  expect(service.state).toMatchObject({ existing: false, running: false });
   expect(calls.some(args => ['bootstrap', 'bootout'].includes(args[0]))).toBe(false);
   expect(await readFile(file, 'utf8')).toBe('original-plist');
-  await expect(service.enable({ ...settings, portalName: 'different' }, f.connection)).rejects.toThrow('原 Portal 配置');
+  expect(calls).toEqual([]);
 });
 it('quotes filesystem paths and keeps launch registrations and wrappers free of credentials', async () => {
   const f = await fixture(); const weird = `/tmp/中文 a'b $HOME & <x>`;
@@ -98,6 +99,19 @@ it('quotes filesystem paths and keeps launch registrations and wrappers free of 
   const win = windowsRunner('C:\\a b', 'C:\\a b\\portal.toml', f.settings);
   expect(win).toContain('ConvertTo-SecureString'); expect(win).toContain('CreateNoWindow = $true');
   expect(win).toContain('Start-Sleep -Seconds 5'); expect(win).not.toContain(f.connection.token);
+});
+it('ignores an old adoption record without running its binary or losing its configuration reference', async () => {
+  const f = await fixture();
+  const profile = path.join(f.root, 'profile'); await mkdir(profile);
+  const record = JSON.stringify({ label: 'old-portal', root: '/old/runtime', file: '', existing: true,
+    kind: 'portable', binary: '/removed/heart-portal', configPath: '/old/config.toml' });
+  await writeFile(path.join(profile, 'portal-service.json'), record);
+  await f.service.discover(f.settings, f.connection);
+  expect(f.service.installedService).toBeNull();
+  expect(f.calls).toEqual([]);
+  expect(await readFile(path.join(profile, 'portal-service.json'), 'utf8')).toBe(record);
+  await expect(f.service.load(JSON.parse(record))).rejects.toThrow('仅支持启动客户端 Portal');
+  expect(f.calls).toEqual([]);
 });
 it('registers Windows login supervision with DPAPI stdin and disables the task and its owned child on stop', async () => {
   const f = await fixture(); const scripts: string[] = []; const inputs: (string | undefined)[] = [];

@@ -25,6 +25,10 @@ it('ignores the Windows bootstrap PID and verifies its supervised child before t
     const services = await new ExternalPortalObserver(run, 'win32').forUpgrade(connection, 'fixture');
     expect(listings).toBe(2); expect(services).toHaveLength(1);
     expect(services[0]).toMatchObject({ configPath: config, name: 'fixture', root: await realpath(root) });
+    await rm(config);
+    expect(await new ExternalPortalObserver(run, 'win32').forUpgrade(connection, 'fixture')).toHaveLength(1);
+    await writeFile(path.join(root, '.portal-launch.json'), JSON.stringify({ arguments: [], working_directory: root, environment: { PORTAL_CONNECT_LINK: connection.link } }));
+    expect(await new ExternalPortalObserver(run, 'win32').forUpgrade(connection, 'fixture')).toMatchObject([{ configPath: undefined, name: '' }]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

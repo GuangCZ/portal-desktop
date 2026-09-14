@@ -16,28 +16,24 @@ async function fixture() {
   const events: string[] = [];
   const options = {
     discover: vi.fn(async () => [...targets]),
-    confirm: vi.fn(async (_targets: PortalConflict[]) => { events.push('confirm'); return true; }),
     stop: vi.fn(async (target: PortalConflict) => { events.push('stop:' + target.id); targets = targets.filter(item => item.id !== target.id); }),
     preflight: vi.fn(async () => { events.push('validate'); }),
   };
   const start = vi.fn(async (replacing: boolean) => { events.push(`start:${replacing}`); });
   return { root, a, b, options, start, events, takeover: new PortalTakeover(root, options), targets: (value: PortalConflict[]) => { targets = value; } };
 }
-it('reviews the replacement and stops every approved guardian before starting the client engine', async () => {
+it('validates the replacement and automatically stops every verified guardian before starting the client engine', async () => {
   const f = await fixture();
   expect(await f.takeover.run(connection, 'manual', f.start)).toBe(true);
-  expect(f.events).toEqual(['validate', 'confirm', 'stop:a', 'stop:b', 'start:true']);
+  expect(f.events).toEqual(['validate', 'stop:a', 'stop:b', 'start:true']);
   await expect(readFile(f.takeover.file)).rejects.toMatchObject({ code: 'ENOENT' });
 });
-it('persists cancellation without stopping anything or prompting again on polling or app restart', async () => {
-  const f = await fixture(); f.options.confirm.mockResolvedValue(false);
-  expect(await f.takeover.run(connection, 'automatic', f.start)).toBe(false);
-  expect(await new PortalTakeover(f.root, f.options).run(connection, 'automatic', f.start)).toBe(false);
-  expect(f.options.confirm).toHaveBeenCalledTimes(1);
-  expect(f.options.stop).not.toHaveBeenCalled(); expect(f.start).not.toHaveBeenCalled();
-  expect(await readFile(f.takeover.file, 'utf8')).not.toContain(connection.token);
-  f.options.confirm.mockResolvedValue(true);
-  expect(await f.takeover.run(connection, 'manual', f.start)).toBe(true);
+it('ignores a legacy cancellation and automatically starts the client engine after restart', async () => {
+  const f = await fixture();
+  await writeFile(f.takeover.file, JSON.stringify({ schema: 1, identity: 'example.org/alice', phase: 'cancelled', message: 'old choice' }));
+  expect(await f.takeover.run(connection, 'automatic', f.start)).toBe(true);
+  expect(f.events).toEqual(['validate', 'stop:a', 'stop:b', 'start:true']);
+  await expect(readFile(f.takeover.file)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 it('does not start or repeatedly retry when an old supervisor cannot stop', async () => {
   const f = await fixture(); f.options.stop.mockRejectedValue(new Error('old guardian still alive'));
@@ -46,10 +42,10 @@ it('does not start or repeatedly retry when an old supervisor cannot stop', asyn
   expect(await f.takeover.run(connection, 'automatic', f.start)).toBe(false);
   expect(f.options.stop).toHaveBeenCalledTimes(1);
 });
-it('rejects a changed or newly introduced service after confirmation before making any mutation', async () => {
+it('rejects a changed or newly introduced service during preflight before making any mutation', async () => {
   const f = await fixture();
-  f.options.confirm.mockImplementation(async () => { f.targets([{ ...f.a, id: 'changed-registration' }]); return true; });
-  await expect(f.takeover.run(connection, 'manual', f.start)).rejects.toThrow('确认期间发生变化');
+  f.options.preflight.mockImplementation(async () => { f.targets([{ ...f.a, id: 'changed-registration' }]); });
+  await expect(f.takeover.run(connection, 'manual', f.start)).rejects.toThrow('启动检查期间发生变化');
   expect(f.options.stop).not.toHaveBeenCalled(); expect(f.start).not.toHaveBeenCalled();
 });
 it('does not start when an old guardian reappears after stop', async () => {
@@ -60,7 +56,7 @@ it('does not start when an old guardian reappears after stop', async () => {
 it('pauses an unidentified runtime instead of killing by process name or retrying the client', async () => {
   const f = await fixture(); f.targets([{ ...f.a, service: undefined, problem: 'unknown guardian' }]);
   await expect(f.takeover.run(connection, 'manual', f.start)).rejects.toThrow('unknown guardian');
-  expect(f.options.confirm).not.toHaveBeenCalled(); expect(f.options.stop).not.toHaveBeenCalled(); expect(f.start).not.toHaveBeenCalled();
+  expect(f.options.stop).not.toHaveBeenCalled(); expect(f.start).not.toHaveBeenCalled();
 });
 it('keeps failed replacement stopped and remembers client priority on a later manual retry', async () => {
   const f = await fixture(); f.start.mockRejectedValueOnce(new Error('replacement failed'));
@@ -69,7 +65,6 @@ it('keeps failed replacement stopped and remembers client priority on a later ma
   expect(await reopened.run(connection, 'automatic', f.start)).toBe(false);
   expect(await reopened.run(connection, 'manual', f.start)).toBe(true);
   expect(f.start).toHaveBeenLastCalledWith(true);
-  expect(f.options.confirm).toHaveBeenCalledTimes(1);
 });
 it('starts normally without a conflict but never retries an unidentified native conflict', async () => {
   const f = await fixture(); f.targets([]);

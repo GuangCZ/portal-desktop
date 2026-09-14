@@ -142,7 +142,7 @@ export class PortalSupervisor extends EventEmitter {
       if (error) this.line(error.message);
       if (code === 73 || conflict) {
         this.wanted = false;
-        this.publish({ phase: 'external', conflict: true, message: '同一个 Being 已有本机 Portal 在运行，已停止重复启动；等待确认切换到客户端 Portal。' });
+        this.publish({ phase: 'external', conflict: true, message: '同一个 Being 已有本机 Portal 在运行，已停止重复启动；正在切换到客户端 Portal。' });
       }
       if (!this.wanted) {
         this.publish({ pid: undefined, ...(this.state.phase === 'external' ? {} : { phase: 'stopped', message: '本机 Portal 已停止' }) });

@@ -1,5 +1,5 @@
 import { it, expect, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ClientInstall } from '../desktop/client-install';
@@ -7,7 +7,7 @@ import { BackgroundPortal, type Service } from '../desktop/background';
 import { parseConnection } from '../desktop/connection';
 import { assetName, checksumFor, macInstallerScript, windowsInstallerScript } from '../desktop/manual-installer';
 
-it('journals all launch records before stopping and resumes after a cancelled installer', async () => {
+it('journals client launch records and never resumes independent runtimes from older install records', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'town-install-'));
   const service: Service = { label: 'test', root: path.join(directory, 'engine'), file: '', existing: false };
   const external: Service = { ...service, root: path.join(directory, 'external'), kind: 'portable', existing: true, configPath: path.join(directory, 'original.toml') };
@@ -15,13 +15,15 @@ it('journals all launch records before stopping and resumes after a cancelled in
   const background = { label: 'test', installedService: service, refresh: async () => ({ enabled: true }),
     unload: async (s: Service) => {
       const intent = JSON.parse(await readFile(path.join(directory, 'client-install.json'), 'utf8'));
-      expect(intent.services).toHaveLength(2); stopped.push(s.root);
+      expect(intent.services).toHaveLength(1); stopped.push(s.root);
     }, load: async (s: Service) => { restored.push(s.root); } } as unknown as BackgroundPortal;
   try {
-    const installer = new ClientInstall(directory, background, async () => [external]);
+    const installer = new ClientInstall(directory, background);
     const intent = await installer.prepare('0.1.3', '0.1.4', parseConnection('https://example.org/test/?token=fixture'), false);
-    expect(stopped).toEqual([service.root, external.root]);
-    expect((await new ClientInstall(directory, background).read())?.services[1].service.configPath).toBe(external.configPath);
+    expect(stopped).toEqual([service.root]);
+    intent.services.push({ service: external, enabled: true });
+    await writeFile(path.join(directory, 'client-install.json'), JSON.stringify(intent));
+    expect((await new ClientInstall(directory, background).read())?.services).toHaveLength(2);
     await installer.resume(intent);
     expect(restored).toEqual(stopped); expect(await installer.read()).toBeNull();
     vi.spyOn(background, 'unload').mockRejectedValue(new Error('still running'));

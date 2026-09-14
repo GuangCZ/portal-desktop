@@ -7,12 +7,11 @@ import { redact, type Connection } from './connection';
 interface Decision { schema: 1; identity: string; phase: 'cancelled' | 'stopping' | 'starting' | 'blocked'; message: string; replacing?: boolean }
 interface TakeoverOptions {
   discover(connection: Connection): Promise<PortalConflict[]>;
-  confirm(targets: PortalConflict[]): Promise<boolean>;
   stop(target: PortalConflict): Promise<void>;
-  preflight(): Promise<void>;
+  preflight(targets: PortalConflict[]): Promise<void>;
 }
-/** One explicit transaction per user action. No timer, retry, or old-service
- * resurrection; persisted decisions also stop automatic retries after a crash. */
+/** Stop verified conflicts before starting the client engine. Failed transactions
+ * stay paused across restarts; an old cancellation is no longer a runtime choice. */
 export class PortalTakeover {
   readonly file: string;
   holdMessage = '';
@@ -23,8 +22,8 @@ export class PortalTakeover {
     try { saved = JSON.parse(await readFile(this.file, 'utf8')); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Portal 切换记录无法读取，请保留记录并检查后重试。'); }
     if (saved && (saved.schema !== 1 || !['cancelled', 'stopping', 'starting', 'blocked'].includes(saved.phase))) throw new Error('Portal 切换记录无效，已暂停自动启动。');
-    if (intent === 'automatic' && saved?.identity === identity) {
-      this.holdMessage = saved.message || '上次 Portal 切换未完成，请点击启动按钮重新确认。';
+    if (intent === 'automatic' && saved?.identity === identity && saved.phase !== 'cancelled') {
+      this.holdMessage = saved.message || '上次 Portal 切换未完成，请点击启动按钮重试。';
       return false;
     }
     this.holdMessage = '';
@@ -40,14 +39,9 @@ export class PortalTakeover {
         throw new Error(targets.filter(item => !item.service).map(item => `${item.root}：${item.problem}`).join('\n'));
       }
       if (targets.length) {
-        // Make the chosen replacement reviewable and validate it before asking.
-        await this.options.preflight();
-        if (!await this.options.confirm(targets)) {
-          await remember('cancelled', '已取消切换，保留旧 Portal。需要切换时点击「使用客户端 Portal」重新确认；不会自动重试或反复弹窗。');
-          return false;
-        }
+        await this.options.preflight(targets);
         const current = await this.options.discover(connection);
-        if (current.some(item => !item.service || !targets.some(approved => approved.id === item.id))) throw new Error('旧 Portal 或守护配置在确认期间发生变化，未执行接管，请重新确认。');
+        if (current.some(item => !item.service || !targets.some(approved => approved.id === item.id))) throw new Error('旧 Portal 或守护配置在启动检查期间发生变化，未执行切换，请重试。');
         changing = true;
         await remember('stopping', '上次关闭旧 Portal 的过程未完成，已暂停自动启动，请手动重试。');
         for (const target of current) await this.options.stop(target);

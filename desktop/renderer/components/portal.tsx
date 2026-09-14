@@ -8,7 +8,7 @@ const labels = {
   connected: "已连接",
   reconnecting: "重连中",
   stopping: "停止中",
-  external: "独立服务运行中",
+  external: "实例冲突",
   error: "启动失败",
 };
 export function Portal({ model }: { model: AppModel }) {
@@ -153,7 +153,7 @@ export function Portal({ model }: { model: AppModel }) {
         </pre>
         <p className="portal-foot" id="background-status">
           {state?.managed === false
-            ? `${state.runtimePath ? `当前运行目录：${state.runtimePath}。` : ""}客户端仅观察；自启与守护状态以原管理方式为准。`
+            ? "客户端 Portal 尚未启动；请处理上方错误后重试。"
             : snapshot?.background?.enabled
               ? `${snapshot.background.message}。点击“停止”会同时停用登录自启。`
               : "后台常驻与登录自启未开启；退出客户端时 Portal 会停止。"}

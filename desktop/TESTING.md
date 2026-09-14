@@ -54,7 +54,7 @@
 
 `npm run test:browser`：打包客户端中以本地 HTTP fixture 验证内置网页、导航历史、新窗口链接、弹窗层级、独立登录会话、无本机 API 和关闭清理。不会访问真实 Being 或发消息。
 
-`tests/portal-takeover.test.ts` 验证确认顺序、取消后的持久暂停、确认期间配置变化、旧守护拒绝停止、新启动失败和中断后的手动恢复。`tests/portal-discovery.test.ts` 验证旧客户端守护、token 轮换、原名称识别及无关服务排除。`PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS=1 npx vitest run tests/portal-takeover-native.test.ts` 使用临时 profile 和本机测试 Being，验证真实 macOS LaunchAgent 的取消、确认接管、旧守护停用、新名称以及无关 Being 保持运行，不启动 Electron 测试窗口。
+`tests/settings.test.ts` 验证重装、升级及保存时固定使用当前客户端引擎，保留连接和配置，以及旧引擎缺失时仍可读取 TOML。`tests/portal-takeover.test.ts` 验证自动停止顺序、忽略旧取消记录、预检期间配置变化、旧守护拒绝停止、新启动失败和中断后的手动恢复。`tests/portal-discovery.test.ts` 验证旧客户端守护、token 轮换、原名称识别及无关服务排除。`PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS=1 npx vitest run tests/portal-takeover-native.test.ts` 使用临时 profile 和本机测试 Being，验证自动停用真实 macOS LaunchAgent、启动客户端版本以及无关 Being 保持运行，不启动 Electron 测试窗口。
 
 桌面 E2E 统一通过 `tests/support/electron-lifecycle.mjs` 启动：同一时间仅允许一个测试实例，单个测试设 5 分钟上限，退出等待最多 8 秒；超时仅清理该次 launch 返回的子进程。原生桌面 E2E 会显示窗口，不在日常使用客户端时自动运行。浏览器生命周期单元测试使用替身验证销毁窗口后不再访问 shell。
 

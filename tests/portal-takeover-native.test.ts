@@ -8,7 +8,7 @@ import { PortalTakeover } from '../desktop/portal-takeover';
 import { RuntimeUpdater } from '../desktop/runtime-update';
 import { parseConnection } from '../desktop/connection';
 
-it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.platform !== 'darwin')('takes over a real old client guardian only after confirmation and leaves unrelated Being services running', async () => {
+it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.platform !== 'darwin')('takes over a real old client guardian automatically and leaves unrelated Being services running', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'portal-native-takeover-'));
   const old = new BackgroundPortal(path.join(root, 'old'));
   const client = new BackgroundPortal(path.join(root, 'client'));
@@ -19,7 +19,6 @@ it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.pla
   const connection = parseConnection(`http://127.0.0.1:1/${path.basename(root)}/?token=local-test`);
   const unrelated = parseConnection(`http://127.0.0.1:1/${path.basename(root)}-other/?token=local-test`);
   const observer = new ExternalPortalObserver();
-  let approved = false, prompts = 0;
   try {
     await old.enable(settings, connection); await new RuntimeUpdater(root, old).waitReady(old.installedService!);
     await other.enable({ ...settings, portalName: 'other-being' }, unrelated); await new RuntimeUpdater(root, other).waitReady(other.installedService!);
@@ -27,11 +26,6 @@ it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.pla
     const options = {
       discover: () => observer.conflicts(connection, client.installedService?.root),
       preflight: async () => { expect((await readFile(binary)).length).toBeGreaterThan(0); },
-      confirm: async (targets: Awaited<ReturnType<typeof observer.conflicts>>) => {
-        prompts++; expect(targets).toHaveLength(1);
-        expect(targets[0].service?.name).toBe('previous-laptop');
-        return approved;
-      },
       stop: async (target: Awaited<ReturnType<typeof observer.conflicts>>[number]) => { await client.unload(target.service!); },
     };
     const manager = new PortalTakeover(path.join(root, 'client'), options);
@@ -42,13 +36,7 @@ it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.pla
       await client.enable({ ...settings, portalName: 'chosen-laptop' }, connection);
       await new RuntimeUpdater(root, client).waitReady(client.installedService!);
     };
-    expect(await manager.run(connection, 'manual', start)).toBe(false);
-    expect((await old.refresh()).pid).toBe(pid);
-    expect(await new PortalTakeover(path.join(root, 'client'), options).run(connection, 'automatic', start)).toBe(false);
-    expect(prompts).toBe(1);
-    approved = true;
-    expect(await manager.run(connection, 'manual', start)).toBe(true);
-    expect(prompts).toBe(2);
+    expect(await manager.run(connection, 'automatic', start)).toBe(true);
     expect((await other.refresh()).pid).toBe(otherPid);
     expect(client.state.running).toBe(true);
     expect(await readFile(client.installedService!.configPath!, 'utf8')).toContain('name = "chosen-laptop"');

@@ -1,7 +1,6 @@
 import path from 'node:path';
 import { readFile, rm } from 'node:fs/promises';
 import { atomic, BackgroundPortal, type Service } from './background';
-import { ExternalPortalObserver } from './external-portal';
 import type { Connection } from './connection';
 
 export interface InstallIntent {
@@ -12,8 +11,7 @@ export interface InstallIntent {
 // records with its new runtime or resumes them after a cancelled/failed install.
 export class ClientInstall {
   private file: string;
-  constructor(directory: string, private background: BackgroundPortal,
-    private discover = (connection: Connection) => new ExternalPortalObserver().forUpgrade(connection, background.label, background.installedService?.kind === 'portable' ? undefined : background.installedService?.root)) {
+  constructor(directory: string, private background: BackgroundPortal) {
     this.file = path.join(directory, 'client-install.json');
   }
   async read(): Promise<InstallIntent | null> {
@@ -24,16 +22,11 @@ export class ClientInstall {
       !Array.isArray(value.services) || value.services.some(s => !s.service || !path.isAbsolute(s.service.root) || s.service.label !== this.background.label)) throw new Error('客户端安装恢复记录无效。');
     return value;
   }
-  async prepare(from: string, target: string, connection: Connection | null, foreground: boolean) {
+  async prepare(from: string, target: string, _connection: Connection | null, foreground: boolean) {
     if (await this.read()) throw new Error('上次安装尚未完成，请重新打开客户端恢复。');
-    const external = connection ? await this.discover(connection) : [];
     const services: InstallIntent['services'] = [];
-    if (this.background.installedService) services.push({ service: this.background.installedService, enabled: (await this.background.refresh()).enabled });
-    for (const service of external) {
-      const existing = services.find(s => s.service.root === service.root);
-      if (existing?.service.kind === 'portable') existing.service = service;
-      else if (!existing) services.push({ service, enabled: true });
-    }
+    const service = this.background.installedService;
+    if (service && !service.existing && !service.kind) services.push({ service, enabled: (await this.background.refresh()).enabled });
     const intent: InstallIntent = { schema: 1, from, target, services, foreground };
     await atomic(this.file, JSON.stringify(intent));
     try { for (const item of services) await this.background.unload(item.service); }
@@ -41,7 +34,7 @@ export class ClientInstall {
     return intent;
   }
   async resume(intent: InstallIntent) {
-    for (const { service, enabled } of intent.services) if (enabled) await this.background.load(service);
+    for (const { service, enabled } of intent.services) if (enabled && !service.existing && !service.kind) await this.background.load(service);
     await this.finish();
   }
   async finish() { await rm(this.file, { force: true }); }
