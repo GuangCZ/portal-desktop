@@ -166,12 +166,53 @@ message 字段顺序 `{id, content, ...可选}`。
 `save`：snapshot 非法 -> false；payload `{version:1, identityKey, snapshot}`；按 identityKey 串行。
 `_write` 成功从 `_failed` 删，失败加。`flush()` 同 TownDataCache。
 
+### test/town-cache-handlers.test.cjs（80 行）→ timeline/cached-rooms.ts
+这个文件不测模块，而是用 `new Function` 把 src/main.cjs 里 boot() 的两个闭包
+（`loadCachedFiresides` / `loadCachedFiresideMembers`，源码见 main.cjs 的
+`async function loadCachedFiresides()` 到 `async function loadFeatureHistory()` 之间）切出来跑。
+这两个闭包**不含 IPC**，只用 `townCachedReads.snapshot` + 五个 boot() 变量
+（`townRoomCache`、`townMemberCache`、`generation`、`identityRevision`、`townBackground.reconcileRooms`），
+所以整体提成 `createCachedRoomLoaders(deps)` 工厂，注入口与那五个变量一一对应。
+`loadCachedFiresides`：已 cached 直接 structuredClone 返回；否则记下 `previous=townRoomCache`，
+await snapshot，回来若 `previous===townRoomCache && result.cached` 才写入并 `reconcileRooms(result.data)`
+（对象同一性就是「有没有更新的实时结果插队」的判据）；始终返回 structuredClone。
+`loadCachedFiresideMembers(value)`：进门记 `generation/identityRevision`，`current()` 不一致就抛
+'Being 连接已变化。' {code:'SESSION_CHANGED'}；先取 rooms，`rooms.cached` 且该 id 不在
+owned+joined 里就返回 `{members:[], cached:false}`（不发请求）；
+member 缓存超 60 秒（`Date.now()` 与 lastSuccessAt 相减，字符串走 `Date.parse(...)||0`）先删再写；
+只有缓存里没有且 result.cached 时才写入；返回 structuredClone。
+用例名：cold room list restores locally and reconciles… / new live room data wins over an older disk
+read / room members restore separately… / an identity switch between a validated disk result and the
+helper continuation… / identity switches during room restoration also reject a member load。
+
+### 测试移植约定
+- `node:test` 的 `t.after` -> vitest `afterEach` + 登记表；`t.mock.method(fs,'rename',…)` -> 直接
+  改写 `fs.rename` 再在 finally 还原（已实测：vitest 下 `import fs from 'node:fs/promises'` 的
+  默认导出对象可写，模块与测试拿到的是同一个对象，所以补丁生效）。
+- `assert.rejects(p, {code})` -> 本地 `rejects()` 助手（先 catch 再断言 code/message），
+  避免 `toMatchObject` 在 Error 上的特殊处理。
+- 临时目录：原来写在仓库 `.local/` 下，这里改用 `os.tmpdir()` + `mkdtemp`，与 portal-desktop
+  既有测试（tests/kit-install.test.ts 等）一致。夹具数据本身逐字照抄。
+- 每个加密缓存额外补了一条「读取 0.8.x 写出的缓存」用例：固定明文夹具经假 SecretStorage 加密写盘，
+  load 必须还原，且再 save 一次解密出来必须与原明文逐字节相同（证明字段顺序也没变）。
+
 ## 进度
-| 模块 | 源文件 | 目标 | 状态 |
-|---|---|---|---|
-| types | — | desktop/main/town/timeline/types.ts | 已移植 |
-| TownRefresh | src/town-refresh.cjs | timeline/refresh.ts | 测试通过（38/38，tests/town-timeline-refresh.test.ts） |
-| TownDataCache | src/town-data-cache.cjs | timeline/data-cache.ts | 未开始 |
-| TownCachedReads | src/town-cached-reads.cjs | timeline/cached-reads.ts | 未开始 |
-| TownClientStore | src/town-client-store.cjs | timeline/client-store.ts | 未开始 |
-| BonfireCache | src/bonfire-cache.cjs | timeline/bonfire-cache.ts | 测试通过（10/10，含 0.8.x 字节兼容用例） |
+| 模块 | 源文件 | 目标 | 测试 | 状态 |
+|---|---|---|---|---|
+| types | — | desktop/main/town/timeline/types.ts | — | 已移植 |
+| TownRefresh | src/town-refresh.cjs | timeline/refresh.ts | tests/town-timeline-refresh.test.ts | 测试通过（38/38，原文件 38 条） |
+| TownDataCache | src/town-data-cache.cjs | timeline/data-cache.ts | tests/town-timeline-data-cache.test.ts | 测试通过（14/14，原文件 13 条 + 0.8.x 字节兼容） |
+| TownCachedReads | src/town-cached-reads.cjs | timeline/cached-reads.ts | tests/town-timeline-cached-reads.test.ts | 测试通过（9/9，原文件 8 条 + 成员 TTL） |
+| TownClientStore | src/town-client-store.cjs | timeline/client-store.ts | tests/town-timeline-client-store.test.ts | 测试通过（5/5，原文件 4 条 + 0.8.x 字节兼容） |
+| BonfireCache | src/bonfire-cache.cjs | timeline/bonfire-cache.ts | tests/town-timeline-bonfire-cache.test.ts | 测试通过（10/10，原文件 9 条 + 0.8.x 字节兼容） |
+| cached room loaders | src/main.cjs boot() 闭包 | timeline/cached-rooms.ts | tests/town-timeline-cached-rooms.test.ts | 测试通过（5/5，原文件 5 条） |
+
+## 注入口（后续集成阶段对接 main.ts）
+| 注入参数 | 来源 | 说明 |
+|---|---|---|
+| `TownRefresh({readSnapshot, getIdentity, onSnapshot, onStatus, onSuccess, intervalMs, limit, automatic, cached, pageable, clock})` | src/town-background.cjs:45 | `readSnapshot` 收 `{signal, identity, limit, since?}`；`clock` 三件套用于假时钟；`onSuccess` 收 `cacheRecord()` 交给 BonfireCache |
+| `BonfireCache({directory, safeStorage})` | main.cjs:436 | directory = `<userData>/bonfire-cache`；safeStorage = `desktop/main/app/settings.ts` 的 `SecretStorage` |
+| `TownDataCache({directory, safeStorage, clock})` | main.cjs:444 | directory = `<userData>/town-data-cache`；clock 默认 Date.now |
+| `TownCachedReads({cache, getContext, now, membersTtlMs})` | main.cjs:445 | cache = TownDataCache；getContext 返回 `{identityKey, revision, identityRevision, connected}` |
+| `TownClientStore({directory, safeStorage})` | main.cjs:373 | directory = `<userData>/town-client`；safeStorage 需要可选的 `getSelectedStorageBackend()` |
+| `createCachedRoomLoaders({reads, getRooms, setRooms, members, getRevisions, reconcileRooms, now})` | main.cjs boot() 闭包 | 与 townRoomCache / townMemberCache / generation / identityRevision / townBackground.reconcileRooms 一一对应 |
