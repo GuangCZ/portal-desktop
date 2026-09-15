@@ -1,0 +1,649 @@
+// Ported line by line from BeingDesktop 0.8.26 src/town-refresh.cjs on 2026-09-16.
+// Measured protocol record: docs/town-sdk-integration.md "同步行为 / 时间线累积（2026-09-11）".
+// The timeline is accumulated, not a sliding window: a windowed read is authoritative only for the
+// range it covers, `since` returns the EARLIEST N messages above it (there is no `before`), and
+// total_count decides whether older history remains. None of that is inferred from the SDK source;
+// it was measured against a live Town.
+import type {
+  TownCacheRecord,
+  TownClock,
+  TownCodedError,
+  TownIdentity,
+  TownLastRefresh,
+  TownMessage,
+  TownPage,
+  TownReadSnapshot,
+  TownReceipt,
+  TownRefreshStatus,
+  TownTimeline,
+  TownTimerHandle,
+} from './types';
+
+const MIN_INTERVAL = 60000;
+const MAX_BACKOFF = 300000;
+// Accumulated timeline bounds: what one feed keeps in memory, what goes to disk, and how many
+// pages one "load older" request may walk before handing control back to the user.
+const MAX_HELD = 1000;
+const MAX_PERSISTED = 500;
+const OLDER_PAGES = 6;
+const BLOCKING_ERRORS = new Set(['AUTH_REQUIRED', 'IDENTITY_MISMATCH', 'BACKGROUND_UNAVAILABLE', 'NOT_CONNECTED']);
+const SBS_WAITING_REASONS: Readonly<Record<string, string>> = Object.freeze({WAITING_SBS: 'waiting_sbs', SBS_NOT_CONFIGURED: 'sbs_not_configured'});
+const ERROR_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  AUTH_REQUIRED: '后台消息通道尚未授权，请检查连接后重试。',
+  IDENTITY_MISMATCH: '后台消息身份与当前 Being 不一致，请重新连接。',
+  BACKGROUND_UNAVAILABLE: '当前 Being 暂未提供可用的后台消息通道。',
+  NOT_CONNECTED: '请先连接 Being。',
+  RATE_LIMITED: '后台消息请求过于频繁，稍后自动重试。',
+  NETWORK_ERROR: '后台消息连接暂时中断，稍后自动重试。',
+  SERVICE_ERROR: '后台消息服务暂时不可用，稍后自动重试。',
+  INVALID_RESPONSE: '后台消息返回格式无效，已保留上次同步内容。',
+  TOWN_TOOL_NOT_CALLED: 'Being 未执行 Town 读取工具，请在模型设置检查是否使用了限制原生 http 工具的入口。',
+  SESSION_CHANGED: '后台消息读取已取消，连接或运行状态已变化。',
+  NOT_RUNNING: '后台消息同步尚未启动。',
+  PAUSED: '后台消息同步已暂停。',
+  BUSY: 'Being 正在处理其他消息，本轮同步稍后重试。',
+  READINESS_UNKNOWN: '无法确认 Being 是否空闲，本次读取未发送，请手动重试。',
+  RESULT_UNCONFIRMED: '读取已发送，但自动检查未取得结果，请核对后再操作。',
+  REQUEST_ACCEPTED: '请求已送达 Being，结果待确认；不会自动重发。',
+  WAITING_SBS: '等待 Being 的后台读取结果，已保留上次同步内容。',
+  SBS_NOT_CONFIGURED: '后台采集尚未设置，可请 Being 读取一次',
+  INCOMPLETE_RESULT: 'Being 的工具结果不完整，已保留上次同步内容。',
+  RESULT_SOURCE_UNAVAILABLE: '本机工具结果通道暂不可用，将自动重试。',
+  RESULT_SOURCE_NOT_CONFIGURED: '未配置完整工具结果通道，Loom 摘要无法用于同步消息；刷新显示不会补全结果。',
+});
+
+function failure(code: string, automatic = true): TownCodedError {
+  const message = automatic ? ERROR_MESSAGES[code] : ERROR_MESSAGES[code]
+    .replace('稍后自动重试', '请稍后手动重试')
+    .replace('将自动重试', '请手动重试')
+    .replace('本轮同步稍后重试', '请稍后手动更新');
+  const error = new Error(message) as TownCodedError;
+  error.code = code;
+  return error;
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function sequence(value: unknown): value is number { return Number.isSafeInteger(value) && (value as number) >= 0; }
+function copy<T>(value: T): T { return structuredClone(value); }
+function boundedText(value: unknown, limit: number): string {
+  return typeof value === 'string' ? value.slice(0, limit * 2).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f‪-‮⁦-⁩]/g, '').slice(0, limit) : '';
+}
+
+// Only public identity fields cross the transport boundary. Never pass the
+// connection object, a Loom URL, or credentials to this scheduler.
+export function identityDto(value: unknown): TownIdentity | null {
+  if (value === null || value === undefined) return null;
+  const keys = ['beingId', 'connectionRevision', 'identityRevision'];
+  if (!record(value)) throw failure('IDENTITY_MISMATCH');
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Reflect.ownKeys(descriptors).length !== keys.length || keys.some(key => !Object.hasOwn(descriptors, key) || !Object.hasOwn(descriptors[key], 'value'))) throw failure('IDENTITY_MISMATCH');
+  const {beingId, connectionRevision, identityRevision} = value;
+  if (typeof beingId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(beingId) || !sequence(connectionRevision) || !sequence(identityRevision)) throw failure('IDENTITY_MISMATCH');
+  return {beingId, connectionRevision, identityRevision};
+}
+
+// One page of a feed as the transport returned it: validated, deduplicated by sequence, sorted.
+// Pages are merged into the accumulated timeline by _merge; nothing is sliced here.
+export function pageDto(value: unknown): TownPage {
+  if (!record(value) || !Array.isArray(value.messages) || value.messages.length > 200 || !sequence(value.latestSeq)) throw failure('INVALID_RESPONSE');
+  const latestSeq = value.latestSeq as number;
+  const total = value.total;
+  if (total !== undefined && total !== null && !sequence(total)) throw failure('INVALID_RESPONSE');
+  const messages = new Map<number, TownMessage>();
+  for (const entry of value.messages as unknown[]) {
+    if (!record(entry) || typeof entry.content !== 'string') throw failure('INVALID_RESPONSE');
+    const id = typeof entry.id === 'string' && /^(0|[1-9]\d*)$/.test(entry.id) ? Number(entry.id) : entry.id;
+    if (!sequence(id) || id > latestSeq) throw failure('INVALID_RESPONSE');
+    const message: TownMessage = {
+      id: String(id), beingId: boundedText(entry.beingId, 100), beingName: boundedText(entry.beingName, 100),
+      content: boundedText(entry.content, 32000), createdAt: boundedText(entry.createdAt, 64), revisedAt: boundedText(entry.revisedAt, 64),
+      mentions: Array.isArray(entry.mentions) ? (entry.mentions as unknown[]).slice(0, 20).filter(item => typeof item === 'string').map(item => boundedText(item, 100)) : [],
+    };
+    // Who spoke (a paired client or the Being itself) and what a reply answers are display facts
+    // the SDK read returns; they travel with the message so the timeline can show them.
+    if (typeof entry.via === 'string' && entry.via) message.via = boundedText(entry.via, 120);
+    const replyTo = entry.replyTo;
+    if (record(replyTo) && typeof replyTo.id === 'string' && replyTo.id) {
+      message.replyTo = {id: boundedText(replyTo.id, 200), beingId: boundedText(replyTo.beingId, 100), preview: boundedText(replyTo.preview, 200)};
+    }
+    // The final occurrence of an ID in one page wins.
+    messages.set(id, message);
+  }
+  return {messages: [...messages.values()].sort((left, right) => Number(left.id) - Number(right.id)), latestSeq,
+    total: sequence(total) ? total : null, ...(value.source === 'being_relay' ? {source: 'being_relay' as const} : {})};
+}
+
+export function emptyTimeline(identity: TownIdentity | null = null): TownTimeline {
+  return {identity: identity ? copy(identity) : null, messages: [], latestSeq: null, total: null, hasOlder: false, lastRefresh: null};
+}
+
+function receiptDto(value: Record<string, unknown>): TownReceipt {
+  const capturedAt = value.capturedAt, revision = value.revision;
+  if (!sequence(capturedAt) || capturedAt > 8640000000000000 || typeof revision !== 'string' || revision.length < 1 || revision.length > 128 || /[^\x21-\x7e]/.test(revision)) throw failure('INVALID_RESPONSE');
+  return {capturedAt, revision, manual: false};
+}
+
+interface MergePage {
+  messages: TownMessage[];
+  latestSeq: number;
+  total?: number | null;
+  source?: 'being_relay';
+}
+
+interface MergeOptions {
+  since?: number;
+  limit: number;
+  refresh?: boolean;
+  identity?: TownIdentity | null;
+}
+
+interface MergeResult {
+  before: number | null;
+  seqs: number[];
+  full: boolean;
+}
+
+interface Flight {
+  epoch: number;
+  identityKey: string;
+  controller: AbortController;
+  promise: Promise<TownTimeline>;
+  explicit: boolean;
+}
+
+interface OlderWalk {
+  epoch: number;
+  controller: AbortController;
+  promise: Promise<TownTimeline>;
+}
+
+interface Probe {
+  oldest: number;
+  since: number;
+  step: number;
+}
+
+type Metadata = Omit<TownRefreshStatus, 'running'>;
+
+export interface TownRefreshOptions {
+  readSnapshot?: TownReadSnapshot;
+  getIdentity?: () => unknown;
+  onSnapshot?: (value: TownTimeline) => void;
+  onStatus?: (value: TownRefreshStatus) => void;
+  onSuccess?: (value: TownCacheRecord | null) => void;
+  intervalMs?: number;
+  limit?: number;
+  automatic?: boolean;
+  cached?: boolean;
+  pageable?: boolean;
+  clock?: Partial<TownClock>;
+}
+
+const defaultSetTimeout = (callback: () => void, delay: number): TownTimerHandle =>
+  globalThis.setTimeout(callback, delay) as unknown as TownTimerHandle;
+const defaultClearTimeout = (handle: TownTimerHandle): void => {
+  globalThis.clearTimeout(handle as unknown as ReturnType<typeof globalThis.setTimeout>);
+};
+
+export class TownRefresh {
+  readSnapshot: TownReadSnapshot;
+  getIdentity: () => unknown;
+  onSnapshot: (value: TownTimeline) => void;
+  onStatus: (value: TownRefreshStatus) => void;
+  onSuccess: (value: TownCacheRecord | null) => void;
+  intervalMs: number;
+  limit: number;
+  automatic: boolean;
+  cached: boolean;
+  pageable: boolean;
+  clock: TownClock;
+  _running: boolean;
+  _paused: string;
+  _blocked: string;
+  _epoch: number;
+  _flight: Flight | null;
+  _timer: TownTimerHandle | null;
+  _automaticNotBefore: number;
+  _identityKey: string;
+  _receipt: TownReceipt | null;
+  _manualRevision: number;
+  _older: OlderWalk | null;
+  _probe: Probe | null;
+  _exhausted: boolean;
+  _cached: TownTimeline;
+  _metadata: Metadata;
+  _statusKey: string;
+
+  constructor({readSnapshot, getIdentity, onSnapshot = () => {}, onStatus = () => {}, onSuccess = () => {}, intervalMs = MIN_INTERVAL, limit = 10, automatic = true, cached = false, pageable = false, clock = {}}: TownRefreshOptions = {}) {
+    if ([readSnapshot, getIdentity, onSnapshot, onStatus, onSuccess].some(value => typeof value !== 'function')) throw new TypeError('Invalid Town refresh callbacks');
+    if (!Number.isInteger(intervalMs) || intervalMs < MIN_INTERVAL || intervalMs > MAX_BACKOFF || !Number.isInteger(limit) || limit < 1 || limit > 200) throw new RangeError('Invalid Town refresh interval or limit');
+    if (typeof automatic !== 'boolean' || typeof cached !== 'boolean' || typeof pageable !== 'boolean') throw new TypeError('Invalid Town refresh settings');
+    this.readSnapshot = readSnapshot as TownReadSnapshot;
+    this.getIdentity = getIdentity as () => unknown;
+    this.onSnapshot = onSnapshot;
+    this.onStatus = onStatus;
+    this.onSuccess = onSuccess;
+    this.intervalMs = intervalMs;
+    this.limit = limit;
+    this.automatic = automatic;
+    this.cached = cached;
+    // Only a transport that honours `since` can walk back through history (the SDK read does; a
+    // Being-relayed snapshot cannot).
+    this.pageable = pageable && !cached;
+    this.clock = {
+      now: (clock.now || Date.now) as TownClock['now'],
+      setTimeout: (clock.setTimeout || defaultSetTimeout) as TownClock['setTimeout'],
+      clearTimeout: (clock.clearTimeout || defaultClearTimeout) as TownClock['clearTimeout'],
+    };
+    if (Object.values(this.clock).some(value => typeof value !== 'function')) throw new TypeError('Invalid Town refresh clock');
+    this._running = false;
+    this._paused = '';
+    this._blocked = '';
+    this._epoch = 0;
+    this._flight = null;
+    this._timer = null;
+    this._automaticNotBefore = 0;
+    this._identityKey = '';
+    this._receipt = null;
+    this._manualRevision = 0;
+    this._older = null;
+    this._probe = null;
+    this._exhausted = false;
+    this._cached = emptyTimeline();
+    this._metadata = {status: 'stopped', reason: '', intervalMs, nextRefreshAt: null, lastAttemptAt: null, lastCheckedAt: null, lastSuccessAt: null, revision: null, stale: false, errorCode: '', failureCount: 0};
+    this._statusKey = JSON.stringify(this.status());
+  }
+
+  // This metadata is safe for application status and diagnostics. Message
+  // content is available only through snapshot() and onSnapshot.
+  status(): TownRefreshStatus { return {...this._metadata, running: this._running}; }
+  snapshot(): TownTimeline { return copy(this._cached); }
+
+  cacheRecord(): TownCacheRecord | null {
+    if (this._cached.latestSeq === null || this._metadata.lastSuccessAt === null) return null;
+    return copy({messages: this._cached.messages.slice(-MAX_PERSISTED), latestSeq: this._cached.latestSeq,
+      ...(this._cached.source === 'being_relay' ? {source: 'being_relay' as const} : {}),
+      capturedAt: this._metadata.lastSuccessAt, revision: this._receipt?.revision || `local:${this._metadata.lastSuccessAt}`, manual: this._receipt?.manual ?? true});
+  }
+
+  // Disk records belong to a stable connection key. Rebind them to this session
+  // only before reading starts; a late disk result must never replace live data.
+  restoreCache(value: unknown): boolean {
+    if (this._running || this._flight || this._cached.latestSeq !== null) return false;
+    try {
+      const identity = this._identity();
+      if (!identity || !record(value) || typeof value.manual !== 'boolean') return false;
+      const manual = value.manual as boolean;
+      const page = pageDto(value);
+      const receipt: TownReceipt = {...receiptDto(value), manual};
+      this._identityKey = JSON.stringify(identity);
+      this._receipt = this.cached ? receipt : null;
+      this._merge(page, {limit: Math.max(this.limit, page.messages.length + 1), identity});
+      this._patch({reason: 'local_cache', lastSuccessAt: receipt.capturedAt, revision: receipt.revision, stale: true});
+      return true;
+    } catch { return false; }
+  }
+
+  start(): TownRefreshStatus {
+    if (this._running) return this.status();
+    this._running = true;
+    this._paused = '';
+    if (!this.automatic) this._waitForManual();
+    else if (this._blocked === 'REQUEST_ACCEPTED') this._patch({status: 'waiting', reason: 'being_pending'});
+    else if (this._blocked) this._patch({status: 'paused', reason: this._blocked});
+    else this._automatic();
+    return this.status();
+  }
+
+  stop(): TownRefreshStatus {
+    this._running = false;
+    this._paused = '';
+    this._invalidate();
+    this._patch({status: 'stopped', reason: '', nextRefreshAt: null});
+    return this.status();
+  }
+
+  pause(reason = 'suspended'): TownRefreshStatus {
+    this._paused = ['suspended', 'offline', 'idle'].includes(reason) ? reason : 'suspended';
+    this._invalidate();
+    this._patch({status: this._running ? 'paused' : 'stopped', reason: this._paused, nextRefreshAt: null, stale: this._cached.latestSeq !== null});
+    return this.status();
+  }
+
+  resume(): TownRefreshStatus {
+    if (!this._paused) return this.status();
+    this._paused = '';
+    if (this._running && !this.automatic) this._waitForManual();
+    else if (this._running && !this._blocked) this._automatic();
+    else if (this._running && this._blocked === 'REQUEST_ACCEPTED') this._patch({status: 'waiting', reason: 'being_pending'});
+    else this._patch({status: this._running ? 'paused' : 'stopped', reason: this._blocked});
+    return this.status();
+  }
+
+  reset(): TownRefreshStatus {
+    this._invalidate();
+    this._blocked = '';
+    this._identityKey = '';
+    this._receipt = null;
+    this._automaticNotBefore = 0;
+    this._exhausted = false;
+    this._probe = null;
+    this._replace(emptyTimeline());
+    this._patch({status: this._running ? 'paused' : 'stopped', reason: this._paused, nextRefreshAt: null, lastAttemptAt: null, lastCheckedAt: null, lastSuccessAt: null, revision: null, stale: false, errorCode: '', failureCount: 0});
+    if (this._running && !this._paused) this._automatic();
+    return this.status();
+  }
+
+  // Manual refresh bypasses an authorization/unavailable pause, but never a
+  // lifecycle pause or stop. It joins an active request without queueing work.
+  refresh(): Promise<TownTimeline> {
+    if (!this._running) return Promise.reject(failure('NOT_RUNNING'));
+    if (this._paused) return Promise.reject(failure('PAUSED'));
+    this._blocked = '';
+    return this._read();
+  }
+
+  // This entry point is only for an explicit action. It never becomes the
+  // scheduled reader and supersedes a cache request that is already in flight.
+  requestRead(readSnapshot: TownReadSnapshot): Promise<TownTimeline> {
+    if (typeof readSnapshot !== 'function') return Promise.reject(new TypeError('Invalid explicit Town reader'));
+    if (!this._running) return Promise.reject(failure('NOT_RUNNING'));
+    if (this._paused) return Promise.reject(failure('PAUSED'));
+    if (this._flight?.explicit && this._isCurrent(this._flight)) return this._flight.promise;
+    this._invalidate();
+    this._blocked = '';
+    return this._read(readSnapshot, true);
+  }
+
+  _automatic(): void {
+    if (!this._running || this._paused) return;
+    if (!this.automatic) { this._waitForManual(); return; }
+    if (this._blocked) return;
+    if (!this._flight && this.clock.now() < this._automaticNotBefore) {
+      const waiting = Object.hasOwn(SBS_WAITING_REASONS, this._metadata.errorCode) || ['REQUEST_ACCEPTED', 'BUSY'].includes(this._metadata.errorCode);
+      this._patch({status: this._metadata.errorCode && !waiting ? 'error' : 'waiting', reason: this.cached ? SBS_WAITING_REASONS[this._metadata.errorCode] || (this._metadata.errorCode === 'REQUEST_ACCEPTED' ? 'being_pending' : 'sbs') : ''});
+      this._schedule(this._automaticNotBefore - this.clock.now());
+      return;
+    }
+    void this._read().catch(() => {});
+  }
+
+  _waitForManual(): void {
+    this._clearTimer();
+    if (Object.hasOwn(SBS_WAITING_REASONS, this._metadata.errorCode)) {
+      this._patch({status: 'waiting', reason: SBS_WAITING_REASONS[this._metadata.errorCode], nextRefreshAt: null});
+      return;
+    }
+    if (this._metadata.errorCode === 'REQUEST_ACCEPTED') {
+      this._patch({status: 'waiting', reason: 'being_pending', nextRefreshAt: null});
+      return;
+    }
+    const status = this._metadata.errorCode
+      ? this._blocked ? 'paused' : this._metadata.errorCode === 'BUSY' ? 'waiting' : 'error'
+      : this._cached.latestSeq === null ? 'waiting' : 'ready';
+    this._patch({status, reason: 'manual', nextRefreshAt: null});
+  }
+
+  _patch(value: Partial<Metadata>): void {
+    Object.assign(this._metadata, value);
+    const state = this.status();
+    const key = JSON.stringify(state);
+    if (key === this._statusKey) return;
+    this._statusKey = key;
+    try { this.onStatus(state); } catch { /* Observers cannot change synchronization. */ }
+  }
+
+  _replace(value: TownTimeline, changed: boolean = JSON.stringify(this._cached) !== JSON.stringify(value)): void {
+    if (!changed) return;
+    this._cached = value;
+    try { this.onSnapshot(this.snapshot()); } catch { /* Observers cannot change synchronization. */ }
+  }
+
+  // Fold one page into the accumulated timeline. The page is authoritative for the range it
+  // covers: (since, last] when it is full, everything after `since` when it is not (the feed
+  // ended inside it), and [first, ∞) for a tail read. Held messages in that range that the page
+  // no longer lists were deleted upstream; listed ones are upserted, so edits land too.
+  _merge(page: MergePage, {since, limit, refresh = false, identity = null}: MergeOptions): MergeResult {
+    const held = new Map<number, TownMessage>(this._cached.messages.map(message => [Number(message.id), message]));
+    const before = held.size ? Math.max(...held.keys()) : null;
+    const seqs = page.messages.map(message => Number(message.id));
+    const full = seqs.length >= limit;
+    const lower = since === undefined ? (full && seqs.length ? seqs[0] - 1 : -1) : since;
+    const upper = full && since !== undefined ? seqs[seqs.length - 1] : Infinity;
+    const listed = new Set(seqs);
+    let changed = false;
+    for (const seq of [...held.keys()]) if (seq > lower && seq <= upper && !listed.has(seq)) { held.delete(seq); changed = true; }
+    for (const message of page.messages) {
+      const seq = Number(message.id), previous = held.get(seq);
+      if (!previous || JSON.stringify(previous) !== JSON.stringify(message)) { held.set(seq, message); changed = true; }
+    }
+    const sorted = [...held.keys()].sort((left, right) => left - right);
+    let dropped = false;
+    while (sorted.length > MAX_HELD) { held.delete(sorted.shift() as number); dropped = changed = true; }
+    if (dropped) this._exhausted = false;
+    const messages = sorted.map(seq => held.get(seq) as TownMessage);
+    const latestSeq = Math.max(page.latestSeq, this._cached.latestSeq ?? 0);
+    const total = page.total ?? this._cached.total ?? null;
+    const oldest = sorted.length ? sorted[0] : null;
+    const hasOlder = this.pageable && oldest !== null && oldest > 1 && !this._exhausted && (total === null || messages.length < total);
+    // The marker for "where the last refresh left off": the newest message held before a refresh
+    // that brought something new. A refresh that brings nothing keeps the previous marker.
+    let lastRefresh: TownLastRefresh | null = this._cached.lastRefresh;
+    if (refresh) {
+      const arrived = before !== null && sorted.some(seq => seq > before);
+      lastRefresh = {at: this.clock.now(), boundarySeq: arrived ? before : (lastRefresh?.boundarySeq ?? null)};
+    }
+    const next: TownTimeline = {...this._cached, identity: identity ? copy(identity) : this._cached.identity, messages, latestSeq, total, hasOlder, lastRefresh};
+    if (page.source === 'being_relay') next.source = 'being_relay'; else delete next.source;
+    const meta = JSON.stringify([this._cached.identity, this._cached.latestSeq, this._cached.total, this._cached.hasOlder, this._cached.lastRefresh, this._cached.source]) !== JSON.stringify([next.identity, latestSeq, total, hasOlder, lastRefresh, next.source]);
+    this._replace(next, changed || meta);
+    return {before, seqs, full};
+  }
+
+  // Re-derive the timeline's flags (hasOlder) without new messages.
+  _recheck(): void { this._merge({messages: [], latestSeq: this._cached.latestSeq ?? 0, total: this._cached.total, ...(this._cached.source ? {source: this._cached.source} : {})}, {since: Number.MAX_SAFE_INTEGER, limit: this.limit}); }
+
+  _clearTimer(): void {
+    if (this._timer !== null) this.clock.clearTimeout(this._timer);
+    this._timer = null;
+  }
+
+  _invalidate(): void {
+    this._epoch++;
+    this._clearTimer();
+    const previous = this._flight;
+    this._flight = null;
+    previous?.controller.abort();
+    this._older?.controller.abort();
+  }
+
+  _identity(): TownIdentity | null {
+    let value: unknown;
+    try { value = this.getIdentity(); } catch { throw failure('IDENTITY_MISMATCH'); }
+    return identityDto(value);
+  }
+
+  _isCurrent(flight: Flight): boolean {
+    if (this._epoch !== flight.epoch || this._flight !== flight || flight.controller.signal.aborted) return false;
+    let identity: TownIdentity | null;
+    try { identity = this._identity(); } catch { identity = null; }
+    if (JSON.stringify(identity) === flight.identityKey) return true;
+    this.reset();
+    return false;
+  }
+
+  _failed(error: unknown, explicit = false): {error: TownCodedError; delay: number} {
+    const raw = error as {code?: string; retryAfterMs?: number} | null | undefined;
+    const code = Object.hasOwn(ERROR_MESSAGES, raw?.code as PropertyKey) && !['SESSION_CHANGED', 'NOT_RUNNING', 'PAUSED'].includes(raw?.code as string) ? raw?.code as string : 'NETWORK_ERROR';
+    if (code === 'REQUEST_ACCEPTED') {
+      this._blocked = this.cached ? '' : code;
+      this._patch({status: 'waiting', reason: 'being_pending', errorCode: code, nextRefreshAt: null});
+      return {error: failure(code), delay: this.intervalMs};
+    }
+    if (Object.hasOwn(SBS_WAITING_REASONS, code)) {
+      this._blocked = '';
+      this._patch({status: 'waiting', reason: SBS_WAITING_REASONS[code], errorCode: code, failureCount: 0, stale: this._cached.latestSeq !== null, nextRefreshAt: null});
+      return {error: failure(code), delay: this.intervalMs};
+    }
+    if (code === 'BUSY') {
+      this._patch({status: 'waiting', reason: 'being_busy', errorCode: code, nextRefreshAt: null});
+      return {error: failure(code, this.automatic && !explicit), delay: this.intervalMs};
+    }
+    this._blocked = BLOCKING_ERRORS.has(code) && !(this.cached && explicit) ? code : '';
+    this._patch({status: this._blocked ? 'paused' : 'error', reason: this._blocked, errorCode: code, failureCount: this._metadata.failureCount + 1, stale: this._cached.latestSeq !== null, nextRefreshAt: null});
+    const base = Math.min(MAX_BACKOFF, this.intervalMs * 2 ** Math.min(3, this._metadata.failureCount - 1));
+    const retryAfter = code === 'RATE_LIMITED' && Number.isFinite(raw?.retryAfterMs) ? Math.min(MAX_BACKOFF, Math.max(0, raw?.retryAfterMs as number)) : 0;
+    return {error: failure(code, this.automatic && !explicit), delay: Math.max(this.intervalMs, base, retryAfter)};
+  }
+
+  _schedule(delay: number): void {
+    if (!this.automatic) {
+      this._clearTimer();
+      if (this._running && !this._paused && !this._flight) this._waitForManual();
+      return;
+    }
+    if (!this._running || this._paused || this._blocked || this._flight) return;
+    this._clearTimer();
+    const epoch = this._epoch;
+    this._timer = this.clock.setTimeout(() => {
+      this._timer = null;
+      if (epoch !== this._epoch) return;
+      this._patch({nextRefreshAt: null});
+      this._automatic();
+    }, Math.max(this.intervalMs, delay));
+    this._timer?.unref?.();
+    this._patch({nextRefreshAt: this.clock.now() + Math.max(this.intervalMs, delay)});
+  }
+
+  _read(readSnapshot: TownReadSnapshot = this.readSnapshot, explicit = false): Promise<TownTimeline> {
+    let identity: TownIdentity | null;
+    try { identity = this._identity(); if (!identity) throw failure('NOT_CONNECTED'); }
+    catch (error) {
+      this._invalidate();
+      this._identityKey = '';
+      this._receipt = null;
+      this._exhausted = false;
+      this._replace(emptyTimeline());
+      this._patch({lastAttemptAt: null, lastCheckedAt: null, lastSuccessAt: null, revision: null, stale: false, failureCount: 0});
+      const outcome = this._failed(error);
+      return Promise.reject(outcome.error);
+    }
+    const identityKey = JSON.stringify(identity);
+    if (this._identityKey && this._identityKey !== identityKey) {
+      this._invalidate();
+      this._receipt = null;
+      this._exhausted = false;
+      this._replace(emptyTimeline());
+      this._patch({lastAttemptAt: null, lastCheckedAt: null, lastSuccessAt: null, revision: null, stale: false, errorCode: '', failureCount: 0});
+    }
+    this._identityKey = identityKey;
+    if (this._flight) return this._flight.promise;
+    this._clearTimer();
+    const flight: Flight = {epoch: this._epoch, identityKey, controller: new AbortController(), promise: null as unknown as Promise<TownTimeline>, explicit};
+    this._flight = flight;
+    this._automaticNotBefore = this.clock.now() + this.intervalMs;
+    let delay = this.intervalMs;
+    const current = identity;
+    flight.promise = Promise.resolve().then(() => {
+      if (!this._isCurrent(flight)) throw failure('SESSION_CHANGED');
+      return readSnapshot({signal: flight.controller.signal, identity: copy(current), limit: this.limit});
+    }).then(value => {
+      if (!this._isCurrent(flight)) throw failure('SESSION_CHANGED');
+      const page = pageDto(value);
+      const receipt = this.cached
+        ? explicit ? {capturedAt: this.clock.now(), revision: `manual:${++this._manualRevision}`, manual: true} : receiptDto(value as Record<string, unknown>)
+        : null;
+      const unchanged = receipt && !explicit && this._receipt && (receipt.revision === this._receipt.revision || receipt.capturedAt < this._receipt.capturedAt || this._receipt.manual && receipt.capturedAt === this._receipt.capturedAt);
+      if (!unchanged) {
+        this._receipt = receipt;
+        const merged = this._merge(page, {limit: this.limit, refresh: true, identity: current});
+        // A full tail page that starts past what we held means a burst outran the window: the
+        // messages in between are still on the server, so walk forward to fetch them.
+        if (this.pageable && merged.full && merged.before !== null && merged.seqs[0] > merged.before + 1) void this._fill(merged.before, merged.seqs[0], {epoch: flight.epoch, signal: flight.controller.signal, identityKey: flight.identityKey}).catch(() => {});
+      }
+      if (!this._isCurrent(flight)) throw failure('SESSION_CHANGED');
+      const capturedAt = this._receipt?.capturedAt ?? this.clock.now();
+      this._patch({status: 'ready', reason: this.cached ? explicit ? 'manual' : 'sbs' : '', lastCheckedAt: this.clock.now(), lastSuccessAt: capturedAt, revision: this._receipt?.revision ?? null, stale: this.cached && this.clock.now() - capturedAt > 2 * this.intervalMs, errorCode: '', failureCount: 0});
+      if (this._isCurrent(flight)) {
+        try { this.onSuccess(this.cacheRecord()); } catch { /* Persistence cannot change a successful read. */ }
+      }
+      return this.snapshot();
+    }).catch(error => {
+      if (!this._isCurrent(flight)) throw failure('SESSION_CHANGED');
+      this._patch({lastCheckedAt: this.clock.now()});
+      const outcome = this._failed(error, explicit);
+      delay = outcome.delay;
+      throw outcome.error;
+    }).finally(() => {
+      if (this._flight !== flight) return;
+      this._flight = null;
+      this._automaticNotBefore = this.clock.now() + delay;
+      this._schedule(delay);
+    });
+    this._patch({status: 'refreshing', reason: this.cached && !explicit ? 'sbs' : '', lastAttemptAt: this.clock.now(), nextRefreshAt: null});
+    return flight.promise;
+  }
+
+  // Everything between two held sequences, oldest first; bounded so a runaway feed cannot pin us.
+  async _fill(since: number, until: number, {epoch, signal, identityKey}: {epoch: number; signal: AbortSignal; identityKey: string}): Promise<void> {
+    const current = () => epoch === this._epoch && !signal.aborted && JSON.stringify(this._identity()) === identityKey;
+    const identity = this._identity();
+    for (let pages = 0; pages < OLDER_PAGES && since < until - 1; pages++) {
+      if (!current()) return;
+      const page = pageDto(await this.readSnapshot({signal, identity: copy(identity) as TownIdentity, limit: this.limit, since}));
+      if (!current()) return;
+      const merged = this._merge(page, {since, limit: this.limit});
+      if (!merged.full || !merged.seqs.length) return;
+      since = merged.seqs[merged.seqs.length - 1];
+    }
+  }
+
+  // Walk back from the oldest held message. The SDK only pages forward (`since` = sequences above
+  // it, first N), so the window before `target` is guessed as dense, then widened when it comes
+  // back empty and walked forward when it comes back full short of the target. Sequences are
+  // sparse — deletions in the bonfire, one counter shared by every fireside — so both happen.
+  loadOlder(): Promise<TownTimeline> {
+    if (!this.pageable) return Promise.reject(failure('BACKGROUND_UNAVAILABLE'));
+    if (!this._running) return Promise.reject(failure('NOT_RUNNING'));
+    if (this._paused) return Promise.reject(failure('PAUSED'));
+    if (this._older) return this._older.promise;
+    let identity: TownIdentity | null;
+    try { identity = this._identity(); if (!identity) throw failure('NOT_CONNECTED'); } catch (error) { return Promise.reject(error); }
+    const identityKey = JSON.stringify(identity);
+    if (this._identityKey && this._identityKey !== identityKey) return Promise.reject(failure('SESSION_CHANGED'));
+    const walk: OlderWalk = {epoch: this._epoch, controller: new AbortController(), promise: null as unknown as Promise<TownTimeline>};
+    const current = () => walk.epoch === this._epoch && !walk.controller.signal.aborted && JSON.stringify(this._identity()) === identityKey;
+    const target = identity;
+    walk.promise = (async () => {
+      const oldest = this._cached.messages.length ? Number(this._cached.messages[0].id) : null;
+      if (oldest === null || !this._cached.hasOlder) return this.snapshot();
+      // A walk that ran out of pages resumes where it stopped, as long as the target is the same.
+      const probe = this._probe?.oldest === oldest ? this._probe : {oldest, since: Math.max(0, oldest - 1 - this.limit), step: this.limit};
+      this._probe = probe;
+      for (let pages = 0; pages < OLDER_PAGES; pages++) {
+        if (!current()) throw failure('SESSION_CHANGED');
+        const since = probe.since;
+        const page = pageDto(await this.readSnapshot({signal: walk.controller.signal, identity: copy(target), limit: this.limit, since}));
+        if (!current()) throw failure('SESSION_CHANGED');
+        const merged = this._merge(page, {since, limit: this.limit});
+        const found = merged.seqs.some(seq => seq < oldest);
+        if (found) {
+          // Older messages landed. A full page that stopped short of the target still has a gap to
+          // close; anything else means the stretch up to the target is now known.
+          if (!merged.full || merged.seqs[merged.seqs.length - 1] >= oldest) { this._probe = null; break; }
+          probe.since = merged.seqs[merged.seqs.length - 1];
+          continue;
+        }
+        if (since === 0) { this._exhausted = true; this._probe = null; this._recheck(); break; }
+        probe.step *= 2;
+        probe.since = Math.max(0, since - probe.step);
+      }
+      return this.snapshot();
+    })().finally(() => { if (this._older === walk) this._older = null; });
+    this._older = walk;
+    return walk.promise;
+  }
+}
