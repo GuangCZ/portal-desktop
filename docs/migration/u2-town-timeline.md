@@ -216,3 +216,21 @@ helper continuation… / identity switches during room restoration also reject a
 | `TownCachedReads({cache, getContext, now, membersTtlMs})` | main.cjs:445 | cache = TownDataCache；getContext 返回 `{identityKey, revision, identityRevision, connected}` |
 | `TownClientStore({directory, safeStorage})` | main.cjs:373 | directory = `<userData>/town-client`；safeStorage 需要可选的 `getSelectedStorageBackend()` |
 | `createCachedRoomLoaders({reads, getRooms, setRooms, members, getRevisions, reconcileRooms, now})` | main.cjs boot() 闭包 | 与 townRoomCache / townMemberCache / generation / identityRevision / townBackground.reconcileRooms 一一对应 |
+
+## 门槛（2026-09-16 收工）
+- `npm run typecheck`：通过，无输出。
+- `npx vitest run`：`Test Files  50 passed | 7 skipped (57)` / `Tests  390 passed | 16 skipped (406)`。
+  基线（4921932）是 309 通过 / 16 跳过，净增 81 条 = 38 + 14 + 9 + 5 + 10 + 5，与本单元新增用例数一致；
+  既有用例一条未删、未弱化，`tests/architecture.test.ts` 四条仍通过（main 层允许 node: 内置，本单元
+  只用 node:fs/promises、node:path、node:crypto，未 import 'electron'）。
+- 没有 it.skip：本单元所有用例都能在 vitest 下真实运行。
+
+## 未接线（留给后续集成阶段）
+- 这些模块只是被移植过来，`desktop/main/main.ts`、preload、renderer、IPC 都没有改动，
+  也没有从 portal-desktop 已有的 `desktop/main/town/{client,ipc,live,pairing}.ts` 里引用它们。
+- `TownBackground`（src/town-background.cjs）不在本单元，它才是 `new TownRefresh(...)` 的实际调用方；
+  集成时由它把 BonfireCache 的 `load/save` 接到 `restoreCache` / `onSuccess`。
+- `timeline/cached-reads.ts` 里的 `scrollId` 是从 src/town-library-contract.cjs 内联来的副本，
+  等 Town library 单元落地后应改成 import，正则与保留字集合必须保持一致。
+- `TownSession` / `TownClient` 由别的单元移植；本单元的 `readSnapshot` / `reads` 都是注入的回调，
+  没有对它们的编译期依赖。
