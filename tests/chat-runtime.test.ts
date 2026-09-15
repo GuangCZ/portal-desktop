@@ -35,6 +35,23 @@ const response = (value: unknown) =>
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
 describe("React chat runtime lifecycle", () => {
+  it("binds diagnostic sends to their original Being even if the proxy connection changes", async () => {
+    const alice = parseConnection('https://fixture.test/alice/?token=alice-fixture');
+    const bob = parseConnection('https://fixture.test/bob/?token=bob-fixture');
+    vi.stubGlobal('location', new URL('beings://chat/?history_scope=' + encodeURIComponent(alice.endpoint) + '&scene_id=desktop-diagnostic'));
+    const upstream = vi.fn(async () => response({ ok: true }));
+    const proxy = new ChatProxy(() => bob, upstream);
+    let result = 0;
+    vi.stubGlobal('fetch', async (input: string, init: RequestInit) => {
+      const request = new Request(new URL(input, 'beings://chat'), init);
+      const value = await proxy.handle(request); result = value.status; return value;
+    });
+    const state = new ChatState(), runtime = createChatRuntime(state);
+    await runtime.send('Diagnostic fixture', []);
+    expect(result).toBe(409);
+    expect(upstream).not.toHaveBeenCalled();
+    runtime.dispose();
+  });
   it("initializes once and aborts requests and every scheduled resource on disposal", async () => {
     const calls: { url: string; signal: AbortSignal }[] = [];
     vi.stubGlobal(

@@ -8,11 +8,10 @@ import type { Settings, KitLibrary, LocalKit } from '../../shared/types';
 const expand = (value: string, home: string) => value === '~' ? home : value.startsWith('~/') ? path.join(home, value.slice(2)) : value;
 export async function kitLocation(settings: Settings, home = os.homedir()) {
   let directory = path.join(home, '.heart-portal', 'kits');
-  let enabled = settings.kitsEnabled;
+  const enabled = settings.kitsEnabled;
   if (settings.portalConfigPath) {
-    const config = parse(await readFile(settings.portalConfigPath, 'utf8'));
+    const config = parse((await readFile(settings.portalConfigPath, 'utf8')).replace(/^\uFEFF/, ''));
     if (typeof config.kits_dir === 'string') directory = path.resolve(settings.workspace, expand(config.kits_dir, home));
-    enabled = config.kits_enabled !== false;
   }
   return { directory, enabled, configPath: settings.portalConfigPath };
 }

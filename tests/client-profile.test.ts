@@ -6,6 +6,10 @@ describe('client profile compatibility', () => {
   it('keeps an explicit isolated profile for tests and development', () => {
     const exists = vi.fn();
     expect(clientUserData('C:\\Users\\fixture\\AppData\\Roaming', '.\\profile', exists)).toBe(path.resolve('.\\profile'));
+    const unavailable = vi.fn(() => { throw new Error("Failed to get 'appData' path"); });
+    expect(clientUserData(unavailable, '.\\profile', exists)).toBe(path.resolve('.\\profile'));
+    expect(unavailable).not.toHaveBeenCalled();
+    expect(() => clientUserData(unavailable)).toThrow("Failed to get 'appData' path");
     expect(exists).not.toHaveBeenCalled();
   });
 

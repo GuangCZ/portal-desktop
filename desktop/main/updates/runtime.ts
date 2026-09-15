@@ -5,6 +5,8 @@ import { BackgroundPortal, atomic, fingerprint, unixRunner, windowsRunner, type 
 import type { Connection } from '../chat/connection';
 import type { Settings } from '../../shared/types';
 import { readPortalSample, readPortalReady } from '../portal/status';
+import { portalConfig } from '../portal/supervisor';
+import { parse as parseToml } from 'smol-toml';
 
 export interface RuntimeBundle { schema: 1; id: string; clientVersion: string; portalVersion: string; sha256: string; platform: string; arch: string }
 interface Journal { schema: 1; previous: Service; candidate: Service; enabled: boolean; previousPlist?: string; external?: Service[] }
@@ -95,15 +97,32 @@ export class RuntimeUpdater {
     // A client release owns one tested engine/runner pair. Preserve the user's
     // configuration, but always activate the binary covered by this manifest.
     if (previous.bundleId === bundle.id && digest(await readFile(path.join(previous.root, this.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal'))) === bundle.sha256) return { phase: 'current', message: '客户端、Portal 与守护程序已同步。', portalVersion: bundle.portalVersion };
-    const config = settings.portalConfigPath || previous.configPath || path.join(previous.root, 'portal.toml');
-    await access(config);
+    let config = settings.portalConfigPath || previous.configPath || path.join(previous.root, 'portal.toml');
+    // Releases before generatedConfig was persisted cannot reliably tell an
+    // imported TOML from the client's own file. Treat that legacy record as
+    // client-owned and regenerate it from the current settings. This keeps a
+    // stale/unsupported config from disabling current Portal capabilities.
+    const legacyService = previous.generatedConfig === undefined;
+    const contents = await readFile(config, 'utf8').catch(() => '');
+    let readableConfig = Boolean(contents);
+    if (readableConfig) {
+      try { parseToml(contents.replace(/^\uFEFF/, '')); }
+      catch { readableConfig = false; }
+    }
+    // Refresh only an untouched client-generated config. Imported/edited files
+    // keep their exact bytes, including an explicit screenshot opt-out.
+    const generatedConfig = legacyService || !readableConfig ||
+      ((!settings.portalConfigPath || (previous.generatedConfig && settings.portalConfigPath === previous.configPath)) &&
+        [portalConfig(settings), portalConfig(settings).replace('screenshot = true', 'screenshot = false')].includes(contents));
     const wasEnabled = (await this.background.refresh()).enabled;
     const root = path.join(this.background.runtimeDirectory, randomUUID());
+    if (generatedConfig) config = path.join(root, 'portal.toml');
     const candidate: Service = { label: previous.label, file: previous.file, root, existing: false,
-      name: settings.portalName, environment: previous.environment, bundleId: bundle.id, configPath: config, cwd: settings.workspace,
-      fingerprint: fingerprint({ ...settings, portalConfigPath: config }, connection) };
+      name: settings.portalName, environment: previous.environment, bundleId: bundle.id, configPath: config, generatedConfig: Boolean(generatedConfig), cwd: settings.workspace,
+      fingerprint: fingerprint({ ...settings, portalConfigPath: generatedConfig ? undefined : config }, connection) };
     await mkdir(root, { recursive: true, mode: 0o700 });
     try {
+      if (generatedConfig) await atomic(config, portalConfig(settings));
       const target = path.join(root, this.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal');
       await copyFile(binary, target); await chmod(target, 0o700);
       if (digest(await readFile(target)) !== bundle.sha256) throw new Error('暂存 Portal 校验失败。');

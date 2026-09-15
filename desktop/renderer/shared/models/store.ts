@@ -1,4 +1,5 @@
 /** Mutable domain models publish a stable version; React owns all rendered DOM. */
+import { publicErrorMessage } from '../../../shared/errors';
 export class Store {
   private revision = 0;
   private listeners = new Set<() => void>();
@@ -14,8 +15,4 @@ export class Store {
     this.listeners.forEach((listener) => listener());
   };
 }
-export const errorText = (error: unknown) =>
-  String(error instanceof Error ? error.message : error).replace(
-    /^(?:Error: )?Error invoking remote method '[^']+': Error: /,
-    "",
-  );
+export const errorText = publicErrorMessage;

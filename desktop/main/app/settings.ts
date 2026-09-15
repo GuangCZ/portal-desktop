@@ -26,6 +26,17 @@ export class SettingsStore {
     connection.relaySecret = secrets.relaySecret || connection.token;
     this.connection = connection;
     this.settings = { ...this.settings, ...saved.settings, portalBinary: this.binary, endpoint: connection.endpoint, being: connection.being, hasToken: true };
+    // A path persisted by an older client is only a hint. If it was removed or
+    // is no longer valid TOML, fall back to the configuration generated from
+    // the current client settings instead of failing Portal startup.
+    if (this.settings.portalConfigPath) {
+      try {
+        const source = await readFile(this.settings.portalConfigPath, 'utf8');
+        parse(source.replace(/^\uFEFF/, ''));
+      } catch {
+        this.settings.portalConfigPath = undefined;
+      }
+    }
   }
   async reusePortalConfig(candidates: string[]) {
     if (this.settings.portalConfigPath) return;

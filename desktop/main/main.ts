@@ -9,6 +9,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { access, mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { SettingsStore } from './app/settings';
+import { ClientErrorLog } from './app/error-log';
+import { portalLogText } from './portal/diagnostics';
 import { PortalSupervisor } from './portal/supervisor';
 import { ExternalPortalObserver } from './portal/external';
 import { PortalTakeover } from './portal/takeover';
@@ -40,11 +42,20 @@ const CLIENT_ID = 'portal-desktop';
 protocol.registerSchemesAsPrivileged([{ scheme: 'beings', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 // Electron uses its internal name for encrypted storage. Keep that identity
 // stable while the bundle, windows, menus and dialogs use the display name.
-app.setName(CLIENT_ID);
-app.setAboutPanelOptions({ applicationName: CLIENT_NAME });
-const userData = clientUserData(app.getPath('appData'), process.env.PORTAL_DESKTOP_USER_DATA);
-app.setPath('userData', userData);
-app.setPath('sessionData', userData);
+let profileError: unknown;
+let userData: string;
+try {
+  app.setName(CLIENT_ID);
+  app.setAboutPanelOptions({ applicationName: CLIENT_NAME });
+  userData = clientUserData(() => app.getPath('appData'), process.env.PORTAL_DESKTOP_USER_DATA);
+  app.setPath('userData', userData);
+  app.setPath('sessionData', userData);
+} catch (error) {
+  profileError = error;
+  // This directory only receives startup diagnostics; never start a fresh
+  // client profile when the real profile cannot be resolved.
+  userData = path.join(os.tmpdir(), 'portal-desktop-startup');
+}
 let window: BrowserWindow | null = null;
 let windowReady = false;
 let browser: ClientBrowser | undefined;
@@ -62,6 +73,7 @@ let quitCleanupDone = false;
 let sessionEnding = false;
 let tray: Tray | undefined;
 let lifecycleError = '';
+const errorLog = new ClientErrorLog(userData, () => [store?.connection?.token || '', store?.connection?.relaySecret || '']);
 let mutation = Promise.resolve();
 let prepareInstallerShutdown: ((target: string) => void) | undefined;
 let pendingInstallerTarget: string | undefined;
@@ -117,7 +129,7 @@ async function ready() {
   store = new SettingsStore(directory, secretStorage, binary);
   let startupNotice: string | undefined;
   try { await store.load(); }
-  catch { startupNotice = '原连接配置未能读取，Portal 未启动。配置文件已保留，请检查系统密钥库或连接设置。'; }
+  catch (error) { startupNotice = errorLog.report('settings-load', error, '连接配置读取失败，请检查密钥库或连接设置。'); }
   let configCandidates: string[] = [];
   const reusePreviousConfig = async () => {
     await store.reusePortalConfig(configCandidates);
@@ -131,19 +143,26 @@ async function ready() {
     if (savedService && (savedService.existing || savedService.kind || savedService.label !== new BackgroundPortal(directory).label)) {
       configCandidates.push(savedService.configPath || path.join(savedService.root, 'portal.toml'));
     }
-    if (!store.connection) configCandidates.push(path.join(os.homedir(), '.heart-portal/portal.toml'), path.join(os.homedir(), '.heart-portal/runtime/portal.toml'));
+    // An explicitly selected profile is independent (including test profiles).
+    // Its own saved service can still migrate, but it must not import the user's
+    // global Being connection or workspace just because it is initially empty.
+    if (!store.connection && !process.env.PORTAL_DESKTOP_USER_DATA) configCandidates.push(path.join(os.homedir(), '.heart-portal/portal.toml'), path.join(os.homedir(), '.heart-portal/runtime/portal.toml'));
     await reusePreviousConfig();
-  } catch { startupNotice = '已有 Portal 配置未能读取，请检查原配置文件后重试。'; }
+  } catch (error) { startupNotice = errorLog.report('portal-config-import', error, '已有 Portal 配置读取失败，请检查后重试。'); }
   const townCredentials = new TownCredentials(directory, secretStorage);
   let townWarning: string | undefined;
-  try { await townCredentials.load(); } catch (error) { townWarning = (error as Error).message; }
+  try { await townCredentials.load(); } catch (error) { townWarning = errorLog.report('town-credentials', error, 'Town 凭据读取失败，请重新连接。'); }
   townLive = new TownLive(() => townCredentials.token, () => townCredentials.beingId, state => { if (window && !window.webContents.isDestroyed()) window.webContents.send('beings:town-live', state); }, net.fetch.bind(net) as typeof fetch, TOWN_ORIGIN, () => townCredentials.display);
   const town = new TownClient(() => townCredentials.token, net.fetch.bind(net) as typeof fetch, TOWN_ORIGIN, () => townLive.state.beingId || '');
   townLive.restart();
   kitInstaller = new KitInstaller(directory, net.fetch.bind(net) as typeof fetch);
   portal = new PortalSupervisor(directory);
   background = new BackgroundPortal(directory);
-  await background.discover(store.settings, store.connection);
+  try { await background.discover(store.settings, store.connection); }
+  catch (error) {
+    startupNotice = errorLog.report('background-discovery', error, '后台 Portal 状态读取失败，请稍后重试。');
+    portal.state = { phase: 'error', message: startupNotice, logs: [] };
+  }
   if (!background.state.supported) store.settings.backgroundEnabled = false;
   let chatScene: ChatScene | undefined;
   let chatSceneNotice: string | undefined;
@@ -171,7 +190,7 @@ async function ready() {
       }
     }).catch(error => {
       if (window && !window.isDestroyed()) void dialog.showMessageBox(window, {
-        type: 'error', title: '无法开始安装', message: String((error as Error).message || error),
+        type: 'error', title: '无法开始安装', message: errorLog.report('installer-start', error, '安装准备失败，请查看日志后重试。'),
         detail: '旧客户端和 Portal 保持运行。请处理后重新启动安装包。', buttons: ['知道了'],
       });
     });
@@ -184,12 +203,13 @@ async function ready() {
   let startupDeferred = false;
   // Only the trusted top-level local shell can control local capabilities.
   const handle = (channel: string, callback: (...args: any[]) => unknown) => {
-    ipcMain.handle(channel, (event, ...args) => {
+    ipcMain.handle(channel, async (event, ...args) => {
       const frame = event.senderFrame;
       if (!window || event.sender !== window.webContents || frame !== window.webContents.mainFrame || frame.url !== shellURL()) throw new Error('Untrusted IPC sender');
       if (quitting && !['beings:browser-bounds', 'beings:diagnostics'].includes(channel)) throw new Error('客户端正在退出，请稍候。');
       if (recoveryBlocked && ['beings:save', 'beings:portal-start', 'beings:portal-stop'].includes(channel)) throw new Error('Portal 升级恢复尚未完成，请重新启动客户端完成恢复。');
-      return callback(...args);
+      try { return await callback(...args); }
+      catch (error) { throw new Error(errorLog.report(channel, error)); }
     });
   };
   handle('beings:client-startup', (enabled?: boolean) => clientStartup(app, process.platform, process.execPath, enabled));
@@ -211,7 +231,7 @@ async function ready() {
     try { await access(store.settings.workspace); checks.push({ name: '工作目录', status: 'ok', detail: '目录可访问' }); }
     catch { checks.push({ name: '工作目录', status: 'warning', detail: '目录尚未创建或不可访问' }); }
     try { await verifyBeingConnection(connection, net.fetch.bind(net) as typeof fetch); checks.push({ name: 'Being', status: 'ok', detail: '现有状态接口可访问；未发送消息或调用工具' }); }
-    catch (error) { checks.push({ name: 'Being', status: 'warning', detail: String((error as Error).message).replace(/，Portal 未启动。/g, '。') }); }
+    catch (error) { checks.push({ name: 'Being', status: 'warning', detail: errorLog.report('being-diagnostics', error, 'Being 连接检查失败，请稍后重试。') }); }
     if (connection !== store.connection) throw new Error('连接已切换，请重新检查。');
     checks.push({ name: 'Portal', status: portal.state.phase === 'connected' ? 'ok' : portal.state.phase === 'error' ? 'error' : 'warning', detail: portal.state.message });
     checks.push({ name: 'Town', status: townLive.state.phase === 'connected' ? 'ok' : 'warning', detail: townLive.state.message });
@@ -219,6 +239,28 @@ async function ready() {
       logs: portal.state.logs.slice(-60).map(line => redact(line, [connection?.token || '', connection?.relaySecret || '']).replaceAll(os.homedir(), '~')) };
   };
   handle('beings:diagnostics', diagnose);
+  const capturePortalLogs = async () => {
+    const state = { ...portal.state, logs: [...portal.state.logs] };
+    await errorLog.exportSnapshot(state.logs, { version: app.getVersion(), platform: `${process.platform}/${process.arch}`,
+      capturedAt: new Date().toISOString(), workspace: store.settings.workspace,
+      portal: { ...state, logs: undefined }, background: background.state,
+      runtimeDirectory: background.installedService?.root || directory });
+    return { state, errors: await errorLog.recentText() };
+  };
+  handle('beings:portal-log-reference', async () => {
+    const connection = store.connection;
+    if (!connection) throw new Error('请先连接 Being。');
+    const { state, errors } = await capturePortalLogs();
+    if (connection !== store.connection) throw new Error('连接已切换，请重新选择 Portal 日志。');
+    return { endpoint: connection.endpoint, text: portalLogText({ version: app.getVersion(),
+      platform: `${process.platform}/${process.arch}`, portal: state, errors, home: os.homedir(),
+      secrets: [connection.token, connection.relaySecret] }) };
+  });
+  handle('beings:logs', async () => {
+    await capturePortalLogs();
+    const error = await shell.openPath(errorLog.directory);
+    if (error) throw new Error(error);
+  });
   handle('beings:diagnostics-export', async () => {
     const report = await diagnose();
     const result = await dialog.showSaveDialog(window!, { title: '导出诊断', defaultPath: `${CLIENT_NAME}-diagnostics-${new Date().toISOString().slice(0,10)}.json`, filters: [{ name: 'JSON', extensions: ['json'] }] });
@@ -286,13 +328,14 @@ async function ready() {
       } else if (answer.response > 0) await shell.openExternal(state.releaseUrl);
     } catch (error) {
       updates.setActivity();
-      if (window && !quitting) await dialog.showMessageBox(window, { type: 'error', title: '客户端升级未完成', message: String(error), detail: '原配置和恢复记录已保留。可重新打开客户端恢复，或稍后重试。', buttons: ['知道了'] });
+      const message = errorLog.report('client-update', error, '客户端升级未完成，请稍后重试。');
+      if (window && !quitting) await dialog.showMessageBox(window, { type: 'error', title: '客户端升级未完成', message, detail: '原配置和恢复记录已保留。可重新打开客户端恢复，或稍后重试。', buttons: ['知道了'] });
     } finally { showingUpdates = false; updates.setActivity(); }
   };
   handle('beings:check-updates', showUpdates);
   handle('beings:cancel-update', () => { updateDownload?.abort(); });
   handle('beings:update-state', () => updates.state);
-  const snapshot = () => ({ settings: store.settings, portal: portal.state, background: background.state, chatScene, notice: [startupNotice, chatSceneNotice].filter(Boolean).join('\n') || undefined });
+  const snapshot = () => ({ settings: store.settings, portal: portal.state, background: background.state, chatScene, notice: [startupNotice && errorLog.report('startup-notice', startupNotice), chatSceneNotice].filter(Boolean).join('\n') || undefined });
   const verifyConnection = async () => {
     await reusePreviousConfig();
     await verifyBeingConnection(store.connection, net.fetch.bind(net) as typeof fetch);
@@ -303,8 +346,8 @@ async function ready() {
   const publishBackground = async () => {
     const state = await background.portalState();
     if (takeover.holdMessage) {
-      startupNotice = takeover.holdMessage;
-      portal.state = { ...state, phase: 'error', managed: false, message: takeover.holdMessage };
+      startupNotice = errorLog.report('portal-takeover', takeover.holdMessage, 'Portal 切换未完成，请检查日志后重试。');
+      portal.state = { ...state, phase: 'error', managed: false, message: startupNotice };
       portal.emit('state', portal.state); return;
     }
     portal.state = state;
@@ -383,7 +426,12 @@ async function ready() {
     await store.save(input);
     try {
       await verifyConnection();
-      await takeover.run(store.connection!, 'manual', replacing => startClientPortal(replacing, true));
+      await takeover.run(store.connection!, 'manual', async replacing => {
+        // Discovery may import an old configuration during takeover. The switches
+        // explicitly saved in this operation must take precedence over that file.
+        store.settings = { ...store.settings, allowExec: input.allowExec, kitsEnabled: input.kitsEnabled };
+        await startClientPortal(replacing, true);
+      });
       await publishCurrentPortal();
     } catch (error) {
       if (previousConnection) await store.save({ ...previous, connectionLink: previousConnection.link + '&relay_secret=' + encodeURIComponent(previousConnection.relaySecret) });
@@ -427,6 +475,11 @@ async function ready() {
   }));
   let handlingConflict = false;
   portal.on('state', state => {
+    if (state.phase === 'error' || state.phase === 'external') {
+      if (state.logs.length) errorLog.report('portal-runtime', state.logs.slice(-60).join('\n'));
+      state = { ...state, message: errorLog.report('portal-state', state.message, 'Portal 启动未完成，请查看日志后重试。') };
+      portal.state = state;
+    }
     if (window && !window.isDestroyed()) window.webContents.send('beings:portal-state', state);
     // A competing service can start between discovery and launch. Resolve that
     // race once through the same stop/start path, never from a retry timer.
@@ -437,7 +490,7 @@ async function ready() {
         if (store.connection) await takeover.run(store.connection, 'automatic', startClientPortal, true);
         await publishBackground();
       }).catch(error => {
-        portal.state = { phase: 'error', managed: false, message: takeover.holdMessage || String(error), logs: [] };
+        portal.state = { phase: 'error', managed: false, message: errorLog.report('portal-conflict', error, 'Portal 切换未完成，请检查日志后重试。'), logs: [] };
         portal.emit('state', portal.state);
       }).finally(() => { handlingConflict = false; });
     }
@@ -455,7 +508,7 @@ async function ready() {
     try { await verifyConnection(); startupDeferred = false; }
     catch (error) {
       startupDeferred = true;
-      startupNotice = (error as Error).message;
+      startupNotice = errorLog.report('startup-connection', error, '连接检查失败，请检查设置后重试。');
       runtimeUpdate = { phase: 'skipped', message: startupNotice };
       portal.state = { phase: 'stopped', message: startupNotice, logs: [] };
       // Keep pending upgrade records: reconnect/restart can finish safely.
@@ -478,7 +531,7 @@ async function ready() {
           if (runtimeUpdate.phase !== 'skipped') {
             if (runtimeUpdate.phase === 'current' || runtimeUpdate.phase === 'updated') {
               const service = background.installedService!;
-              await store.save({ ...store.settings, portalConfigPath: service.configPath, workspace: service.cwd || store.settings.workspace });
+              await store.save({ ...store.settings, portalConfigPath: service.generatedConfig ? undefined : service.configPath, workspace: service.cwd || store.settings.workspace });
               await restoreRuntimeMode(background, store.settings, async () => {
                 await portal.start(store.settings, connection);
                 await portal.waitReady();
@@ -506,8 +559,9 @@ async function ready() {
       await publishCurrentPortal();
     } catch (error) {
       recoveryBlocked = await access(path.join(directory, 'runtime-update.json')).then(() => true, () => false);
-      runtimeUpdate = { phase: 'error', message: String(error) };
-      portal.state = { phase: 'error', message: `Portal 更新或启动未完成：${(error as Error).message}`, logs: [] };
+      const message = errorLog.report('portal-startup', error, 'Portal 启动未完成，请查看日志后重试。');
+      runtimeUpdate = { phase: 'error', message };
+      portal.state = { phase: 'error', message, logs: [] };
       portal.emit('state', portal.state);
       if (!quitting && window) void dialog.showMessageBox(window, { type: 'warning', title: 'Portal 更新未完成', message: runtimeUpdate.message, buttons: ['知道了'] });
     }
@@ -524,7 +578,8 @@ async function ready() {
   backgroundPoll = setInterval(() => {
     if (quitting || pollingBackground || portal.managing || !store.connection) return;
     pollingBackground = true;
-    void exclusive(publishBackground).catch(() => {
+    void exclusive(publishBackground).catch(error => {
+      errorLog.report('background-poll', error);
       portal.state = { phase: 'error', message: '无法读取后台服务状态，请在本机设置中重新启用。', logs: [] };
       portal.emit('state', portal.state);
     }).finally(() => { pollingBackground = false; });
@@ -532,7 +587,13 @@ async function ready() {
   backgroundPoll.unref();
 }
 const squirrelEvent = process.platform === 'win32' ? installerEvent(process.argv) : undefined;
-if (squirrelEvent) { void handleInstallerEvent(squirrelEvent, process.execPath).catch(() => { process.exitCode = 1; }).finally(() => app.quit()); }
+if (profileError) {
+  const message = errorLog.report('profile-initialization', profileError, '客户端配置目录不可用，请检查系统用户目录后重试。');
+  void app.whenReady().then(async () => {
+    dialog.showErrorBox(`${CLIENT_NAME} 启动失败`, message);
+    await errorLog.flush(); app.quit();
+  });
+} else if (squirrelEvent) { void handleInstallerEvent(squirrelEvent, process.execPath).catch(error => { errorLog.report('installer-event', error); process.exitCode = 1; }).finally(() => app.quit()); }
 else if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', (_event, argv) => {
@@ -546,7 +607,10 @@ else {
     if (args.includes('--quit-for-update')) { app.quit(); return; }
     showWindow();
   });
-  app.whenReady().then(ready).catch(error => { dialog.showErrorBox(`${CLIENT_NAME} 启动失败`, String(error)); app.quit(); });
+  app.whenReady().then(ready).catch(async error => {
+    dialog.showErrorBox(`${CLIENT_NAME} 启动失败`, errorLog.report('client-startup', error, '客户端启动失败，请查看日志后重试。'));
+    await errorLog.flush(); app.quit();
+  });
   app.on('activate', showWindow);
   app.on('window-all-closed', () => { /* Explicit quit owns process cleanup. */ });
   app.on('before-quit', event => {
@@ -556,11 +620,12 @@ else {
     quitting = true;
     cancelTownPairing?.();
     lifecycleError = '';
-    void exclusive(async () => { await kitInstaller?.dispose(); await portal.stop(); browser?.close(); }).then(() => {
+    void exclusive(async () => { await kitInstaller?.dispose(); await portal.stop(); browser?.close(); await errorLog.flush(); }).then(() => {
       clearInterval(backgroundPoll); clearInterval(updatePoll);
       townLive?.dispose(); proxy.abortAll();
       quitCleanupDone = true; tray?.destroy(); app.quit();
-    }).catch(() => {
+    }).catch(error => {
+      errorLog.report('client-quit', error);
       quitting = false;
       lifecycleError = '退出未完成，当前客户端保持打开。请在 Portal 设置中检查运行状态，停止后再退出。';
       showWindow();

@@ -106,7 +106,52 @@ describe("React desktop state lifecycle", () => {
     expect(url.searchParams.get("history_scope")).toBe(snapshot.settings.endpoint);
     expect(url.searchParams.has("token")).toBe(false);
   });
-
+  it("previews Portal logs through Together without posting until the user composes a reference", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<{ endpoint: string; text: string }>();
+    const getLogs = vi.fn(() => pending.promise);
+    const app = new AppModel(api({ portalLogReference: getLogs }).value), post = vi.fn();
+    const messages = () => post.mock.calls.map(call => call[0]).filter(message => message.type !== 'beings:town-activity');
+    app.post = post;
+    app.applySnapshot(state()); app.frameLoaded(); app.connection = 'online';
+    post.mockClear();
+    const selecting = app.sharePortalLogs();
+    await app.sharePortalLogs();
+    expect(getLogs).toHaveBeenCalledOnce();
+    pending.resolve({ endpoint: state().settings.endpoint, text: 'redacted log fixture' });
+    await selecting;
+    expect(messages()).toEqual([]);
+    expect(app.logsLoading).toBe(false);
+    expect(app.view).toBe('chat');
+    expect(app.workspace.open).toBe(true);
+    expect(app.workspace.scenes.reference).toMatchObject({ view: 'portal', title: 'Portal 设置',
+      selection: { title: 'Portal 日志', author: '本机 Portal', excerpt: 'redacted log fixture', private: true } });
+    app.applySnapshot({ ...state(), portal: { phase: 'connected', message: 'new state', logs: ['later output'] } });
+    expect(app.workspace.scenes.reference?.selection?.excerpt).toBe('redacted log fixture');
+    app.workspace.compose();
+    expect(messages()).toHaveLength(1);
+    const message = messages()[0];
+    expect(message).toMatchObject({ type: 'beings:scene-draft',
+      text: '一起看看Portal 设置里的这段（本机 Portal）：\n\n> redacted log fixture' });
+    app.workspace.receive({ type: 'beings:scene-draft-result', id: message.id, ok: true });
+    expect(app.workspace.open).toBe(false);
+    expect(messages()).toHaveLength(1);
+  });
+  it("discards a Portal log reference collected before an identity change", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<{ endpoint: string; text: string }>();
+    const app = new AppModel(api({ portalLogReference: () => pending.promise }).value), post = vi.fn();
+    app.post = post;
+    app.applySnapshot(state()); app.frameLoaded(); app.connection = 'online'; post.mockClear();
+    const selecting = app.sharePortalLogs();
+    app.applySnapshot(state('other'), true);
+    pending.resolve({ endpoint: state().settings.endpoint, text: 'old logs' });
+    await selecting;
+    expect(post).not.toHaveBeenCalled();
+    expect(app.logsLoading).toBe(false);
+    expect(app.workspace.scenes.reference).toBeNull();
+    expect(app.workspace.open).toBe(false);
+  });
   it("invalidates SBS on refresh and waits for confirmed state instead of toggling optimistically", () => {
     const app = new AppModel(api().value), post = vi.fn();
     app.post = post;

@@ -9,10 +9,18 @@ import { StringDecoder } from 'node:string_decoder';
 import type { Connection } from '../chat/connection';
 import { redact } from '../chat/connection';
 import type { PortalState, Settings } from '../../shared/types';
+import { windowsEnvironment, windowsExecutable } from './windows';
 
 export function portalConfig(settings: Settings): string {
   // JSON string escaping is compatible with TOML basic strings, including Windows paths.
-  return `name = ${JSON.stringify(settings.portalName)}\nworkspace = ${JSON.stringify(settings.workspace)}\nbind = "127.0.0.1:9100"\nkits_enabled = ${settings.kitsEnabled}\n\n[tools]\nexec = ${settings.allowExec}\nfile = true\nscreenshot = false\nweb_fetch = true\nsearch = true\ncustom_tools_enabled = ${settings.kitsEnabled}\n\n[security]\nexec_allowlist = []\nmax_file_size = 10485760\n`;
+  return `name = ${JSON.stringify(settings.portalName)}\nworkspace = ${JSON.stringify(settings.workspace)}\nbind = "127.0.0.1:9100"\nkits_enabled = ${settings.kitsEnabled}\n\n[tools]\nexec = ${settings.allowExec}\nfile = true\nscreenshot = true\nweb_fetch = true\nsearch = true\ncustom_tools_enabled = ${settings.kitsEnabled}\n\n[security]\nexec_allowlist = []\nmax_file_size = 10485760\n`;
+}
+
+export function portalArguments(config: string, settings: Settings): string[] {
+  // Saved client switches also apply when reusing a TOML, without rewriting its
+  // tools, relative paths, comments or security policy.
+  return ['--config', config, '--name', settings.portalName,
+    '--exec-enabled', String(settings.allowExec), '--kits-enabled', String(settings.kitsEnabled)];
 }
 
 export class PortalSupervisor extends EventEmitter {
@@ -80,11 +88,12 @@ export class PortalSupervisor extends EventEmitter {
     this.launchNonce = nonce;
     const root = this.directory;
     const statusPath = path.join(root, '.portal-connection-status.json');
-    const child = this.spawnProcess(settings.portalBinary, ['--config', configPath, '--name', settings.portalName], {
+    const inherited = [process.env, environment, ...(settings.portalEnvironmentPath ? [{ PATH: settings.portalEnvironmentPath }] : [])];
+    const child = this.spawnProcess(settings.portalBinary, portalArguments(configPath, settings), {
       cwd: settings.workspace,
       shell: false, windowsHide: true, detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...environment, ...(settings.portalEnvironmentPath ? { PATH: settings.portalEnvironmentPath } : {}), PORTAL_CONNECT_LINK: connection.link, HEART_PORTAL_SUPERVISED: '1', HEART_PORTAL_CLIENT_MANAGED: '1', HEART_PORTAL_STATUS_FILE: statusPath, HEART_PORTAL_STATUS_NONCE: nonce,
+      env: { ...(process.platform === 'win32' ? windowsEnvironment(...inherited) : Object.assign({}, ...inherited)), PORTAL_CONNECT_LINK: connection.link, HEART_PORTAL_SUPERVISED: '1', HEART_PORTAL_CLIENT_MANAGED: '1', HEART_PORTAL_STATUS_FILE: statusPath, HEART_PORTAL_STATUS_NONCE: nonce,
         HEART_PORTAL_READY_FILE: path.join(root, '.portal-ready.json'), HEART_PORTAL_READY_NONCE: nonce,
         RUST_LOG: 'info', NO_COLOR: '1' },
     });
@@ -185,7 +194,7 @@ export class PortalSupervisor extends EventEmitter {
       const force = () => {
         if (!child.pid) return;
         if (process.platform === 'win32') {
-          const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
+          const killer = spawn(windowsExecutable('taskkill'), ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
           killer.on('error', () => { child.kill(); });
         } else {
           try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
