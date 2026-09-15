@@ -174,4 +174,4 @@ message 字段顺序 `{id, content, ...可选}`。
 | TownDataCache | src/town-data-cache.cjs | timeline/data-cache.ts | 未开始 |
 | TownCachedReads | src/town-cached-reads.cjs | timeline/cached-reads.ts | 未开始 |
 | TownClientStore | src/town-client-store.cjs | timeline/client-store.ts | 未开始 |
-| BonfireCache | src/bonfire-cache.cjs | timeline/bonfire-cache.ts | 未开始 |
+| BonfireCache | src/bonfire-cache.cjs | timeline/bonfire-cache.ts | 测试通过（10/10，含 0.8.x 字节兼容用例） |
