@@ -51,8 +51,15 @@ export function createChatRuntime(state, options = {}) {
     frames.delete(id);
   };
   function listen(target, event, handler) {
+    if (!target?.addEventListener) return;
     target.addEventListener(event, handler);
     cleanups.push(() => target.removeEventListener(event, handler));
+  }
+  function visibilityState() {
+    // Tests and non-browser consumers can remove the global document while a
+    // previously scheduled health check is still settling. Treat that as a
+    // visible page so the health monitor keeps its normal retry semantics.
+    return globalThis.document?.visibilityState || "visible";
   }
   let publishQueued = false;
   function changed() {
@@ -1082,7 +1089,7 @@ export function createChatRuntime(state, options = {}) {
     livePhase = "awaiting_first";
     livePendingTool = null;
     lastProgressTime = Date.now();
-    hiddenAt = document.visibilityState === "hidden" ? Date.now() : null;
+    hiddenAt = visibilityState() === "hidden" ? Date.now() : null;
     clearTuiHint();
   }
 
@@ -1153,8 +1160,8 @@ export function createChatRuntime(state, options = {}) {
 
   // 后台 tab：**暂停计时**而不是续命。回到前台时把挂起时长补给 lastProgressTime，
   // 等价于"只统计前台的无进展时长"，锁屏 5 分钟不会被误判为超时。
-  listen(document, "visibilitychange", () => {
-    if (document.visibilityState === "hidden") {
+  listen(globalThis.document, "visibilitychange", () => {
+    if (visibilityState() === "hidden") {
       if (!hiddenAt) hiddenAt = Date.now();
     } else if (hiddenAt) {
       lastProgressTime += Date.now() - hiddenAt;
@@ -1401,7 +1408,7 @@ export function createChatRuntime(state, options = {}) {
 
       streamTimeoutId = setInterval(() => {
         // 后台时只是不判断（计时已经在 stalledForMs 里冻住了），绝不重置计时器
-        if (document.visibilityState === "hidden") return;
+        if (visibilityState() === "hidden") return;
         if (watchdogBusy || userStoppedStream) return;
         const stalledFor = stalledForMs();
         updateStallHint(stalledFor);
@@ -2006,7 +2013,7 @@ export function createChatRuntime(state, options = {}) {
     clearTimeout(healthTimer);
     // 后台且健康 → 停轮询（回前台的钩子会立刻 force 一次）
     if (
-      document.visibilityState === "hidden" &&
+      visibilityState() === "hidden" &&
       connState === "online" &&
       !isStreaming
     )
@@ -2087,8 +2094,8 @@ export function createChatRuntime(state, options = {}) {
   // 生命周期钩子：把"什么时候该重新探一次"这件事交给浏览器告诉我们，
   // 而不是靠一个 15s 的定时器猜。
   function installLifecycleHooks() {
-    listen(document, "visibilitychange", () => {
-      if (document.visibilityState !== "visible") {
+    listen(globalThis.document, "visibilitychange", () => {
+      if (visibilityState() !== "visible") {
         clearTimeout(healthTimer);
         return;
       }
@@ -2098,20 +2105,20 @@ export function createChatRuntime(state, options = {}) {
         console.warn("refresh on visible failed:", err),
       );
     });
-    listen(window, "online", () => {
+    listen(globalThis.window, "online", () => {
       healthBackoff = 0;
       if (connState === "offline") setConnState("reconnecting");
       checkHealth({ force: true });
     });
-    listen(window, "offline", () => setConnState("offline"));
-    listen(window, "pageshow", (e) => {
+    listen(globalThis.window, "offline", () => setConnState("offline"));
+    listen(globalThis.window, "pageshow", (e) => {
       // iOS Safari 从 bfcache 恢复时 visibilitychange 不保证触发
       if (e.persisted) {
         healthBackoff = 0;
         checkHealth({ force: true });
       }
     });
-    listen(window, "focus", () => {
+    listen(globalThis.window, "focus", () => {
       if (connState !== "online") checkHealth({ force: true });
       refreshOnRegainedAttention().catch((err) =>
         console.warn("refresh on focus failed:", err),
