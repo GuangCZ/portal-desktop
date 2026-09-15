@@ -45,13 +45,17 @@ it('identifies owned Windows desktop tasks using their runner and protected Bein
   const root = path.join(home, 'old'); await mkdir(root);
   await writeFile(path.join(root, 'run.ps1'), 'fixture');
   await writeFile(path.join(root, 'portal.toml'), 'name = "windows-laptop"');
+  const binary = path.join(root, 'heart-portal.exe');
+  await writeFile(binary, 'legacy engine without a status subcommand');
+  await writeFile(path.join(root, '.portal-launch.json'), JSON.stringify({ arguments: [], working_directory: root,
+    environment: { PORTAL_CONNECT_LINK: 'https://example.org/fixture/?token=previous-token' } }));
   const scripts: string[] = [];
   const run: Command = async (_file, args) => {
     const script = Buffer.from(args.at(-1)!, 'base64').toString('utf16le'); scripts.push(script);
-    if (script.includes('Get-ScheduledTask')) return JSON.stringify([{ label: 'town.beings.desktop.portal.aa', execute: 'powershell.exe', arguments: `-NoProfile -File "${root}/run.ps1"` }]);
+    if (script.includes('@(Get-ScheduledTask)')) return JSON.stringify([{ label: 'town.beings.desktop.portal.aa', execute: 'powershell.exe', arguments: `-NoProfile -File "${root}/run.ps1"` }]);
     if (script.includes('ConvertTo-SecureString')) return 'https://example.org/fixture/?token=previous-token';
-    if (script.includes('GetOwnerSid')) return '[]';
-    throw new Error('unexpected command');
+    if (script.includes('GetOwnerSid')) return JSON.stringify([{ pid: 1234, binary }]);
+    throw new Error('Config file not found: status');
   };
   const observer = new ExternalPortalObserver(run, 'win32', home);
   const connection = parseConnection('https://example.org/fixture/?token=current-token');
@@ -60,4 +64,6 @@ it('identifies owned Windows desktop tasks using their runner and protected Bein
   expect(scripts[0]).toContain('SecurityIdentifier');
   expect(scripts[0]).toContain("$_.TaskPath -eq '\\'");
   expect(scripts.join('\n')).not.toContain('previous-token');
+  expect(scripts.some(script => script.includes(`& '${binary}'`))).toBe(false);
+  await expect(observer.forUpgrade(connection, 'fixture', undefined, 0, true)).rejects.toThrow('不支持状态命令');
 });

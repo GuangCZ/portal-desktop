@@ -6,6 +6,7 @@ import { BackgroundPortal, type Command } from '../desktop/main/portal/backgroun
 import { RuntimeUpdater, digest, restoreRuntimeMode, type RuntimeBundle } from '../desktop/main/updates/runtime';
 import { parseConnection } from '../desktop/main/chat/connection';
 import type { Settings } from '../desktop/shared/types';
+import { portalConfig } from '../desktop/main/portal/supervisor';
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 async function fixture(platform: 'darwin' | 'win32' = 'darwin') {
@@ -46,6 +47,41 @@ async function fixture(platform: 'darwin' | 'win32' = 'darwin') {
   return { root, profile, background, previous, original, settings, connection, binary, bundle, calls, updater };
 }
 for (const platform of ['darwin', 'win32'] as const) {
+  it(`replaces a legacy service with the current client config when ownership metadata is missing (${platform})`, async () => {
+    const f = await fixture(platform);
+    const legacy = portalConfig(f.settings).replace('screenshot = true', 'screenshot = false');
+    await writeFile(f.previous.configPath!, legacy);
+    // This is the shape written by pre-generatedConfig clients.
+    const old = { ...f.previous };
+    delete old.generatedConfig;
+    await f.background.setService(old);
+    await f.updater().sync(f.binary, f.bundle, { ...f.settings, portalConfigPath: old.configPath }, f.connection);
+    const service = f.background.installedService!;
+    expect(service.generatedConfig).toBe(true);
+    expect(await readFile(service.configPath!, 'utf8')).toContain('screenshot = true');
+  });
+
+  it(`refreshes untouched ${platform} client defaults during upgrade while preserving the previous file`, async () => {
+    const f = await fixture(platform);
+    const legacy = portalConfig(f.settings).replace('screenshot = true', 'screenshot = false');
+    await writeFile(f.previous.configPath!, legacy);
+    await f.updater().sync(f.binary, f.bundle, f.settings, f.connection);
+    const service = f.background.installedService!;
+    expect(service.generatedConfig).toBe(true);
+    expect(service.configPath).toBe(path.join(service.root, 'portal.toml'));
+    expect(await readFile(service.configPath!, 'utf8')).toContain('screenshot = true');
+    expect(await readFile(f.previous.configPath!, 'utf8')).toBe(legacy);
+  });
+  it(`keeps an explicitly imported ${platform} screenshot opt-out intact during upgrade`, async () => {
+    const f = await fixture(platform);
+    const legacy = portalConfig(f.settings).replace('screenshot = true', 'screenshot = false');
+    await writeFile(f.previous.configPath!, legacy);
+    // An imported config is not client-generated metadata.
+    await f.background.setService({ ...f.background.installedService!, generatedConfig: false });
+    await f.updater().sync(f.binary, f.bundle, { ...f.settings, portalConfigPath: f.previous.configPath }, f.connection);
+    expect(f.background.installedService!.generatedConfig).toBe(false);
+    expect(await readFile(f.background.installedService!.configPath!, 'utf8')).toBe(legacy);
+  });
   it(`updates the ${platform} engine and supervisor together, preserving exact config and credentials`, async () => {
     const f = await fixture(platform); let checked = false;
     const result = await f.updater(async service => {

@@ -12,10 +12,11 @@ afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 async function source() { const src = path.join(dir, 'source'); await mkdir(src); await writeFile(path.join(src, 'manifest.json'), JSON.stringify(fixture)); await writeFile(path.join(src, 'server.mjs'), 'throw new Error("Import must never execute this script");'); return src; }
 
 describe('Portal Kit integration', () => {
-  it('reads the actual TOML setting and expands the home directory', async () => {
+  it('uses the client switch while retaining the imported kits directory', async () => {
     const config = path.join(dir, 'portal.toml'); await writeFile(config, 'kits_dir = "~/my-kits"\nkits_enabled = false\n');
     const result = await kitLocation({ ...settings(dir), portalConfigPath: config }, dir);
-    expect(result).toMatchObject({ directory: path.join(dir, 'my-kits'), enabled: false });
+    expect(result).toMatchObject({ directory: path.join(dir, 'my-kits'), enabled: true });
+    expect(await kitLocation({ ...settings(dir), portalConfigPath: config, kitsEnabled: false }, dir)).toMatchObject({ enabled: false });
     expect((await localKits(settings(dir), dir)).kits).toEqual([]);
   });
   it('imports files without executing them, resolves portable command and refuses overwrites', async () => {

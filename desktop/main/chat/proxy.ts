@@ -31,6 +31,9 @@ export class ChatProxy {
   async handle(request: Request): Promise<Response> {
     const connection = this.getConnection();
     if (!connection) return Response.json({ error: '请先连接 Being。' }, { status: 401 });
+    const expectedEndpoint = request.headers.get('X-Portal-Being-Endpoint');
+    if (expectedEndpoint && expectedEndpoint !== connection.endpoint)
+      return Response.json({ error: 'Being 连接已切换，请刷新对话后重试。' }, { status: 409 });
     let upstream: ReturnType<typeof upstreamRequest>;
     try { upstream = upstreamRequest(request, connection); }
     catch { return new Response('Not found', { status: 404 }); }

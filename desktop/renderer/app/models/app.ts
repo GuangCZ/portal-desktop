@@ -31,6 +31,8 @@ export class AppModel extends Store {
   update?: UpdateState;
   portalAction: "start" | "stop" | null = null;
   portalError = "";
+  logsLoading = false;
+  private logsRequest = "";
   clientStartup?: ClientStartup;
   startupBusy = false;
   clientError = "";
@@ -120,6 +122,8 @@ export class AppModel extends Store {
       ++this.defaultsRevision;
       clearTimeout(this.defaultsTimer);
       clearTimeout(this.toastTimer);
+      this.logsRequest = "";
+      this.logsLoading = false;
       cleanups.forEach((cleanup) => cleanup());
     };
   }
@@ -165,6 +169,11 @@ export class AppModel extends Store {
     this.changed();
   };
   applySnapshot(next: Snapshot, reload = false) {
+    if (reload || !next.settings.hasToken || (this.snapshot && next.settings.endpoint !== this.snapshot.settings.endpoint)) {
+      this.logsRequest = "";
+      this.logsLoading = false;
+    }
+    reload ||= Boolean(this.snapshot && next.settings.endpoint !== this.snapshot.settings.endpoint);
     this.snapshot = next;
     this.workspace.snapshot(next);
     if (next.settings.hasToken && (!this.chatSource || reload)) {
@@ -238,6 +247,38 @@ export class AppModel extends Store {
     this.clientSettingsOpen = false;
     this.navigate("chat");
     this.post({ type: "beings:chat-action", action });
+  }
+  async sharePortalLogs() {
+    if (this.logsLoading) return;
+    if (!this.snapshot?.settings.hasToken || !this.chatSource) {
+      this.toast("请先连接 Being，再一起看 Portal 日志。");
+      return;
+    }
+    this.logsLoading = true;
+    const request = this.logsRequest = crypto.randomUUID();
+    this.changed();
+    const endpoint = this.snapshot.settings.endpoint, source = this.chatSource;
+    try {
+      const logs = await this.api.portalLogReference();
+      if (this.logsRequest !== request) return;
+      if (logs.endpoint !== endpoint || this.snapshot?.settings.endpoint !== endpoint || this.chatSource !== source) {
+        throw new Error("连接已切换，请重新选择 Portal 日志。");
+      }
+      this.workspace.enter("portal");
+      this.workspace.scenes.select({ id: `portal-logs:${request}`, title: "Portal 日志",
+        author: "本机 Portal", excerpt: logs.text, private: true });
+      this.workspace.scenes.pin();
+      this.navigate("chat");
+      this.workspace.toggle(true);
+    } catch (error) {
+      if (this.logsRequest === request) this.toast(error);
+    } finally {
+      if (this.logsRequest === request) {
+        this.logsRequest = "";
+        this.logsLoading = false;
+        this.changed();
+      }
+    }
   }
   async changePortal(operation: "start" | "stop") {
     if (this.portalAction || !this.snapshot) return;

@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
-export function clientUserData(appData: string, override?: string, exists = existsSync) {
+export function clientUserData(appData: string | (() => string), override?: string, exists = existsSync) {
   if (override) return path.resolve(override);
-  const current = path.join(appData, 'portal-desktop');
-  const legacy = path.join(appData, 'Beings');
+  const directory = typeof appData === 'function' ? appData() : appData;
+  const current = path.join(directory, 'portal-desktop');
+  const legacy = path.join(directory, 'Beings');
   // The product/executable rename must not turn an upgrade into a fresh setup.
   // Prefer an explicitly configured current profile, otherwise keep using the
   // legacy profile in place so encrypted credentials and recovery journals are

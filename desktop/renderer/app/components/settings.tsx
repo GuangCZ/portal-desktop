@@ -440,7 +440,6 @@ export function ConnectionSettings({ model }: { model: AppModel }) {
               type="checkbox"
               role="switch"
               checked={Boolean(form?.allowExec)}
-              disabled={imported}
               onChange={(event) =>
                 app.editForm("allowExec", event.target.checked)
               }
@@ -456,7 +455,6 @@ export function ConnectionSettings({ model }: { model: AppModel }) {
               type="checkbox"
               role="switch"
               checked={Boolean(form?.kitsEnabled)}
-              disabled={imported}
               onChange={(event) =>
                 app.editForm("kitsEnabled", event.target.checked)
               }

@@ -5,14 +5,19 @@ import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { redact, type Connection } from '../chat/connection';
-import { portalConfig } from './supervisor';
+import { portalArguments, portalConfig } from './supervisor';
 import { readPortalSample, readPortalReady, portalSampleState } from './status';
 import type { BackgroundState, PortalState, Settings } from '../../shared/types';
+import { windowsEnvironment, windowsExecutable } from './windows';
 
 // No shell interpolation or credentials in command arguments. Windows DPAPI input uses stdin.
 export type Command = (file: string, args: string[], input?: string) => Promise<string>;
 export const command: Command = (file, args, input) => new Promise((resolve, reject) => {
-  const child = spawn(file, args, { windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.platform === 'win32' ? windowsExecutable(file) : file, args, {
+    windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
+    env: process.platform === 'win32' ? windowsEnvironment(process.env) : process.env,
+  });
+  child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
   let stdout = ''; let stderr = '';
   const timer = setTimeout(() => { child.kill(); reject(new Error(`${path.basename(file)} 超时`)); }, 30_000);
   child.stdout.on('data', data => { stdout = (stdout + data).slice(-256_000); });
@@ -43,15 +48,15 @@ catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
 }
 export async function portableCommand(binary: string, action: 'stop' | 'status' | 'start', platform = process.platform, run: Command = command) {
   if (platform !== 'win32') return run(binary, action === 'start' ? [] : [action]);
-  const script = windowsModulePath + `& ${ps(binary)} ${action === 'start' ? '' : action}; if ($LASTEXITCODE -ne 0) { throw 'Portal lifecycle command failed' }`;
+  const script = windowsPowerShellScript(`& ${ps(binary)} ${action === 'start' ? '' : action}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`);
   return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]);
 }
 const xml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 const hash = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 16);
-export interface Service { label: string; file: string; root: string; existing: boolean; kind?: 'portable'; login?: boolean; name?: string; environmentPath?: string; environment?: Record<string, string>; fingerprint?: string; bundleId?: string; configPath?: string; cwd?: string; binary?: string }
+export interface Service { label: string; file: string; root: string; existing: boolean; kind?: 'portable'; login?: boolean; name?: string; environmentPath?: string; environment?: Record<string, string>; fingerprint?: string; bundleId?: string; configPath?: string; generatedConfig?: boolean; cwd?: string; binary?: string }
 export function fingerprint(settings: Settings, connection: Connection) {
   return hash(JSON.stringify([connection.link, settings.portalBinary, settings.portalConfigPath, settings.portalName,
-    settings.workspace, settings.portalEnvironmentPath, settings.allowExec, settings.kitsEnabled, 'bounded-recovery-v1']));
+    settings.workspace, settings.portalEnvironmentPath, settings.allowExec, settings.kitsEnabled, 'client-tools-v3']));
 }
 export function launchAgent(label: string, root: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>
@@ -86,7 +91,7 @@ ${environmentEntries(environment).map(([key, value]) => `export ${key}=${sh(valu
     `printf '%s' "$HEART_PORTAL_STATUS_NONCE" >${sh(path.join(root, '.portal-launch-nonce'))}\n` +
     `export HEART_PORTAL_READY_FILE=${sh(path.join(root, '.portal-ready.json'))}\nexport HEART_PORTAL_READY_NONCE="$HEART_PORTAL_STATUS_NONCE"\n` +
     `for log in ${sh(path.join(root, 'portal.log'))} ${sh(path.join(root, 'portal.err.log'))}; do [ ! -f "$log" ] || mv -f "$log" "$log.previous"; done\n` +
-    `exec ${sh(path.join(root, 'heart-portal'))} --config ${sh(config)} --name ${sh(settings.portalName)} >${sh(path.join(root, 'portal.log'))} 2>${sh(path.join(root, 'portal.err.log'))}\n`;
+    `exec ${sh(path.join(root, 'heart-portal'))} ${portalArguments(config, settings).map(sh).join(' ')} >${sh(path.join(root, 'portal.log'))} 2>${sh(path.join(root, 'portal.err.log'))}\n`;
 }
 export function windowsRunner(root: string, config: string, settings: Settings, environment: Record<string, string> = {}): string {
   // The scheduled task owns this process tree; it has no client/Electron dependency.
@@ -97,7 +102,7 @@ $env:HEART_PORTAL_SUPERVISED = '1'
 $env:HEART_PORTAL_CLIENT_MANAGED = '1'
 $env:RUST_LOG = 'info'
 $env:NO_COLOR = '1'
-$env:PATH = ${ps(settings.portalEnvironmentPath || environment.PATH || process.env.PATH || '')}
+$env:PATH = ${ps(windowsEnvironment(process.env, environment, ...(settings.portalEnvironmentPath ? [{ PATH: settings.portalEnvironmentPath }] : [])).PATH!)}
 Set-Location -LiteralPath ${ps(settings.workspace)}
 $crashes = 0
 $failure = Join-Path $root '.portal-start-failure'
@@ -114,7 +119,7 @@ while ($true) {
     $env:HEART_PORTAL_READY_NONCE = $env:HEART_PORTAL_STATUS_NONCE
     $si = New-Object System.Diagnostics.ProcessStartInfo
     $si.FileName = Join-Path $root 'heart-portal.exe'
-    $si.Arguments = ${ps('--config ' + windowsArgument(config) + ' --name ' + windowsArgument(settings.portalName))}
+    $si.Arguments = ${ps(portalArguments(config, settings).map(windowsArgument).join(' '))}
     $si.WorkingDirectory = ${ps(settings.workspace)}
     $si.UseShellExecute = $false
     $si.CreateNoWindow = $true
@@ -233,8 +238,12 @@ if ([string]$t.State -eq 'Running' -and (Test-Path -LiteralPath $pidFile)) {
     const logName = this.service.existing ? 'portal-runtime' : 'portal';
     const text = await tail(path.join(root, logName + '.log'));
     const errors = await tail(path.join(root, logName + '.err.log'));
+    // Windows scheduled-task startup failures are written by the runner before
+    // Portal itself can create portal.err.log. Include that supervisor output in
+    // the same state/log export so diagnostics explain the actual failure.
+    const supervisorErrors = await tail(path.join(root, 'supervisor.err.log'));
     const secrets = this.connection ? [this.connection.token, this.connection.relaySecret] : [];
-    const logs = redact(text + '\n' + errors, secrets).split(/\r?\n/).filter(Boolean).slice(-300);
+    const logs = redact(text + '\n' + errors + '\n' + supervisorErrors, secrets).split(/\r?\n/).filter(Boolean).slice(-300);
     const nonce = (await readFile(path.join(root, '.portal-status-nonce'), 'utf8')
       .catch(() => readFile(path.join(root, '.portal-launch-nonce'), 'utf8')).catch(() => '')).trim();
     const sample = this.state.running && this.state.pid
@@ -274,7 +283,7 @@ if ([string]$t.State -eq 'Running' -and (Test-Path -LiteralPath $pidFile)) {
       const binary = path.join(root, this.platform === 'win32' ? 'heart-portal.exe' : 'heart-portal');
       await copyFile(settings.portalBinary, binary); await chmod(binary, 0o700);
       const config = settings.portalConfigPath || path.join(root, 'portal.toml');
-      service.configPath = config; service.cwd = settings.workspace;
+      service.configPath = config; service.generatedConfig = !settings.portalConfigPath; service.cwd = settings.workspace;
       if (!settings.portalConfigPath) await atomic(config, portalConfig(settings));
       if (this.platform === 'darwin') {
         await atomic(path.join(root, 'connection.url'), connection.link);

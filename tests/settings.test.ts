@@ -20,7 +20,7 @@ it('persists credentials encrypted, reloads and preserves them on workspace-only
     await store.load(); expect(store.connection).toBeNull();
     expect(store.settings.allowExec).toBe(true);
     expect(store.settings.kitsEnabled).toBe(true);
-    expect(parse(portalConfig(store.settings))).toMatchObject({ kits_enabled: true, tools: { exec: true, custom_tools_enabled: true } });
+    expect(parse(portalConfig(store.settings))).toMatchObject({ kits_enabled: true, tools: { exec: true, screenshot: true, custom_tools_enabled: true } });
     await store.save({ ...store.settings, workspace: path.join(dir, '中文 workspace'), connectionLink: 'https://echo.example/alice/?token=private-test-credential&secret=relay-secret' });
     expect(JSON.stringify(store.settings)).not.toContain('private-test-credential');
     const disk = await readFile(path.join(dir, 'connection.json'), 'utf8');
@@ -41,7 +41,7 @@ it('persists credentials encrypted, reloads and preserves them on workspace-only
     const optedOut = new SettingsStore(dir, storage, process.execPath); await optedOut.load();
     expect(optedOut.settings.allowExec).toBe(false);
     expect(optedOut.settings.kitsEnabled).toBe(false);
-    expect(parse(portalConfig(optedOut.settings))).toMatchObject({ kits_enabled: false, tools: { exec: false, custom_tools_enabled: false } });
+    expect(parse(portalConfig(optedOut.settings))).toMatchObject({ kits_enabled: false, tools: { exec: false, screenshot: true, custom_tools_enabled: false } });
     const unavailable = new SettingsStore(dir, { ...storage, isEncryptionAvailable: () => false }, process.execPath);
     await expect(unavailable.save({ ...store.settings, connectionLink: 'https://echo.example/alice/?token=test' })).rejects.toThrow('密钥库');
     await expect(store.save({ ...store.settings, portalName: 'bad\nname' })).rejects.toThrow();

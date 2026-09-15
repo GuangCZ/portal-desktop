@@ -87,6 +87,13 @@ export function createChatRuntime(state, options = {}) {
       new URL(input, location.href).pathname === "/api/chat/stream"
         ? await options.beforeSend?.(JSON.parse(init.body).message || "")
         : undefined;
+    // Keep a queued send bound to this frame's Being if settings change before
+    // it reaches the main-process proxy (including diagnostic sends).
+    if (location.protocol === "beings:" && init.method === "POST" && params.get("history_scope")) {
+      const headers = new Headers(init.headers);
+      headers.set("X-Portal-Being-Endpoint", params.get("history_scope"));
+      init = { ...init, headers };
+    }
     try {
       const response = await globalThis.fetch(input, { ...init, signal });
       report?.(response.ok);

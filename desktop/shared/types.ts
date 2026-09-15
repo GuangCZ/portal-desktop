@@ -87,6 +87,8 @@ export interface DesktopAPI {
   stopPortal(): Promise<PortalState>;
   openWorkspace(): Promise<void>;
   diagnostics(): Promise<DiagnosticReport>;
+  openLogs(): Promise<void>;
+  portalLogReference(): Promise<{ endpoint: string; text: string }>;
   exportDiagnostics(): Promise<boolean>;
   openLoom(): Promise<void>;
   onPortal(callback: (state: PortalState) => void): () => void;

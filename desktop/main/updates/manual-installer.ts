@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { windowsEnvironment, windowsExecutable } from '../portal/windows';
 import { mkdir, open, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { command, windowsModulePath } from '../portal/background';
@@ -158,8 +159,8 @@ export async function stageInstaller(directory: string, version: string, reposit
         const args = `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptFile}"`;
         const launch = windowsModulePath + `$ErrorActionPreference='Stop'; Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -WindowStyle Hidden -ArgumentList ${ps(args)} -RedirectStandardOutput ${ps(path.join(root, 'install.log'))} -RedirectStandardError ${ps(path.join(root, 'install-error.log'))}`;
         const log = await open(path.join(root, 'install-launch.log'), 'a', 0o600);
-        const bootstrap = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(launch, 'utf16le').toString('base64')],
-          { windowsHide: true, stdio: ['ignore', log.fd, log.fd] });
+        const bootstrap = spawn(windowsExecutable('powershell.exe'), ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(launch, 'utf16le').toString('base64')],
+          { windowsHide: true, env: windowsEnvironment(process.env), stdio: ['ignore', log.fd, log.fd] });
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           // Wait for the bootstrap's exit, not inherited pipe handles held by

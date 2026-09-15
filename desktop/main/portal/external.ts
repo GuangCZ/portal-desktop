@@ -32,7 +32,7 @@ export class ExternalPortalObserver {
   constructor(private run: Command = command, private platform = process.platform, private home = os.homedir()) {}
   // Identify a conflicting guardian by OS user, live binary and Being.
   // Its configuration is optional: it may already be gone after installation.
-  async forUpgrade(connection: Connection, label: string, excludeRoot?: string, attempt = 0, matchBeing = false): Promise<Service[]> {
+  async forUpgrade(connection: Connection, label: string, excludeRoot?: string, attempt = 0, matchBeing = false, registeredRoots: string[] = []): Promise<Service[]> {
     let processes: { pid: number; binary: string }[];
     if (this.platform === 'darwin') {
       const listing = await this.run('/bin/ps', ['-axo', 'pid=,uid=,comm=']);
@@ -67,6 +67,10 @@ export class ExternalPortalObserver {
         const parent = path.dirname(binary);
         root = path.basename(parent) === 'release' && path.basename(path.dirname(parent)) === 'target' ? path.dirname(path.dirname(parent)) : parent;
         if (root === excludeRoot || found.some(s => s.root === root)) continue;
+        // A verified desktop task already supplies its management channel.
+        // Older engines can interpret `status` as a positional config filename.
+        if (registeredRoots.some(registered => this.platform === 'win32'
+          ? registered.toLowerCase() === root.toLowerCase() : registered === root)) continue;
         if (this.platform === 'darwin') {
           await access(path.join(root, '.portal-supervisor.json'));
           launch = JSON.parse(await this.run('/usr/bin/python3', ['-c', macLaunch, String(process.pid), binary]));
@@ -81,7 +85,15 @@ export class ExternalPortalObserver {
       const argument = (name: string) => { const i = launch.arguments.indexOf(name); return i >= 0 ? launch.arguments[i + 1] : launch.arguments.find(a => a.startsWith(name + '='))?.slice(name.length + 1); };
       const config = argument('--config');
       const configPath = config && path.isAbsolute(launch.cwd) ? path.resolve(launch.cwd, config) : undefined;
-      const status = JSON.parse(await portableCommand(binary, 'status', this.platform, this.run));
+      let output: string;
+      try { output = await portableCommand(binary, 'status', this.platform, this.run); }
+      catch (error) {
+        if (/Config file not found:\s*status|(?:unrecognized|unexpected)[^\n]*status/i.test(String(error))) {
+          throw new Error(`旧 Portal（${binary}）不支持状态命令，无法确认其守护程序。请先通过原管理方式停止该实例，再点击「启动 Portal」使用客户端内置版本。`);
+        }
+        throw error;
+      }
+      const status = JSON.parse(output);
       if (this.platform === 'darwin' ? !status.portal_pids?.includes(process.pid) : Number(status.pid) !== process.pid) {
         // Windows start/status helpers use the same executable as the engine.
         // Only the status-verified engine owns the launch; rescan if the initial
@@ -96,7 +108,7 @@ export class ExternalPortalObserver {
     if (changing && !found.length) {
       if (attempt >= 3) throw new Error('Portal 仍在启动或重启，未停止服务，请稍后重试升级。');
       await new Promise(resolve => setTimeout(resolve, 500));
-      return this.forUpgrade(connection, label, excludeRoot, attempt + 1, matchBeing);
+      return this.forUpgrade(connection, label, excludeRoot, attempt + 1, matchBeing, registeredRoots);
     }
     return found;
   }
@@ -163,7 +175,7 @@ export class ExternalPortalObserver {
         } catch { /* Inaccessible or unrelated tasks are not eligible for takeover. */ }
       }
     }
-    for (const service of await this.forUpgrade(connection, 'confirmed-portal-takeover', excluded, 0, true)) {
+    for (const service of await this.forUpgrade(connection, 'confirmed-portal-takeover', excluded, 0, true, found.map(item => item.root))) {
       if (found.some(item => item.root === service.root)) continue;
       found.push({ id: proof([service.root, service.binary, service.configPath, portalIdentity(connection)]), root: service.root, label: '独立 Portal 守护程序', service });
     }

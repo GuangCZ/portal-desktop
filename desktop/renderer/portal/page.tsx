@@ -135,8 +135,14 @@ export function Portal({ model }: { model: AppModel }) {
         </div>
         <div className="log-heading">
           <h2>运行日志</h2>
-          <span>最近 300 行 · 凭据已脱敏</span>
+          <div className="portal-actions">
+            <button type="button" onClick={() => void app.run(() => app.api.openLogs())}>打开日志文件夹</button>
+            <button type="button" disabled={app.logsLoading || !snapshot?.settings.hasToken}
+              onClick={() => void app.sharePortalLogs()}>{app.logsLoading ? "正在读取…" : "一起看日志"}</button>
+          </div>
         </div>
+        <details>
+          <summary>查看最近运行日志 · 凭据已脱敏</summary>
         <pre
           ref={log}
           id="portal-logs"
@@ -151,6 +157,7 @@ export function Portal({ model }: { model: AppModel }) {
           {state?.logs.join("\n") ||
             "启动 Portal 后，连接与工具运行状态会显示在这里。"}
         </pre>
+        </details>
         <p className="portal-foot" id="background-status">
           {state?.managed === false
             ? "客户端 Portal 尚未启动；请处理上方错误后重试。"
