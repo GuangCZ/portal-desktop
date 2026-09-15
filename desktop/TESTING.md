@@ -14,7 +14,7 @@
 | 私信名称与小镇入口 | 真实 React/导航组件，本地 fixture：隐藏 ID、精确回复地址、横向入口展开/收起、键盘、窄屏、草稿保留 | `npm run test:town-names` |
 | Seed Garden / 弹窗切换 | 公开阅读、筛选、派生关系、经验墙、卷轴一致的链接栏；弹窗内切换、每次刷新、旧响应隔离、窄屏深色排版 | `npm run test:seed-garden` |
 | SBS 状态同步 | 真实 Loom 与桌面桥接、本地配置接口；刷新重新读取、慢响应、外部修改、切换失败、旧响应隔离与重试恢复 | `npm run test:sbs-refresh` |
-| Town SDK 协议界面 | 模拟配对、真实 SSE hello、三类消息 via 标记、发送身份及自身私信拦截；不向真实 Town 写入 | `npm run test:town-sdk` |
+| Town SDK 协议界面 | 自动取码/确认、取消、鉴权失败转手动、草稿保留、手动配对、真实 SSE hello、三类消息 via 标记、发送身份及自身私信拦截；本地 fixture，不向真实 Being/Town 写入 | `npm run test:town-sdk` |
 | 客户端生命周期 | 关闭隐藏、菜单/再次启动恢复原窗口、明确退出；未连接 Being 时操作客户端自启开关（系统登录项 API 使用 fixture，不修改用户登录项） | `npm run test:client-lifecycle` |
 | Portal 窗口生命周期 | 关闭窗口后仍能调用真实 Portal、恢复原窗口、网络重连不重启引擎、明确停止 | `npm run test:portal-e2e` |
 | 客户端单元测试 | 凭据隔离、代理路由、流式请求、Portal 守护、配置失败回滚、Town 认证和 Kit 导入边界 | `npm test` |
@@ -27,6 +27,8 @@
 | Windows 客户端安装升级 | 实际 NSIS Setup 安装较低版本测试基线，通过客户端 Release 检查、摘要校验、Setup 安装及自动打开新版；保留配置、凭据、工作文件和工具能力，验证计划任务运行的 Portal 摘要与客户端随包清单一致 | `npm run make` 后执行 `npm run test:windows-upgrade` |
 
 本地模拟 Being 能稳定复现协议及客户端行为，不代表真实云端当前可用，也不测试 LLM 回复质量或真实 Town token 的授权情况。登录项测试通过卸载/重新加载临时注册项模拟启动过程，不会重启或注销电脑。睡眠唤醒和 Windows 计划任务全生命周期仍需目标机器补充验收。Windows 专用 Rust 测试在 Mac 上按引擎声明跳过。
+
+自动配对的流解析、总时限、取消和身份变化由 `tests/town-pairing.test.ts` 覆盖，包括拆分 UTF-8/CRLF、工具结果排除、多段回复续写、六字符前缀与多个候选码拒绝、阻塞流中止、取消后确认响应迟到和等待写入期间取消。`tests/renderer-state.test.ts` 覆盖自动默认入口、失败回退与取消/提交竞态。原生 `test:town-sdk` 另保留手动配对回归，截图写入系统临时目录的 `town-auto-pair-review.png` 和 `town-auto-pair-manual-review.png`。
 
 Town 正文提及显示由 `tests/town-mentions.test.ts` 与 `test:town-names` 覆盖：篝火、围炉和私信使用已读取的服务端身份元数据，将完整且大小写一致的 `@Town ID` 显示为名称，悬停保留原 ID。名称缓存仅在当前配对身份内复用；未知 ID、短前缀、代码和链接保持原文。该转换不修改 API 原始正文、回复地址或发送内容，也不代表服务端已成功投递提及。
 

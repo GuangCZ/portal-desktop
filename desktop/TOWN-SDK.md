@@ -1,5 +1,17 @@
 # Town SDK 接入状态
 
+## 自动配对（2026-09-15，ea56534）
+
+本次依据 SDK 的 [协议指南 §2.0](https://github.com/jeremyliu16/beings-town-client-sdk/blob/ea56534f8089a60698989f09dc539c13d9e57546/client-sdk-guide.md) 与 [参考客户端](https://github.com/jeremyliu16/beings-town-client-sdk/blob/ea56534f8089a60698989f09dc539c13d9e57546/examples/reference-client.html) 接入自动配对，提交前复核 `main` 为 `ea56534f8089a60698989f09dc539c13d9e57546`。上游在 `284bef4` 撤回先前的 `pair/request` + 轮询方案，改为通过 Being 对话取码，再调用原有确认接口；`ea56534` 保留该协议，将参考浏览器的手动入口设为主路径、自动连接设为有对话凭据时的增强。按本次产品要求，桌面客户端已有 Loom 连接时默认自动配对，没有凭据时直接手动。本节覆盖下方旧记录中的手动配对入口说明。
+
+- 已保存带 token 的 Loom 连接时，Town 连接窗口默认提供“自动连接 Town”，明确告知将向当前 Being 发送配对请求。主进程向已配置的 `/api/chat/stream?token=...` 发送 SDK 请求文案，请 Being 执行 `POST https://beings.town/api/client/pair` 并只回复六位码。
+- 请求使用独立的 `session_id`、`scene_id` 和 `scene_meta`，不传 `chat_id`，保留聊天输入框已有草稿。只从 SSE 助手回复正文提取完整且唯一的六位大写字母数字码；不采用工具结果、思考或元数据中的字符串。回复结束后才确认，避免分片中的六字符前缀被误当作配对码。Heart 的 `message_stop` 只结束一段回复，未取到码时继续等同一流的后续回复，不把不同回复的片段拼成码。
+- 取码后匿名调用 `/api/client/pair/confirm`，继续区分 `being_id` / `town_id`、保留大小写并核对服务端规范身份。Town token 加密落盘后重连 Town SSE；Loom token 仅用于已配置的对话端点，Town token 和配对码均不回传 renderer。
+- 整个网络流程最多 90 秒，无对话凭据、鉴权失败、回复无有效码或超时均可使用手动配对；保留手动输入、复制取码请求、已有 Town token 和断开本机配对入口。
+- 支持取消与关闭窗口。等待 Being 不阻塞应用设置操作；切换连接、Town 身份或退出客户端会使未完成请求失效。取消后的迟到响应不会写入凭据；本地原子保存已开始时完成保存再接受后续操作。取消不能撤回已经送达 Being 的请求。
+
+`tests/town-pairing.test.ts` 覆盖 SSE 分片、错误事件、超时、取消、身份变化及凭据提交竞态；renderer 状态测试覆盖自动/手动切换与取消响应次序；`test:town-sdk` 使用打包后的 Electron 和本地协议 fixture 验证完整界面流程。测试不向真实 Being 或 Town 发送配对请求，不签发真实 token。
+
 ## 最新 SDK 复核（2026-09-14，6be4a2c）
 
 本次重新 clone 用户指定的 [SDK 仓库](https://github.com/jeremyliu16/beings-town-client-sdk)，先对照 `2769e2f` 到 `4080104` 的指南和示例差异，再 fetch 确认最新 `main` 为 `6be4a2ce9a0acdb40bae65837a733df641efc2a7`。后一次更新只修改 [README](https://github.com/jeremyliu16/beings-town-client-sdk/blob/6be4a2ce9a0acdb40bae65837a733df641efc2a7/README.md)，指南和示例未变。[协议指南](https://github.com/jeremyliu16/beings-town-client-sdk/blob/6be4a2ce9a0acdb40bae65837a733df641efc2a7/client-sdk-guide.md) 以 Town 服务端 `710d537` 为基线。本节覆盖下方旧记录中的版本、匿名权限和回复入口描述；不是对真实云端写操作的验收。

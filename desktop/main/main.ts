@@ -54,6 +54,7 @@ let store: SettingsStore;
 let background: BackgroundPortal;
 let kitInstaller: KitInstaller;
 let townLive: TownLive;
+let cancelTownPairing: (() => void) | undefined;
 let updatePoll: ReturnType<typeof setInterval> | undefined;
 let backgroundPoll: ReturnType<typeof setInterval> | undefined;
 let quitting = false;
@@ -368,14 +369,16 @@ async function ready() {
     if (process.platform !== 'darwin' && !(process.platform === 'win32' && Number(os.release().split('.')[2]) >= 22621)) window?.setBackgroundColor(theme === 'dark' ? '#212121' : '#ffffff');
     return appearance;
   }));
-  registerTownIpc({
+  cancelTownPairing = registerTownIpc({
     handle, exclusive, town, townLive, townCredentials, store, secretStorage,
+    fetcher: net.fetch.bind(net) as typeof fetch,
     getWarning: () => townWarning,
     clearWarning: () => { townWarning = undefined; },
     open: url => browser?.open(url),
   });
   registerKitsIpc({ handle, exclusive, window: () => window, store, kitInstaller });
   handle('beings:save', (input: SaveSettings) => exclusive(async () => {
+    cancelTownPairing?.();
     const previous = { ...store.settings }; const previousConnection = store.connection;
     await store.save(input);
     try {
@@ -551,6 +554,7 @@ else {
     event.preventDefault();
     if (quitting) return;
     quitting = true;
+    cancelTownPairing?.();
     lifecycleError = '';
     void exclusive(async () => { await kitInstaller?.dispose(); await portal.stop(); browser?.close(); }).then(() => {
       clearInterval(backgroundPoll); clearInterval(updatePoll);

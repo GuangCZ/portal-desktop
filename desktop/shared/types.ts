@@ -67,7 +67,9 @@ export interface DesktopAPI {
   reconnectTown(): Promise<void>;
   onTownLive(callback: (state: TownLiveState) => void): () => void;
   sendTown(input: TownPost): Promise<TownResult>;
-  townAuth(): Promise<{ configured: boolean; beingId?: string; pairedBeingId?: string; display?: string; suggestedBeingId?: string; warning?: string }>;
+  townAuth(): Promise<{ configured: boolean; beingId?: string; pairedBeingId?: string; display?: string; suggestedBeingId?: string; chatBeing?: string; warning?: string }>;
+  autoPairTown(input: { requestId: string; beingId: string }): Promise<void>;
+  cancelTownPair(requestId: string): Promise<boolean>;
   pairTown(input: { beingId: string; code: string }): Promise<void>;
   saveTownToken(token: string): Promise<void>;
   localKits(): Promise<KitLibrary>;

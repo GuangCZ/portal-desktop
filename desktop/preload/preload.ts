@@ -34,6 +34,8 @@ const api: DesktopAPI = {
   },
   townAuth: () => ipcRenderer.invoke('beings:town-auth'),
   pairTown: input => ipcRenderer.invoke('beings:town-pair', input),
+  autoPairTown: input => ipcRenderer.invoke('beings:town-auto-pair', input),
+  cancelTownPair: requestId => ipcRenderer.invoke('beings:town-pair-cancel', requestId),
   saveTownToken: token => ipcRenderer.invoke('beings:town-token', token),
   localKits: () => ipcRenderer.invoke('beings:kits'),
   importKit: () => ipcRenderer.invoke('beings:kit-import'),

@@ -1,13 +1,14 @@
 import type { TownModel } from "../models/town";
 import { useModel } from "../../shared/hooks/use-model";
 import { Dialog } from "../../shared/components/dialog";
+import { townPairPrompt } from '../../../shared/town-pairing';
 export function TownAuth({ model }: { model: TownModel }) {
   const town = useModel(model);
 
   return (
     <Dialog
       open={town.authOpen}
-      busy={town.authBusy}
+      busy={town.authBusy && !town.autoPairId}
       onClose={() => town.closeAuth()}
       id="town-auth-dialog"
     >
@@ -15,7 +16,8 @@ export function TownAuth({ model }: { model: TownModel }) {
         id="town-auth-form"
         onSubmit={(event) => {
           event.preventDefault();
-          void town.saveToken(false, true);
+          if (town.authManual) void town.saveToken(false, true);
+          else void town.autoPair();
         }}
       >
         <div className="dialog-heading">
@@ -27,13 +29,17 @@ export function TownAuth({ model }: { model: TownModel }) {
             id="close-town-auth"
             className="close"
             aria-label="关闭 Town 连接"
-            disabled={town.authBusy}
+            disabled={town.authBusy && !town.autoPairId}
             onClick={() => town.closeAuth()}
           ></button>
         </div>
         <p className="connection-description">
-          用 Town ID 或 Being 名和 6 位配对码连接，直接查看篝火、围炉和私信。
+          {town.authLoading ? '正在读取连接信息…' : town.authManual
+            ? '输入 Town ID 或 Being 名和配对码，连接篝火、围炉和私信。'
+            : `将通过当前对话向 ${town.authChatBeing} 发送一条配对请求，自动获取配对码并完成连接。`}
         </p>
+        {!town.authLoading && !town.authManual && <p className="field-help">无需手动复制配对码。自动连接最多等待 90 秒，你可以随时取消。</p>}
+        <div hidden={!town.authManual}>
         <label htmlFor="town-being">Town ID 或 Being 名</label>
         <input
           id="town-being"
@@ -64,10 +70,16 @@ export function TownAuth({ model }: { model: TownModel }) {
           }}
         />
         <p className="field-help">
-          首次向你的 Being
-          获取配对码。完成配对后，在此客户端直接读取内容，无需再让 Being
-          在对话中查询。凭据加密保存在本机，配对码不会保存。
+          {!town.authChatBeing ? '尚未连接 Being 对话，可先连接对话以使用自动配对，或继续手动配对。' : '也可以把下面这段请求发给 Being，再填写它返回的配对码。'}
         </p>
+        <details className="town-manual-prompt"><summary>获取配对码的请求</summary><p>{townPairPrompt}</p>
+          <button type="button" className="text-button" onClick={() => void town.api.copyText(townPairPrompt).catch(error => town.toast(error))}>复制请求</button>
+        </details>
+        </div>
+        {!town.authLoading && <button id="town-pair-mode" type="button" className="text-button" disabled={town.authBusy || town.authManual && !town.authChatBeing}
+          onClick={() => { town.authManual = !town.authManual; town.authError = ''; town.changed(); }}>
+          {town.authManual ? '使用自动配对' : '改用手动配对'}
+        </button>}
         <details className="town-advanced-auth">
           <summary>高级：使用已有 Town 凭据</summary>
           <label htmlFor="town-token">Town 专用凭据</label>
@@ -96,7 +108,7 @@ export function TownAuth({ model }: { model: TownModel }) {
             这里接受 Town 凭据，不是 Loom 对话链接中的 token。
           </p>
         </details>
-        <p id="town-auth-state" className="field-help">
+        <p id="town-auth-state" className="field-help" role="status" aria-live="polite">
           {town.authState}
         </p>
         <p id="town-auth-error" className="form-error" role="alert">
@@ -112,8 +124,9 @@ export function TownAuth({ model }: { model: TownModel }) {
           >
             断开本机配对
           </button>
-          <button type="submit" disabled={town.authBusy} className="primary">
-            确认配对
+          {town.autoPairId && <button id="cancel-town-pair" type="button" className="secondary" onClick={() => void town.cancelAutoPair()}>取消自动配对</button>}
+          <button type="submit" disabled={town.authBusy || town.authLoading} className="primary">
+            {town.autoPairId ? '正在连接…' : town.authManual ? '确认配对' : '自动连接 Town'}
           </button>
         </div>
       </form>

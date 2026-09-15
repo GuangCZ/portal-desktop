@@ -6,7 +6,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { desktopExecutable, waitForChatReady } from './support/desktop.mjs';
 
-const dir = await mkdtemp(path.join(os.tmpdir(), 'town-sdk-2769e2f-'));
+const dir = await mkdtemp(path.join(os.tmpdir(), 'town-sdk-284bef4-'));
 let app, page, failure;
 try {
   app = await launchDesktop({ executablePath: await desktopExecutable(), env: { ...process.env, PORTAL_DESKTOP_USER_DATA: dir } });
@@ -17,6 +17,7 @@ try {
   await app.evaluate(({ protocol }) => {
     const token = 'sdk-fixture-client-token';
     globalThis.sdkWrites = [];
+    globalThis.sdkPairConfirms = [];
     const base = { being: 'willow', speaker_name: '服务端展示名', at: '2026-09-11T10:00:00Z' };
     const messages = [
       { ...base, seq: 1, message: 'Being 本体消息', via: 'being' },
@@ -29,6 +30,7 @@ try {
       if (url.origin !== 'https://beings.town') return Response.json({ error: 'fixture only' }, { status: 404 });
       if (url.pathname === '/api/client/pair/confirm') {
         const body = await request.json();
+        globalThis.sdkPairConfirms.push(body);
         if (body.being_id !== 'willow' || body.code !== 'AB3XY9' || request.headers.has('authorization')) return Response.json({ error: 'bad fixture pairing' }, { status: 400 });
         return Response.json({ ok: true, token, being_id: 'willow', display: '柳树' });
       }
@@ -53,8 +55,23 @@ try {
     });
   });
   await app.evaluate(({ protocol }) => {
-    protocol.handle('http', request => {
-      const path = new URL(request.url).pathname;
+    globalThis.sdkPairChats = [];
+    globalThis.sdkPairMode = 'waiting';
+    protocol.handle('http', async request => {
+      const url = new URL(request.url);
+      const path = url.pathname;
+      if (path.endsWith('/api/chat/stream') && request.method === 'POST') {
+        const body = await request.json();
+        globalThis.sdkPairChats.push({ body, token: url.searchParams.get('token') });
+        if (globalThis.sdkPairMode === 'unauthorized' || url.searchParams.get('token') !== 'local-ui-fixture') return Response.json({ error: 'authentication required' }, { status: 403 });
+        return new Response(new ReadableStream({ start(controller) {
+          if (globalThis.sdkPairMode === 'waiting') return;
+          controller.enqueue(new TextEncoder().encode('event: text\ndata: {"text":"正在获取配对码。"}\n\nevent: message_stop\ndata: {}\n\n'));
+          controller.enqueue(new TextEncoder().encode('event: tool_result\ndata: {"text":"BAD123"}\n\nevent: text\ndata: {"text":"AB3"}\n\n'));
+          controller.enqueue(new TextEncoder().encode('event: content_block_delta\ndata: {"delta":{"type":"text_delta","text":"XY9"}}\n\nevent: message_stop\ndata: {}\n\n'));
+          controller.close();
+        } }), { headers: { 'Content-Type': 'text/event-stream' } });
+      }
       if (path.endsWith('/api/stream/active')) return new Response(null, { status: 204 });
       return Response.json({ being_name: 'willow', messages: [], status: 'ok' });
     });
@@ -112,12 +129,48 @@ try {
   await page.waitForFunction(() => !document.querySelector('#conversation-options').open);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await home();
+  await page.frameLocator('#chat-frame').locator('#input').fill('配对期间保留草稿');
   await page.locator('#town-auth-button').click();
-  await page.locator('#town-being').fill('willow');
-  await page.locator('#town-pair-code').fill('AB3XY9');
+  await page.getByRole('button', { name: '自动连接 Town', exact: true }).waitFor();
+  assert.equal(await page.locator('#town-pair-code').isVisible(), false);
+  await page.screenshot({ path: path.join(os.tmpdir(), 'town-auto-pair-review.png') });
+  await page.locator('#town-auth-form button[type="submit"]').click();
+  await page.waitForFunction(() => document.querySelector('#cancel-town-pair') !== null);
+  await app.evaluate(async () => {
+    const deadline = Date.now() + 5000;
+    while (!globalThis.sdkPairChats.length) {
+      if (Date.now() >= deadline) throw new Error('Pairing request did not reach the fixture');
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  });
+  await page.locator('#close-town-auth').click();
+  await page.waitForFunction(() => !document.querySelector('#town-auth-dialog').open);
+  assert.equal(await page.evaluate(async () => (await window.beings.townAuth()).configured), false);
+  assert.equal(await app.evaluate(() => globalThis.sdkPairConfirms.length), 0);
+  await page.locator('#town-auth-button').click();
+  await app.evaluate(() => { globalThis.sdkPairMode = 'unauthorized'; });
+  await page.locator('#town-auth-form button[type="submit"]').click();
+  await page.locator('#town-pair-code').waitFor({ state: 'visible' });
+  assert.match(await page.locator('#town-auth-error').textContent(), /手动配对/);
+  await page.screenshot({ path: path.join(os.tmpdir(), 'town-auto-pair-manual-review.png') });
+  assert.equal(await app.evaluate(() => globalThis.sdkPairConfirms.length), 0);
+  await page.locator('#town-pair-mode').click();
+  await app.evaluate(() => { globalThis.sdkPairMode = 'normal'; });
   await page.locator('#town-auth-form button[type="submit"]').click();
   await page.waitForFunction(() => !document.querySelector('#town-auth-dialog').open);
   await page.waitForFunction(async () => (await window.beings.townLive()).phase === 'connected');
+  assert.equal(await page.frameLocator('#chat-frame').locator('#input').inputValue(), '配对期间保留草稿');
+  await page.frameLocator('#chat-frame').locator('#input').fill('');
+  const pairs = await app.evaluate(() => ({ chats: globalThis.sdkPairChats, confirms: globalThis.sdkPairConfirms }));
+  assert.equal(pairs.chats.length, 3);
+  assert.deepEqual(pairs.confirms, [{ being_id: 'willow', code: 'AB3XY9' }]);
+  for (const { body, token } of pairs.chats) {
+    assert.equal(token, 'local-ui-fixture');
+    assert.match(body.session_id, /^town-pair-/);
+    assert.equal(body.scene_id, body.session_id);
+    assert.equal(body.scene_meta.scene_label, 'Town 配对');
+    assert.equal(body.chat_id, undefined);
+  }
   await open('篝火');
   await page.locator('.social-message').getByText('伙伴代发消息', { exact: true }).waitFor();
   const partner = page.locator('.social-message').filter({ hasText: '伙伴代发消息' });
@@ -191,6 +244,16 @@ try {
   await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
   assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites.at(-1)), { path: '/api/fireside/speak', body: { fireside_id: 10, message: 'SDK 围炉回复', reply_to: 2 } });
   assert.deepEqual(errors, []);
+  // Manual pairing remains available after an automatic connection.
+  await home(); await page.locator('#town-auth-button').click();
+  await page.locator('#town-pair-mode').click();
+  await page.locator('#town-being').fill('willow');
+  await page.locator('#town-pair-code').fill('AB3XY9');
+  await page.locator('#town-auth-form button[type="submit"]').click();
+  await page.waitForFunction(() => !document.querySelector('#town-auth-dialog').open);
+  assert.equal(await app.evaluate(() => globalThis.sdkPairConfirms.length), 2);
+  assert.equal(await app.evaluate(() => globalThis.sdkPairChats.length), 3);
+  console.log('PASS: authenticated automatic pairing, stream cancellation, auth-error fallback, preserved chat drafts and manual pairing.');
   console.log('PASS: compact menu, interrupted motion, keyboard/reduced motion, grouped settings, clean quote draft and existing-draft preservation; SDK pairing + SSE hello, server display names, via badges in all three feeds, inert via text, explicit author context, fixture-only send, self-DM blocked before network');
 } catch (error) {
   failure = error;

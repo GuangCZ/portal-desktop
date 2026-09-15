@@ -150,6 +150,10 @@ export class TownModel extends Store {
   live?: TownLiveState;
   authOpen = false;
   authBusy = false;
+  authLoading = false;
+  authManual = false;
+  authChatBeing = '';
+  autoPairId?: string;
   authConfigured = false;
   authBeing = "";
   pairCode = "";
@@ -199,6 +203,9 @@ export class TownModel extends Store {
       .catch(() => {});
     return () => {
       active = false;
+      if (this.autoPairId) void this.api.cancelTownPair(this.autoPairId).catch(() => {});
+      this.autoPairId = undefined;
+      this.authBusy = false;
       ++this.lifecycleRevision;
       stop();
       clearTimeout(this.reconcileTimer);
@@ -726,8 +733,12 @@ export class TownModel extends Store {
     }
   }
   async auth() {
+    if (this.authOpen) return;
     const revision = ++this.authRequest;
     this.authOpen = true;
+    this.authLoading = true;
+    this.authChatBeing = '';
+    this.authManual = false;
     this.token = "";
     this.pairCode = "";
     this.authError = "";
@@ -738,6 +749,8 @@ export class TownModel extends Store {
       const state = await this.api.townAuth();
       if (revision !== this.authRequest) return;
       this.authBeing = state.beingId || state.pairedBeingId || state.suggestedBeingId || "";
+      this.authChatBeing = state.chatBeing || '';
+      this.authManual = !this.authChatBeing;
       this.authConfigured = state.configured;
       this.authState =
         state.warning ||
@@ -746,20 +759,71 @@ export class TownModel extends Store {
               this.live?.phase === 'connected' ? 'Town 已连接。' : this.live?.message || "已保存 Town 凭据，等待身份确认。"].filter(Boolean).join(' ')
           : "尚未配对。");
     } catch (error) {
-      if (revision === this.authRequest) this.authError = errorText(error);
+      if (revision === this.authRequest) { this.authError = errorText(error); this.authManual = true; }
     }
+    if (revision !== this.authRequest) return;
+    this.authLoading = false;
     this.changed();
   }
-  closeAuth() {
-    if (this.authBusy) return;
+  async cancelAutoPair() {
+    const id = this.autoPairId;
+    if (!id) return true;
+    try {
+      if (!await this.api.cancelTownPair(id)) return false;
+    } catch { this.authError = '未能取消配对，请等待当前请求结束。'; this.changed(); return false; }
+    if (this.autoPairId && this.autoPairId !== id) return false;
+    if (!this.authOpen) return true;
+    this.autoPairId = undefined;
     ++this.authRequest;
+    this.authBusy = false;
+    this.authError = '';
+    this.authState = '已取消自动配对。已发出的请求可能仍会由 Being 处理。';
+    this.changed();
+    return true;
+  }
+  async closeAuth() {
+    if (this.authBusy && (!this.autoPairId || !await this.cancelAutoPair())) return;
+    ++this.authRequest;
+    this.authLoading = false;
     this.authOpen = false;
     this.token = "";
     this.pairCode = "";
     this.changed();
   }
+  async autoPair() {
+    if (this.authBusy || this.authLoading) return;
+    if (!this.authChatBeing) { this.authManual = true; this.changed(); return; }
+    const revision = ++this.authRequest;
+    const id = crypto.randomUUID();
+    this.autoPairId = id;
+    this.authBusy = true;
+    this.authError = '';
+    this.authState = `正在向 ${this.authChatBeing} 申请配对，等待回复，最多 90 秒…`;
+    this.changed();
+    try {
+      await this.api.autoPairTown({ requestId: id, beingId: this.authChatBeing });
+      if (revision !== this.authRequest) return;
+      this.resetIdentity();
+      this.authLabel = 'Town 连接';
+      this.authOpen = false;
+      this.token = ''; this.pairCode = '';
+      if (definitions[this.view]) await this.load();
+    } catch (error) {
+      if (revision !== this.authRequest) return;
+      this.authManual = true;
+      this.authBeing = this.authChatBeing;
+      this.authError = errorText(error);
+      this.authState = '可手动获取并输入配对码。';
+    } finally {
+      if (this.autoPairId === id) {
+        this.autoPairId = undefined;
+        this.authBusy = false;
+        this.changed();
+      }
+    }
+  }
   async saveToken(clear: boolean, pair = false) {
-    if (this.authBusy) return;
+    if (this.authBusy || this.authLoading) return;
     this.authBusy = true;
     this.authError = "";
     this.changed();

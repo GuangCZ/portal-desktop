@@ -237,6 +237,49 @@ describe("React desktop state lifecycle", () => {
   });
 });
 describe("Town request and identity isolation", () => {
+  it('defaults to automatic pairing for the connected chat and falls back to manual on failure', async () => {
+    const autoPairTown = vi.fn(async () => { throw new Error('自动配对超时'); });
+    const { model } = town({ townAuth: async () => ({ configured: false, chatBeing: 'willow' }), autoPairTown });
+    model.view = 'chat';
+    await model.auth();
+    expect(model.authManual).toBe(false);
+    await model.autoPair();
+    expect(autoPairTown).toHaveBeenCalledWith({ requestId: expect.any(String), beingId: 'willow' });
+    expect(model.authManual).toBe(true);
+    expect(model.authBeing).toBe('willow');
+    expect(model.authError).toContain('超时');
+    expect(model.authBusy).toBe(false);
+  });
+  it('closes after cancellation even if the aborted request rejects before the cancel reply arrives', async () => {
+    let reject!: (error: Error) => void;
+    const autoPairTown = vi.fn(() => new Promise<void>((_, fail) => { reject = fail; }));
+    const cancelTownPair = vi.fn(async () => { reject(new Error('自动配对已取消')); await settle(); return true; });
+    const { model } = town({ townAuth: async () => ({ configured: false, chatBeing: 'willow' }), autoPairTown, cancelTownPair });
+    model.view = 'chat';
+    await model.auth();
+    const pending = model.autoPair();
+    await model.autoPair();
+    expect(autoPairTown).toHaveBeenCalledOnce();
+    await model.closeAuth();
+    await pending;
+    expect(cancelTownPair).toHaveBeenCalledOnce();
+    expect(model.authOpen).toBe(false);
+    expect(model.authBusy).toBe(false);
+    expect(model.authError).toBe('');
+  });
+  it('keeps a completed pairing when cancellation arrives during atomic credential storage', async () => {
+    const pending = deferred<void>();
+    const { model } = town({ townAuth: async () => ({ configured: false, chatBeing: 'willow' }), autoPairTown: () => pending.promise, cancelTownPair: async () => false });
+    model.view = 'chat';
+    await model.auth();
+    const run = model.autoPair();
+    await model.closeAuth();
+    expect(model.authOpen).toBe(true);
+    expect(model.authBusy).toBe(true);
+    pending.resolve(); await run;
+    expect(model.authOpen).toBe(false);
+    expect(model.authBusy).toBe(false);
+  });
   it("ignores a response from the previous page", async () => {
     const pending = deferred<TownResult>();
     const { model } = town({

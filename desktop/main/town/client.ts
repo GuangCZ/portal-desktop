@@ -84,7 +84,7 @@ export class TownCredentials {
 
 export class TownClient {
   constructor(private getToken: () => string, private fetcher: typeof fetch = fetch, private origin = TOWN_ORIGIN, private getBeingId: () => string = () => '') {}
-  async pair(input: { beingId: string; code: string }): Promise<{ token: string; beingId: string; display?: string }> {
+  async pair(input: { beingId: string; code: string }, signal?: AbortSignal): Promise<{ token: string; beingId: string; display?: string }> {
     if (!input || typeof input.beingId !== 'string' || typeof input.code !== 'string') throw new Error('请输入 Being 名和配对码。');
     const beingId = normalizeTownIdentity(input.beingId), code = input.code.trim().toUpperCase();
     if (!validTownIdentity(beingId) || !/^[A-Z0-9]{6}$/.test(code)) throw new Error('请输入有效的 Town ID 或 Being 名；配对码须为 6 位字母或数字。');
@@ -93,7 +93,7 @@ export class TownClient {
     try {
       response = await this.fetcher(this.origin + '/api/client/pair/confirm', {
         method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [townIdInput ? 'town_id' : 'being_id']: beingId, code }), credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(20000),
+        body: JSON.stringify({ [townIdInput ? 'town_id' : 'being_id']: beingId, code }), credentials: 'omit', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
       });
     } catch { throw new Error('配对请求未完成，请检查网络；若配对码已失效，请获取新码。'); }
     if (!response.ok) {
