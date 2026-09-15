@@ -30,6 +30,8 @@
 
 自动配对的流解析、总时限、取消和身份变化由 `tests/town-pairing.test.ts` 覆盖，包括拆分 UTF-8/CRLF、工具结果排除、多段回复续写、六字符前缀与多个候选码拒绝、阻塞流中止、取消后确认响应迟到和等待写入期间取消。`tests/renderer-state.test.ts` 覆盖自动默认入口、失败回退与取消/提交竞态。原生 `test:town-sdk` 另保留手动配对回归，截图写入系统临时目录的 `town-auto-pair-review.png` 和 `town-auto-pair-manual-review.png`。
 
+「一起看 → 放入对话」是显式引用，不检查 Town 身份是否与对话 Being 一致，也不要求重新配对。renderer 状态测试覆盖不同来源身份、规范 Town ID、缺失来源身份和未连接对话；`test:town-sdk` 使用规范 `town_id` 响应验证私信、围炉及导入凭据后的引用成功，并验证原草稿保留、未发送引用且没有额外配对请求。
+
 Town 正文提及显示由 `tests/town-mentions.test.ts` 与 `test:town-names` 覆盖：篝火、围炉和私信使用已读取的服务端身份元数据，将完整且大小写一致的 `@Town ID` 显示为名称，悬停保留原 ID。名称缓存仅在当前配对身份内复用；未知 ID、短前缀、代码和链接保持原文。该转换不修改 API 原始正文、回复地址或发送内容，也不代表服务端已成功投递提及。
 
 `test:town-names` 使用无头 Chrome，不打开日常客户端；默认需要本机安装 Google Chrome，也可通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定 Chromium。截图写入 `test-results/town-names.png` 和 `test-results/chat-places-*.png`。
@@ -92,7 +94,7 @@ macOS 临时签名包每次重建后可能等待真实钥匙串授权。仅在�
 
 `tests/renderer-state.test.ts` 随 `npm test` 运行，覆盖组件重挂载时 IPC 订阅清理、旧启动请求失效、
 连接表单异步默认值、Town 页面与身份切换、重复发送拦截、断线核对不替换阅读内容、精确身份
-筛选及私密引用的跨身份限制。组件的键盘、焦点、菜单动画、原生弹窗、配对、引用草稿、
+筛选及显式跨身份引用。组件的键盘、焦点、菜单动画、原生弹窗、配对、引用草稿、
 Markdown、分页、安装和浏览器隔离由现有 Electron `test:town-sdk`、`test:town-ui`、
 `test:browser` 和 `test:e2e` 使用新构建的包验证。
 

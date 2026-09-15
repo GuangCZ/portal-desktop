@@ -175,13 +175,8 @@ export class WorkspaceModel extends Store {
       this.toast("请先连接对话 Being。");
       return;
     }
-    if (
-      scene.selection.private &&
-      (!scene.identity || scene.identity !== this.scenes.being)
-    ) {
-      this.toast("该内容的 Town 身份与对话 Being 不一致，不能跨身份放入草稿。");
-      return;
-    }
+    // Explicitly choosing a quotation authorizes placing it in the current
+    // chat draft, regardless of Town identity. The user still decides to send.
     this.scenes.reference = structuredClone(scene);
     const resource = scene.selection;
     const text = `一起看看${scene.title}里的这段${resource.author ? `（${resource.author}）` : ""}：\n\n${resource.excerpt

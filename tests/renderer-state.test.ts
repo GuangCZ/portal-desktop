@@ -522,14 +522,14 @@ describe("shared reading behavior", () => {
     expect(message.recipient).toBe("t_Fqm2l4");
     expect(message.received).toBe(true);
   });
-  it("only drafts private references for the matching Being", () => {
+  it.each(['river', 't_WillowFull', ''])("drafts explicitly selected private content with source identity %j", (identity) => {
     const post = vi.fn(),
       toast = vi.fn(),
       workspace = new WorkspaceModel(vi.fn(), toast, post, () => true);
     const stop = workspace.start();
     workspace.scenes.configure("willow", "https://fixture.test");
     workspace.scenes.enter("mail");
-    workspace.scenes.update({ identity: "river" });
+    workspace.scenes.update({ identity });
     workspace.scenes.select({
       id: "private",
       title: "letter",
@@ -537,15 +537,25 @@ describe("shared reading behavior", () => {
       private: true,
     });
     workspace.scenes.pin();
-    workspace.compose();
     expect(post).not.toHaveBeenCalled();
-    expect(toast).toHaveBeenCalledWith(
-      expect.stringContaining("不能跨身份放入草稿"),
-    );
+    workspace.compose();
+    expect(post).toHaveBeenCalledOnce();
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'beings:scene-draft', text: '一起看看私信里的这段：\n\n> private text' }));
+    expect(toast).not.toHaveBeenCalled();
     workspace.scenes.resetIdentity();
     expect(workspace.open).toBe(false);
     expect(workspace.scenes.reference).toBeNull();
     stop();
+  });
+  it.each(['missing-being', 'missing-frame'])('still requires an available chat before drafting: %s', (missing) => {
+    const post = vi.fn(), toast = vi.fn();
+    const workspace = new WorkspaceModel(vi.fn(), toast, post, () => missing !== 'missing-frame');
+    workspace.scenes.configure(missing === 'missing-being' ? '' : 'willow', 'https://fixture.test');
+    workspace.scenes.enter('mail');
+    workspace.scenes.select({ id: 'letter', title: 'letter', excerpt: 'private text', private: true });
+    workspace.compose();
+    expect(post).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith('请先连接对话 Being。');
   });
 });
 
