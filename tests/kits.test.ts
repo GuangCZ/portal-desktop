@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { importLocalKit, kitLocation, localKits, readKit } from '../desktop/main/kits/catalog';
+import { deleteLocalKit, importLocalKit, kitLocation, localKits, readKit } from '../desktop/main/kits/catalog';
 import type { Settings } from '../desktop/shared/types';
 let dir: string;
 const fixture = { name: 'example', version: '1.0.0', command: ['node', '{{KIT_DIR}}/server.mjs'], tools: [{ name: 'say_hello', description: 'Greeting', params: { type: 'object' } }] };
@@ -46,5 +46,14 @@ describe('Portal Kit integration', () => {
     const src = await source(); await importLocalKit(src, path.join(dir, '.heart-portal/kits'));
     const broken = path.join(dir, '.heart-portal/kits/broken'); await mkdir(broken); await writeFile(path.join(broken, 'manifest.json'), '{');
     const library = await localKits(settings(dir), dir); expect(library.kits).toHaveLength(2); expect(library.kits.find(k => k.name === 'broken')?.problem).toContain('无法加载'); expect(library.kits.find(k => k.name === 'example')?.tools).toHaveLength(1);
+  });
+  it('deletes a valid Kit directory, including a broken manifest directory', async () => {
+    const destination = path.join(dir, '.heart-portal', 'kits');
+    const broken = path.join(destination, 'jira');
+    await mkdir(broken, { recursive: true });
+    await deleteLocalKit(settings(dir), 'jira', dir);
+    await expect(readFile(path.join(broken, 'manifest.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(broken)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(deleteLocalKit(settings(dir), '../outside')).rejects.toThrow('无效');
   });
 });

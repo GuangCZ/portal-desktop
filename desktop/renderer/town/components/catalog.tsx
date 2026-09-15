@@ -3,6 +3,7 @@ import { TownModel, record, str, list, date, type Data } from "../models/town";
 import { sceneExcerpt } from "../../shared/models/scene";
 import { Markdown } from "../../shared/components/markdown";
 import { ReadingActions } from "./reading-actions";
+import type { LocalKit } from "../../../shared/types";
 const scrollLabels: Record<string, Record<string, string>> = {
   kind: {
     note: "笔记",
@@ -105,6 +106,19 @@ export function TownHome({ town, data }: { town: TownModel; data: Data }) {
     </>
   );
 }
+function InstalledKitStatus({ kit }: { kit: LocalKit }) {
+  return <span className={`mini-tag kit-installed-status${kit.problem ? " problem" : ""}`}>
+    {kit.problem ? "本机文件异常" : "✓ 已安装"}{kit.version && ` · v${kit.version}`}
+  </span>;
+}
+function KitInstallationNotice({ town }: { town: TownModel }) {
+  if (town.installedLoading) return <p className="field-help" role="status">正在读取本机安装状态…</p>;
+  if (!town.installedError) return null;
+  return <div className="kit-installation-notice" role="status">
+    <span>未能读取本机安装状态：{town.installedError}</span>
+    <button className="secondary" onClick={() => void town.refreshInstalledKits()}>重新检查安装状态</button>
+  </div>;
+}
 export function Catalog({ town, data }: { town: TownModel; data: Data }) {
   const kit = town.tab === "grove",
     book = town.view === "embers";
@@ -119,6 +133,8 @@ export function Catalog({ town, data }: { town: TownModel; data: Data }) {
     ),
   );
   return (
+    <>
+    {kit && <KitInstallationNotice town={town} />}
     <div className="catalog-split">
       <div className="catalog-list">
         {entries.map((entry, i) => (
@@ -145,6 +161,7 @@ export function Catalog({ town, data }: { town: TownModel; data: Data }) {
                 <span className="mini-tag">
                   {entry.status === "grown" ? "已成长" : "萌芽中"}
                 </span>
+                {town.installedKit(str(entry.name)) && <InstalledKitStatus kit={town.installedKit(str(entry.name))!} />}
               </>
             ) : book ? (
               <span className="mini-tag">公开故事</span>
@@ -172,6 +189,7 @@ export function Catalog({ town, data }: { town: TownModel; data: Data }) {
       </div>
       <CatalogDetail town={town} />
     </div>
+    </>
   );
 }
 export function Pagination({ town }: { town: TownModel }) {
@@ -373,7 +391,8 @@ function Tools({ tools }: { tools: Data[] }) {
 function KitDetail({ town, data }: { town: TownModel; data: Data }) {
   const manifest = record(data.manifest),
     tools = Array.isArray(manifest.tools) ? manifest.tools.map(record) : [],
-    provision = record(manifest.provision);
+    provision = record(manifest.provision),
+    installed = town.installedKit(str(data.name));
   const downloadable =
     data.has_bundle === true || Boolean(str(data.source_url));
   const requirements = [
@@ -388,12 +407,14 @@ function KitDetail({ town, data }: { town: TownModel; data: Data }) {
   ];
   return (
     <>
+      {town.directId && <KitInstallationNotice town={town} />}
       <div className="kit-summary">
         <h2 className="reading-title">{str(data.name)}</h2>
         <p className="card-meta">
           {str(data.display_name, str(data.being_id))} · v{str(data.version)} ·{" "}
           {tools.length} 个声明工具
         </p>
+        {installed && <InstalledKitStatus kit={installed} />}
         <p className="kit-description">{str(data.description)}</p>
       </div>
       <div className="kit-actions">
@@ -403,12 +424,17 @@ function KitDetail({ town, data }: { town: TownModel; data: Data }) {
         {downloadable && (
           <button
             className="primary"
-            disabled={town.prepareBusy}
+            disabled={town.prepareBusy || town.installBusy || Boolean(installed) || town.installedLoading || !town.installedLibrary}
             onClick={() => void town.prepareKit(str(data.id))}
           >
-            {town.prepareBusy ? "正在下载并检查…" : "安装到本机"}
+            {installed ? installed.problem ? "本机文件异常" : "已安装"
+              : town.prepareBusy ? "正在下载并检查…"
+              : town.installedLoading ? "正在检查安装状态…"
+              : !town.installedLibrary ? "安装状态未确认" : "安装到本机"}
           </button>
         )}
+        {installed && <button className="secondary" onClick={() => void town.showInstalledKit(installed.name)}>查看本机 Kit</button>}
+        {installed && <button className="secondary danger-action" onClick={() => void town.deleteKit(installed)}>删除本机 Kit</button>}
         <button
           className="secondary scene-select"
           onClick={() =>
@@ -425,7 +451,10 @@ function KitDetail({ town, data }: { town: TownModel; data: Data }) {
           一起看
         </button>
       </div>
-      {downloadable && (
+      {installed ? <p className="field-help">
+        {installed.problem ? "本机已有此 Kit 的文件，请在“本机 Kits”中查看异常详情。"
+          : `本机已安装 v${installed.version}，可在“本机 Kits”中查看工具与配置。${town.installedLibrary?.enabled === false ? "当前 Portal 尚未启用 Kits。" : ""}`}
+      </p> : downloadable && (
         <p className="field-help">
           在客户端完成下载、解压、依赖安装和工具检查。需要的凭据将在安装时填写。
         </p>
@@ -507,8 +536,9 @@ export function LocalKits({ town }: { town: TownModel }) {
                 <span className="card-meta">
                   {kit.problem
                     ? "清单异常"
-                    : `${kit.version} · ${kit.tools.length} 个工具 · ${kit.compatible ? "系统兼容" : "系统不兼容"}`}
+                    : `${kit.tools.length} 个工具 · ${kit.compatible ? "系统兼容" : "系统不兼容"}`}
                 </span>
+                <InstalledKitStatus kit={kit} />
               </button>
             ))}
             {!entries.length && (
@@ -520,22 +550,28 @@ export function LocalKits({ town }: { town: TownModel }) {
               <>
                 <div className="eyebrow">LOCAL KIT</div>
                 <h2 className="reading-title">{kit.name}</h2>
+                <InstalledKitStatus kit={kit} />
                 <p>{kit.description}</p>
                 <code className="local-path">{kit.directory}</code>
-                <button
-                  className="scene-select"
-                  onClick={() =>
-                    town.choose({
-                      id: "local-kit:" + kit.name,
-                      title: kit.name,
-                      revision: kit.version,
-                      excerpt: sceneExcerpt(kit.description),
-                      private: true,
-                    })
-                  }
-                >
-                  一起看
-                </button>
+                <div className="kit-actions">
+                  <button
+                    className="scene-select"
+                    onClick={() =>
+                      town.choose({
+                        id: "local-kit:" + kit.name,
+                        title: kit.name,
+                        revision: kit.version,
+                        excerpt: sceneExcerpt(kit.description),
+                        private: true,
+                      })
+                    }
+                  >
+                    一起看
+                  </button>
+                  <button className="secondary danger-action" onClick={() => void town.deleteKit(kit)}>
+                    删除本机 Kit
+                  </button>
+                </div>
                 {kit.problem ? (
                   <p className="inline-error">{kit.problem}</p>
                 ) : (
