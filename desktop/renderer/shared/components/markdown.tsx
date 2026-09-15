@@ -1,5 +1,5 @@
 import hljs, { type Emitter } from "highlight.js";
-import { Fragment, memo, useMemo, type ReactNode } from "react";
+import { Fragment, memo, useId, useMemo, useState, type ReactNode } from "react";
 import { marked, type Token, type Tokens } from "marked";
 import {
   placeFromURL,
@@ -31,6 +31,7 @@ const terms: Record<string, PlaceView> = {
 };
 const termPattern =
   /篝火|围炉|私信|邮局|收件箱|书架|卷轴|工具库|本机连接|种子花园|\b(?:seed garden|seeds|bonfire|fireside|embers|scrolls|kits?|portal)\b/gi;
+const markdownLanguages = new Set(["markdown", "md", "mkdown", "mkd"]);
 export function safeLink(value: string): string | undefined {
   try {
     const url = new URL(value);
@@ -110,12 +111,14 @@ export const Markdown = memo(function Markdown({
   onPlace,
   chat = false,
   renderText,
+  previewMarkdownCode = true,
 }: {
   content: string;
   className?: string;
   onPlace?: (target: PlaceTarget) => void;
   chat?: boolean;
   renderText?: (text: string) => ReactNode;
+  previewMarkdownCode?: boolean;
 }) {
   const tokens = useMemo(
     () => marked.lexer(content, { gfm: true, breaks: chat }),
@@ -249,7 +252,9 @@ export const Markdown = memo(function Markdown({
           const lang = (block.lang || "")
             .split(/\s/)[0]
             .replace(/[^a-z0-9_-]/gi, "");
-          node = (
+          node = chat && previewMarkdownCode && markdownLanguages.has(lang.toLowerCase()) ? (
+            <MarkdownCodeBlock text={block.text} language={lang} />
+          ) : (
             <div className="code-block">
               {chat && lang && <div className="code-lang">{lang}</div>}
               <pre>
@@ -381,6 +386,44 @@ export const Markdown = memo(function Markdown({
   return <div className={className}>{render(tokens)}</div>;
 });
 
+function MarkdownCodeBlock({ text, language }: { text: string; language: string }) {
+  const [mode, setMode] = useState<"preview" | "source">("preview");
+  const panelId = useId();
+  return (
+    <div className="code-block markdown-code-block">
+      <div className="code-lang markdown-code-toolbar">
+        <span>{language}</span>
+        <div className="markdown-code-modes" role="group" aria-label="Markdown 显示模式">
+          <button
+            type="button"
+            aria-pressed={mode === "preview"}
+            aria-controls={panelId}
+            onClick={() => setMode("preview")}
+          >
+            预览
+          </button>
+          <button
+            type="button"
+            aria-pressed={mode === "source"}
+            aria-controls={panelId}
+            onClick={() => setMode("source")}
+          >
+            源码
+          </button>
+        </div>
+      </div>
+      <div id={panelId} role="region" aria-label={mode === "preview" ? "Markdown 预览" : "Markdown 源码"}>
+        {mode === "preview" ? (
+          // Code samples inside the document stay as source rather than opening nested previews.
+          <Markdown content={text} chat className="markdown-preview" previewMarkdownCode={false} />
+        ) : (
+          <pre><code className={`hljs lang-${language}`}><HighlightedCode text={text} language={language} /></code></pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface Scope {
   scope?: string;
   children: (Scope | string)[];
@@ -392,12 +435,20 @@ class ReactEmitter implements Emitter {
   addText(text: string) {
     this.stack.at(-1)!.children.push(text);
   }
+  // The parser also calls openNode/closeNode directly for grammar modes.
+  // These methods are required even though highlight.js omits them from Emitter.
   startScope(scope: string) {
+    this.openNode(scope);
+  }
+  endScope() {
+    this.closeNode();
+  }
+  openNode(scope: string) {
     const node: Scope = { scope, children: [] };
     this.stack.at(-1)!.children.push(node);
     this.stack.push(node);
   }
-  endScope() {
+  closeNode() {
     if (this.stack.length > 1) this.stack.pop();
   }
   __addSublanguage(emitter: Emitter, language: string) {
@@ -443,6 +494,9 @@ function HighlightedCode({
       const result = highlighter.getLanguage(language)
         ? highlighter.highlight(text, { language })
         : highlighter.highlightAuto(text);
+      // Safe mode returns errors with a partial emitter instead of throwing.
+      // React must fall back to the source, not the incomplete token tree.
+      if (result.errorRaised || result.illegal) return text;
       return render((result._emitter as ReactEmitter).root);
     } catch {
       return text;

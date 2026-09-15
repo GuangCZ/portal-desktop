@@ -4,15 +4,21 @@ import { createServer } from 'node:http';
 import { mkdir, readFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 const assets = new Map(await Promise.all(['loom.html', 'chat.js', 'chat.css', 'highlight.css'].map(async file => ['/' + file, await readFile('desktop/generated/' + file)])));
+const markdownSource = (await readFile(new URL('./fixtures/markdown-code.md', import.meta.url), 'utf8')).trimEnd();
+const markdownPrefix = markdownSource.split('\n')[0];
+const markdownFence = language => `\`\`\`\`${language}\n${markdownSource}\n\`\`\`\``;
 let seq = 1;
 const history = [];
 const append = (role, content) => history.push({ seq: seq++, role, content, at: new Date().toISOString() });
 for (let i = 1; i <= 12; i++) { append('user', `历史问题 ${i}`); append('being', Array.from({ length: 6 }, (_, j) => `第 ${i} 轮回复，第 ${j + 1} 段。`).join('\n\n')); }
 append('being', '打开篝火，然后看 `seeds`。\n\n```javascript\nconst safe = "<script>never()</script>";\n```\n\n`https://example.com/manual`\n\n| 列一 | 列二 |\n| --- | --- |\n| 内容 | 内容 |\n\n[恶意链接](javascript:alert(1))\n\n<img src=x onerror=alert(1)>');
+history.at(-1).content += '\n\n' + markdownFence('markdown');
+history.at(-1).content += '\n\n```md\n## 第二个文档\n\n独立切换。\n```';
 const presets = [{ id: 'a', label: 'Claude Alpha', provider: 'anthropic', model: 'alpha', has_key: true }, { id: 'b', label: 'DeepSeek Beta', provider: 'deepseek', model: 'beta', has_key: false }];
 let config = { model: 'alpha', presets, thinking: 'medium', temperature: 0.7, sbs_enabled: false };
 const requests = [], patches = [];
 let active = null, heldResponse = null, rejectConfig = false, requireKey = false, stopCount = 0, oauthRequests = 0;
+let markdownResponse = null;
 const event = (response, name, data) => response.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
@@ -48,6 +54,11 @@ const server = createServer(async (request, response) => {
     if (input.message === 'http-error') return json({ error: 'fixture request failed' }, 400);
     response.writeHead(200, { 'Content-Type': 'text/event-stream' });
     event(response, 'meta', { stream_id: 'stream-' + requests.length });
+    if (input.message === 'markdown-stream') {
+      markdownResponse = response;
+      event(response, 'content_block_delta', { delta: { text: '````md\n' + markdownPrefix } });
+      return;
+    }
     event(response, 'thinking', { text: '检查 React 状态与协议' });
     event(response, 'content_block_delta', { delta: { text: '开始回复。' } });
     if (input.message === 'hold') { heldResponse = response; return; }
@@ -66,7 +77,7 @@ const server = createServer(async (request, response) => {
     response.end(assets.get(url.pathname)); return;
   }
   response.setHeader('Content-Type', 'text/html; charset=utf-8');
-  response.end(`<!doctype html><html><meta charset="utf-8"><style>body{margin:0}iframe{border:0;width:100vw;height:100vh}</style><iframe id="chat" src="/loom.html?revision=fixture"></iframe><script>
+  response.end(`<!doctype html><html><meta charset="utf-8"><style>body{margin:0}iframe{border:0;width:100vw;height:100vh}</style><iframe id="chat" src="/loom.html?revision=fixture&scene_id=desktop-fixture&scene_label=Desktop"></iframe><script>
     window.received=[];
     window.addEventListener('message', event => {
       if(event.source!==document.querySelector('iframe').contentWindow) return;
@@ -92,6 +103,24 @@ try {
   assert.equal(await frame.locator('#messages img').count(), 0);
   assert.equal(await frame.locator('#messages a[href^="javascript:"]').count(), 0);
   assert.ok(await frame.locator('.hljs-keyword').count());
+  assert.equal(await frame.locator('code.lang-javascript').first().textContent(), 'const safe = "<script>never()</script>";');
+  const historyMarkdown = frame.locator('.markdown-code-block').first();
+  const otherMarkdown = frame.locator('.markdown-code-block').nth(1);
+  assert.equal(await historyMarkdown.getByRole('button', { name: '预览', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await historyMarkdown.getByRole('heading', { name: '客户端 Markdown 验证', exact: true }).count(), 1);
+  assert.equal(await historyMarkdown.locator('table').count(), 1);
+  assert.equal(await historyMarkdown.locator('.markdown-preview strong').first().textContent(), '完整显示');
+  assert.equal(await historyMarkdown.locator('.markdown-preview script, .markdown-preview img').count(), 0);
+  await historyMarkdown.getByRole('button', { name: '源码', exact: true }).click();
+  assert.equal(await historyMarkdown.locator('code.lang-markdown').textContent(), markdownSource, 'History retains the entire fenced Markdown source');
+  assert.equal(await frame.locator('code.lang-markdown script, code.lang-markdown a, code.lang-markdown table').count(), 0);
+  assert.equal(await otherMarkdown.getByRole('button', { name: '预览', exact: true }).getAttribute('aria-pressed'), 'true', 'Each Markdown block keeps its own mode');
+  await mkdir('test-results', { recursive: true });
+  await historyMarkdown.screenshot({ path: 'test-results/chat-markdown-source-light.png' });
+  await historyMarkdown.getByRole('button', { name: '预览', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await historyMarkdown.getByRole('heading', { name: '客户端 Markdown 验证', exact: true }).count(), 1);
+  await historyMarkdown.screenshot({ path: 'test-results/chat-markdown-preview-light.png' });
   assert.equal(await frame.locator('.chat-code-link').getAttribute('href'), 'https://example.com/manual');
   await frame.getByRole('button', { name: '打开篝火', exact: true }).click();
   await page.waitForFunction(() => window.received.some(item => item.type === 'beings:open-place' && item.view === 'bonfire'));
@@ -187,6 +216,42 @@ try {
   await page.setViewportSize({ width: 420, height: 740 });
   assert.equal(await child().evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.screenshot({ path: 'test-results/chat-react-dark-mobile.png' });
+  // Keep a Markdown fence open across actual streamed React updates, then reload it from history.
+  await frame.locator('#input').fill('markdown-stream'); await frame.locator('#send-btn').click();
+  const streamedMarkdown = frame.locator('.markdown-code-block').last();
+  await streamedMarkdown.locator('.markdown-preview h1').waitFor();
+  assert.equal(await streamedMarkdown.locator('h1').textContent(), markdownPrefix.slice(2), 'An unfinished Markdown fence is previewed during streaming');
+  await post({ type: 'beings:history-scope', scope: 'all', revision: 'fixture' });
+  await page.waitForFunction(() => window.received.some(item => item.type === 'beings:history-scope-state' && item.scope === 'all'));
+  await streamedMarkdown.getByRole('button', { name: '源码', exact: true }).click();
+  assert.equal(await streamedMarkdown.locator('code.lang-md').textContent(), markdownPrefix);
+  const markdownSplit = markdownSource.indexOf('## 验收标准');
+  event(markdownResponse, 'content_block_delta', { delta: { text: markdownSource.slice(markdownPrefix.length, markdownSplit) } });
+  await child().waitForFunction(() => document.querySelector('code.lang-md')?.textContent.includes('console.log(message)'));
+  assert.equal(await streamedMarkdown.getByRole('button', { name: '源码', exact: true }).getAttribute('aria-pressed'), 'true', 'Streaming updates preserve the selected mode');
+  await post({ type: 'beings:history-scope', scope: 'current', revision: 'fixture' });
+  await child().waitForFunction(() => !document.querySelector('.message-scene'));
+  assert.equal(await streamedMarkdown.getByRole('button', { name: '源码', exact: true }).getAttribute('aria-pressed'), 'true', 'Returning to the current scene preserves the active stream and Markdown mode');
+  await streamedMarkdown.getByRole('button', { name: '预览', exact: true }).click();
+  assert.equal(await streamedMarkdown.locator('table').count(), 1);
+  event(markdownResponse, 'content_block_delta', { delta: { text: markdownSource.slice(markdownSplit) + '\n````' } });
+  append('being', markdownFence('md'));
+  event(markdownResponse, 'message_stop', { session_id: 'session-fixture' });
+  markdownResponse.end(); markdownResponse = null;
+  await frame.locator('.run-activity.running').waitFor({ state: 'hidden' });
+  assert.equal(await streamedMarkdown.locator('.markdown-preview').getByText('末尾校验：全文结束。', { exact: true }).count(), 1);
+  assert.equal(await child().evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  // A taller viewport lets the entire block fit inside the scrolling message pane for visual QA.
+  await page.setViewportSize({ width: 420, height: 1400 });
+  await streamedMarkdown.screenshot({ path: 'test-results/chat-markdown-preview-dark-mobile.png' });
+  await streamedMarkdown.getByRole('button', { name: '源码', exact: true }).click();
+  assert.equal(await streamedMarkdown.locator('code.lang-md').textContent(), markdownSource, 'Finishing the fence retains all source text');
+  await streamedMarkdown.screenshot({ path: 'test-results/chat-markdown-source-dark-mobile.png' });
+  await page.setViewportSize({ width: 420, height: 740 });
+  await page.reload();
+  await streamedMarkdown.locator('.markdown-preview h1').waitFor();
+  await streamedMarkdown.getByRole('button', { name: '源码', exact: true }).click();
+  assert.equal(await streamedMarkdown.locator('code.lang-md').textContent(), markdownSource, 'History reload preserves the streamed Markdown');
   // The standalone browser build exposes its own React settings controls.
   await page.goto(origin + '/loom.html');
   await page.getByRole('button', { name: '模型设置', exact: true }).click();
@@ -202,5 +267,5 @@ try {
   assert.deepEqual(errors, []);
   console.log('PASS: React history/index/Markdown, searchable model settings without unsupported OAuth, API keys and parameters, attachments, live and spliced streams, stop/error cleanup, scene drafts, replay, dark/narrow layout.');
 } finally {
-  heldResponse?.end(); await browser?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+  heldResponse?.end(); markdownResponse?.end(); await browser?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
 }

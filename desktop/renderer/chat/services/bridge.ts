@@ -1,4 +1,5 @@
 import type { ChatRuntime, ChatState, ChatPanel } from "../models/chat";
+import type { HistoryScope } from "../models/scenes";
 
 /** Source-checked desktop transport. It never reads or mutates rendered UI. */
 export function createChatBridge(state: ChatState) {
@@ -50,6 +51,7 @@ export function createChatBridge(state: ChatState) {
       search(): void;
       jump(id: string): void;
       focus(): void;
+      scope(value: HistoryScope): void;
     },
   ) {
     const refreshSbs = async () => {
@@ -81,6 +83,14 @@ export function createChatBridge(state: ChatState) {
       const data = event.data;
       if (!data || typeof data !== "object") return;
       switch (data.type) {
+        case "beings:history-scope":
+          if (data.revision !== revision || !["current", "all"].includes(data.scope)) return;
+          ui.scope(data.scope);
+          send({ type: "beings:history-scope-state", scope: state.historyScope });
+          return;
+        case "beings:history-scope-request":
+          if (data.revision === revision) send({ type: "beings:history-scope-state", scope: state.historyScope });
+          return;
         case "beings:sbs-toggle":
           void runtime
             .toggleSbs()

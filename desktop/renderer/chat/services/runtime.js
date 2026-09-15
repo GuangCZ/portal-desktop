@@ -1,4 +1,5 @@
 import { HistoryCache } from "./history-cache";
+import { inCurrentScene, messageScene } from "../models/scenes";
 
 /**
  * Loom's streaming, replay and history protocol, independent of rendering.
@@ -185,6 +186,33 @@ export function createChatRuntime(state, options = {}) {
   let messageCounter = 0,
     turnCounter = 0,
     currentRun = null;
+  function setStreamScene(scene) {
+    if (state.activeScene.sceneId !== scene.sceneId && isStreaming) {
+      // A shared SSE connection may continue a reply addressed to another room.
+      // Finalize the old bubble and activity before accepting the new room's text.
+      if (renderTimer) { cancelAnimationFrame(renderTimer); renderTimer = null; }
+      if (!streamMessage && streamText) streamMessage = addMessage("being", streamText);
+      if (streamMessage) {
+        setMessageStreaming(streamMessage, false);
+        updateMessage(streamMessage, cleanContent(streamText));
+        noteLocalEcho("being", streamText);
+      }
+      streamMessage = null;
+      streamText = "";
+      if (currentRun && !currentRun.end) {
+        currentRun.end = Date.now();
+        currentRun.outcome = "done";
+        currentRun.label = "已结束";
+      }
+      currentRun = null;
+      actionLogClear();
+    }
+    state.activeScene = {
+      ...scene,
+      sceneLabel: scene.sceneLabel || (scene.sceneId === state.currentScene.sceneId ? state.currentScene.sceneLabel : undefined),
+    };
+    changed();
+  }
   function updateMessage(message, text) {
     if (!message) return;
     message.text = text;
@@ -210,6 +238,7 @@ export function createChatRuntime(state, options = {}) {
     if (!currentRun || currentRun.end) {
       if (!isStreaming) return;
       currentRun = {
+        ...state.activeScene,
         kind: "run",
         id: `run-${++messageCounter}`,
         entries: [],
@@ -669,12 +698,14 @@ export function createChatRuntime(state, options = {}) {
 
   // ---- Messages ----
   let lastRole = null;
+  let lastSceneId;
   function addMessage(
     role,
     text,
     streaming = false,
     timestamp = null,
     isoTime = null,
+    scene = role === "being" ? state.activeScene : state.currentScene,
   ) {
     if (!streaming && role !== "system") text = cleanContent(text);
     if (!text && !streaming) return null; // skip empty after cleaning
@@ -706,6 +737,7 @@ export function createChatRuntime(state, options = {}) {
             minute: "2-digit",
             second: "2-digit",
           }),
+          scene,
         );
       }
     }
@@ -713,10 +745,12 @@ export function createChatRuntime(state, options = {}) {
 
     // Break consecutive grouping if there's a time gap (being's moments should be separate)
     const consecutive =
-      role === lastRole && role !== "system" && !hasTimeGap && !breaksRoleGroup;
+      role === lastRole && scene.sceneId === lastSceneId && role !== "system" && !hasTimeGap && !breaksRoleGroup;
     lastRole = role;
+    lastSceneId = scene.sceneId;
 
     const message = {
+      ...scene,
       kind: "message",
       id: `message-${++messageCounter}`,
       turnId: role === "user" ? `turn-${++turnCounter}` : undefined,
@@ -733,8 +767,9 @@ export function createChatRuntime(state, options = {}) {
     return message;
   }
 
-  function addTimeGap(text) {
+  function addTimeGap(text, scene) {
     state.items.push({
+      ...scene,
       kind: "separator",
       id: `gap-${++messageCounter}`,
       text: `— ${text} —`,
@@ -758,8 +793,9 @@ export function createChatRuntime(state, options = {}) {
       if (re.test(raw)) return label;
     return raw.replace(/^\[|\]$/g, "");
   }
-  function addBreathMarker(text, timestamp = null) {
+  function addBreathMarker(text, timestamp = null, scene = {}) {
     state.items.push({
+      ...scene,
       kind: "separator",
       id: `marker-${++messageCounter}`,
       marker: true,
@@ -1234,8 +1270,11 @@ export function createChatRuntime(state, options = {}) {
     pendingRecovery = null;
     removeThinkingIndicator();
 
-    const added = await reconcileHistory();
-    if (added > 0) {
+    const previousItems = new Set(state.items);
+    await reconcileHistory();
+    const recovered = state.items.some(item => item.kind === "message" && item.role === "being"
+      && !previousItems.has(item) && inCurrentScene(item, partialMessage || state.activeScene));
+    if (recovered) {
       // 历史里已有权威版本 → 扔掉屏幕上的半截内容，避免重复
       removeMessage(partialMessage);
     } else if (partialMessage) {
@@ -1431,6 +1470,7 @@ export function createChatRuntime(state, options = {}) {
           if (!line.startsWith("data: ")) continue;
           try {
             const data = JSON.parse(line.slice(6));
+            if (eventType !== "usage" && eventType !== "error" && Object.hasOwn(data, "scene_id")) setStreamScene(messageScene(data));
 
             // meta 不写服务端 replay 缓冲（http.rs:1950 直接 tx.send），
             // 其余每个事件恰好占一个 seq → "收到的非 meta 事件数" == "消费到的服务端 seq"。
@@ -1747,6 +1787,10 @@ export function createChatRuntime(state, options = {}) {
   }
 
   async function send(text, filesOverride = null, sendOptions = {}) {
+    if (location.protocol === "beings:" && !state.currentScene.sceneId) {
+      addMessage("system", "客户端场景不可用，暂时无法发送消息。请检查启动提示并重启客户端。");
+      return;
+    }
     if (isStreaming) {
       await spliceSend(text, filesOverride || [...pendingFiles]);
       return;
@@ -1759,6 +1803,7 @@ export function createChatRuntime(state, options = {}) {
       ? filesOverride
       : [...pendingFiles];
     if (!msg && !filesToSend.length) return;
+    setStreamScene(state.currentScene);
 
     if (!isManualRetry) {
       addMessage("user", msg || `[${filesToSend.length} file(s)]`);
@@ -2163,6 +2208,7 @@ export function createChatRuntime(state, options = {}) {
     currentRun = null;
     state.thinking = false;
     lastRole = null;
+    lastSceneId = undefined;
     lastMessageTime = null;
     state.resetScroll++;
     changed();
@@ -2201,14 +2247,20 @@ export function createChatRuntime(state, options = {}) {
   function noteLocalEcho(role, text) {
     const t = normalizeEcho(text);
     if (!t) return;
-    localEchoes.push({ role, text: t });
+    const message = [...state.items].reverse().find(item => item.kind === "message" && item.role === role && normalizeEcho(item.text) === t);
+    localEchoes.push({ role, text: t, message });
     if (localEchoes.length > 40) localEchoes.shift();
   }
-  function consumeLocalEcho(role, text) {
+  function consumeLocalEcho(role, text, scene) {
     const t = normalizeEcho(text);
     if (!t) return false;
     for (let i = 0; i < localEchoes.length; i++) {
-      if (localEchoes[i].role === role && localEchoes[i].text === t) {
+      const echo = localEchoes[i];
+      if (echo.role === role && echo.text === t && (!scene.sceneId || !echo.message?.sceneId || scene.sceneId === echo.message.sceneId)) {
+        if (echo.message && scene.sceneId) {
+          Object.assign(echo.message, scene);
+          changed();
+        }
         localEchoes.splice(i, 1);
         return true;
       }
@@ -2231,7 +2283,7 @@ export function createChatRuntime(state, options = {}) {
           const msg = messages[i];
           const ts = formatHistoryTime(msg.at);
           if (isHistoryMarker(msg)) {
-            addBreathMarker(msg.content, ts);
+            addBreathMarker(msg.content, ts, messageScene(msg));
             continue;
           }
           addMessage(
@@ -2240,6 +2292,7 @@ export function createChatRuntime(state, options = {}) {
             false,
             ts,
             msg.at,
+            messageScene(msg),
           );
         }
         if (i < messages.length) {
@@ -2269,6 +2322,15 @@ export function createChatRuntime(state, options = {}) {
     return reconcileInFlight;
   }
 
+  async function refreshHistory() {
+    // Each explicit scope change needs a request started after that change.
+    // Wait for older reads, including rapid switches, instead of reusing them.
+    while (reconcileInFlight || cursorSyncInFlight) {
+      await Promise.all([reconcileInFlight, cursorSyncInFlight]);
+    }
+    if (!disposed) await reconcileHistory({ preserve: true });
+  }
+
   async function fetchHistory(incremental, prefetched = null) {
     let cursor = lastHistorySeq;
     const messages = [];
@@ -2288,11 +2350,11 @@ export function createChatRuntime(state, options = {}) {
     return null;
   }
 
-  async function reconcileHistoryOnce({ full = false } = {}) {
+  async function reconcileHistoryOnce({ full = false, preserve = false } = {}) {
     lastReconcileSawBeing = false;
     try {
       let hydrated = false;
-      if (full || lastHistorySeq === 0) {
+      if (!preserve && (full || lastHistorySeq === 0)) {
         const cached = await historyCache.read();
         if (disposed) return 0;
         if (cached) {
@@ -2317,14 +2379,14 @@ export function createChatRuntime(state, options = {}) {
       let toCache = [];
       if (disposed) return 0;
 
-      if (!incremental) {
+      if (!incremental && !preserve) {
         resetMessages();
         localEchoes = [];
         toCache = msgs;
         await renderHistoryBatched(toCache);
         added = toCache.length;
         lastReconcileSawBeing = toCache.some(
-          (m) => !isHistoryMarker(m) && m.role !== "user",
+          (m) => !isHistoryMarker(m) && m.role !== "user" && inCurrentScene(messageScene(m), state.currentScene),
         );
       } else {
         if (cursorSyncInFlight) await cursorSyncInFlight;
@@ -2332,14 +2394,15 @@ export function createChatRuntime(state, options = {}) {
         toCache = fresh;
         for (const m of fresh) {
           if (isHistoryMarker(m)) {
-            addBreathMarker(m.content, formatHistoryTime(m.at));
+            addBreathMarker(m.content, formatHistoryTime(m.at), messageScene(m));
             added++;
             continue;
           }
           const role = m.role === "user" ? "user" : "being";
-          if (consumeLocalEcho(role, m.content)) continue; // 本地已经渲染过了
-          addMessage(role, m.content, false, formatHistoryTime(m.at), m.at);
-          if (role === "being") lastReconcileSawBeing = true;
+          const scene = messageScene(m);
+          if (consumeLocalEcho(role, m.content, scene)) continue; // 本地已经渲染过了
+          addMessage(role, m.content, false, formatHistoryTime(m.at), m.at, scene);
+          if (role === "being" && inCurrentScene(scene, state.currentScene)) lastReconcileSawBeing = true;
           added++;
         }
         if (added) changed();
@@ -2360,7 +2423,7 @@ export function createChatRuntime(state, options = {}) {
     }
   }
 
-  // live 流结束后调用：只推进游标，不渲染（内容已经在屏幕上了）
+  // Reconcile persisted local echoes and retain simultaneous messages from other scenes.
   let cursorSyncInFlight = null;
   function syncHistoryCursor() {
     // Serialize metadata/reply syncs: a second stop must still fetch history
@@ -2379,13 +2442,24 @@ export function createChatRuntime(state, options = {}) {
       if (!msgs) return;
       if (disposed) return;
       if (msgs.length) {
+        const fresh = msgs.filter(m => (Number(m.seq) || 0) > lastHistorySeq);
         lastHistorySeq = Math.max(
           lastHistorySeq,
           ...msgs.map((m) => Number(m.seq) || 0),
         );
-        for (const m of msgs) {
-          if (!isHistoryMarker(m)) consumeLocalEcho(m.role === "user" ? "user" : "being", m.content);
+        for (const m of fresh) {
+          const scene = messageScene(m);
+          if (isHistoryMarker(m)) addBreathMarker(m.content, formatHistoryTime(m.at), scene);
+          else {
+            const role = m.role === "user" ? "user" : "being";
+            // Current-room replies are already drawn by live/replay, including
+            // continuations that older servers persist as a single combined row.
+            if (!consumeLocalEcho(role, m.content, scene) && !inCurrentScene(scene, state.activeScene)) {
+              addMessage(role, m.content, false, formatHistoryTime(m.at), m.at, scene);
+            }
+          }
         }
+        changed();
         cacheHistory(msgs, lastHistorySeq);
       }
     } catch (_) {}
@@ -2526,6 +2600,7 @@ export function createChatRuntime(state, options = {}) {
   function replayStream(data) {
     // If the stream already finished, its content is in history — skip replay to avoid duplicates
     if (data.finished) return;
+    setStreamScene(messageScene(data));
 
     if (activeStreamPollTimer) {
       clearTimeout(activeStreamPollTimer);
@@ -2548,6 +2623,7 @@ export function createChatRuntime(state, options = {}) {
     const events = Array.isArray(data.events) ? data.events : [];
     for (const item of events) {
       const eventData = item.data || {};
+      if (item.event !== "usage" && item.event !== "error" && Object.hasOwn(eventData, "scene_id")) setStreamScene(messageScene(eventData));
       switch (item.event) {
         case "content_block_delta":
           streamText += eventData.delta?.text || "";
@@ -2733,6 +2809,7 @@ export function createChatRuntime(state, options = {}) {
   }
 
   function processReplayEvent(eventType, eventData) {
+    if (eventType !== "usage" && eventType !== "error" && Object.hasOwn(eventData, "scene_id")) setStreamScene(messageScene(eventData));
     markProgress(eventType, eventData);
     switch (eventType) {
       case "content_block_delta": {
@@ -2967,6 +3044,7 @@ export function createChatRuntime(state, options = {}) {
     applyConfigChange,
     toggleSbs,
     loadSbsState,
+    refreshHistory,
     refreshOnRegainedAttention,
     request: (path, init = {}) =>
       fetch(apiUrl(path), {

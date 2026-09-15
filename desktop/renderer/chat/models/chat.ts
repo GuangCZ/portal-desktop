@@ -1,4 +1,5 @@
 import { Store } from "../../shared/models/store";
+import { messageScene, type HistoryScope, type MessageScene } from "./scenes";
 
 export type ChatPanel = "model" | "being" | "privacy" | null;
 
@@ -8,7 +9,7 @@ export interface Attachment {
   size: number;
   base64: string;
 }
-export interface Message {
+export interface Message extends MessageScene {
   kind: "message";
   id: string;
   turnId?: string;
@@ -34,7 +35,7 @@ export interface ActivityEntry {
   duration?: number;
   ts?: number;
 }
-export interface Run {
+export interface Run extends MessageScene {
   kind: "run";
   id: string;
   entries: ActivityEntry[];
@@ -48,7 +49,7 @@ export interface Run {
 export type ChatItem =
   | Message
   | Run
-  | { kind: "separator"; id: string; text: string; marker?: boolean };
+  | ({ kind: "separator"; id: string; text: string; marker?: boolean } & MessageScene);
 export interface Preset {
   id: string;
   label: string;
@@ -81,6 +82,9 @@ export interface Soul {
 }
 export class ChatState extends Store {
   items: ChatItem[] = [];
+  currentScene = messageScene(Object.fromEntries(new URLSearchParams(location.search)));
+  activeScene: MessageScene = this.currentScene;
+  historyScope: HistoryScope = this.currentScene.sceneId ? "current" : "all";
   name = new URLSearchParams(location.search).get("name") || "being";
   soul: Soul = {};
   draft = "";
@@ -113,6 +117,7 @@ export interface ChatRuntime {
   ): Promise<ConfigResult | null>;
   toggleSbs(): Promise<void>;
   loadSbsState(): Promise<boolean | undefined>;
+  refreshHistory(): Promise<void>;
   refreshOnRegainedAttention(): Promise<void>;
   request(path: string, init?: RequestInit): Promise<Response>;
 }

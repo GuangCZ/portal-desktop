@@ -148,7 +148,7 @@ async function ready() {
   let chatScene: ChatScene | undefined;
   let chatSceneNotice: string | undefined;
   try { chatScene = await loadDesktopScene(directory, app.getVersion(), os.hostname()); }
-  catch { chatSceneNotice = '桌面场景标识未能读取或保存，本次聊天暂不附带场景信息。请检查客户端配置目录后重启。'; }
+  catch { chatSceneNotice = '桌面场景标识未能读取或保存，暂时无法发送消息。请检查客户端配置目录后重启。'; }
   proxy = new ChatProxy(() => store.connection, net.fetch.bind(net) as typeof fetch, chatScene);
   const assets = app.isPackaged ? path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`) : path.resolve('desktop/generated');
   registerLocalProtocol(assets, proxy);

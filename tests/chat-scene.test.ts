@@ -54,7 +54,7 @@ describe('desktop scene request scope', () => {
   const connection = parseConnection('https://fixture.test/alice/?token=fixture');
   const scene = { scene_id: 'desktop-fixture', scene_meta: { client: 'portal-desktop/0.1.2', scene_label: '桌面·PC' } };
 
-  it('leaves other request bodies and unconfigured legacy sends unchanged', async () => {
+  it.each([scene, undefined])('leaves history, stop and config requests unchanged when the scene is %j', async configuredScene => {
     const upstream = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const request = new Request('https://fixture.test', init);
       return Response.json({ body: await request.text() });
@@ -64,14 +64,29 @@ describe('desktop scene request scope', () => {
       ['/api/llm/config', 'PATCH', '{ "sbs_enabled": "off" }'],
       ['/api/history', 'GET', undefined],
     ] as const) {
-      const proxy = new ChatProxy(() => connection, upstream, scene);
+      const proxy = new ChatProxy(() => connection, upstream, configuredScene);
       const result = await proxy.handle(new Request('beings://chat' + route, { method, body }));
       expect(await result.json()).toEqual({ body: body || '' });
     }
-    const legacy = new ChatProxy(() => connection, upstream);
-    const body = '{ "message": "你好" }';
-    const result = await legacy.handle(new Request('beings://chat/api/chat/stream', { method: 'POST', body }));
-    expect(await result.json()).toEqual({ body });
+  });
+
+  it.each(['loom-Willow', 'all', 'desktop-other'])('overrides renderer scene %s with the persistent desktop identity', async rendererScene => {
+    const upstream = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => Response.json(await new Request('https://fixture.test', init).json()));
+    const proxy = new ChatProxy(() => connection, upstream, scene);
+    const body = { message: '保持原文', session_id: 'session-fixture', attachments: [{ media_type: 'text/plain', data: 'YWJj' }] };
+    const result = await proxy.handle(new Request('beings://chat/api/chat/stream', { method: 'POST', body: JSON.stringify({
+      ...body, scene_id: rendererScene, scene_meta: { client: 'loom-web', scene_label: '网页' },
+    }) }));
+    expect(await result.json()).toEqual({ ...body, ...scene });
+  });
+
+  it.each([{}, { scene_id: 'loom-Willow', scene_meta: { client: 'loom-web', scene_label: '网页' } }])('blocks sending without a desktop identity even if the renderer supplies %j', async suppliedScene => {
+    const upstream = vi.fn();
+    const proxy = new ChatProxy(() => connection, upstream);
+    const result = await proxy.handle(new Request('beings://chat/api/chat/stream', { method: 'POST', body: JSON.stringify({ message: '你好', ...suppliedScene }) }));
+    expect(result.status).toBe(409);
+    expect(await result.json()).toEqual({ error: '客户端场景不可用，暂时无法发送消息。请检查启动提示并重启客户端。' });
+    expect(upstream).not.toHaveBeenCalled();
   });
 
   it.each(['{invalid', 'null', '[]', '"message"'])('rejects invalid chat JSON before sending: %s', async body => {
