@@ -142,7 +142,7 @@ describe("React chat runtime lifecycle", () => {
 
   it.each(["current", "all"] as const)("keeps desktop send parameters through scope switches, ordinary sends, retries and splices starting in %s", async initialScope => {
     vi.stubGlobal("location", new URL("beings://chat/loom.html?scene_id=desktop-fixture&scene_label=桌面·PC"));
-    const scene = { scene_id: "desktop-fixture", scene_meta: { client: "portal-desktop/0.1.2", scene_label: "桌面·PC" } };
+    const scene = { scene_id: "desktop-fixture", scene_meta: { client: "being-desktop/0.1.2", scene_label: "桌面·PC" } };
     const sent: Record<string, unknown>[] = [];
     let stream!: ReadableStreamDefaultController<Uint8Array>;
     const proxy = new ChatProxy(

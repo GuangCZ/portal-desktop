@@ -16,7 +16,7 @@ const { outputFiles } = await build({ stdin: { resolveDir: process.cwd(), loader
   window.sbsStates = [];
   window.scopeStates = [];
   const snapshot = { settings: { being: 'fixture', hasToken: true }, portal: { phase: 'stopped', logs: [] },
-    chatScene: { scene_id: 'desktop-fixture', scene_meta: { client: 'portal-desktop/0.1.3', scene_label: '桌面·测试电脑' } } };
+    chatScene: { scene_id: 'desktop-fixture', scene_meta: { client: 'being-desktop/0.1.3', scene_label: '桌面·测试电脑' } } };
   app.post = data => document.getElementById('chat-frame')?.contentWindow?.postMessage(data, location.origin);
   // HTTP transport for the fixture; production validates beings://chat and the same frame revision.
   window.addEventListener('message', event => {

@@ -23,7 +23,7 @@ it('persists credentials encrypted, reloads and preserves them on workspace-only
     expect(parse(portalConfig(store.settings))).toMatchObject({ kits_enabled: true, tools: { exec: true, screenshot: true, custom_tools_enabled: true } });
     await store.save({ ...store.settings, workspace: path.join(dir, '中文 workspace'), connectionLink: 'https://echo.example/alice/?token=private-test-credential&secret=relay-secret' });
     expect(JSON.stringify(store.settings)).not.toContain('private-test-credential');
-    const disk = await readFile(path.join(dir, 'connection.json'), 'utf8');
+    const disk = await readFile(path.join(dir, 'settings.json'), 'utf8');
     expect(disk).not.toContain('private-test-credential'); expect(disk).not.toContain('relay-secret');
     const reopened = new SettingsStore(dir, storage, process.execPath); await reopened.load();
     expect(reopened.connection?.relaySecret).toBe('relay-secret');
@@ -67,7 +67,9 @@ it('uses the current client binary after reinstall, upgrade and saves while reta
       expect(current.connection).toEqual(old.connection);
       await current.save({ ...current.settings, portalBinary: '/another/standalone-portal' });
       expect(current.settings.portalBinary).toBe(binary);
-      expect(JSON.parse(await readFile(path.join(dir, 'connection.json'), 'utf8')).settings.portalBinary).toBe(binary);
+      // The client binary ships with the client and is never persisted, so a
+      // saved profile can never point a new installation at a removed engine.
+      expect(await readFile(path.join(dir, 'settings.json'), 'utf8')).not.toContain('standalone-portal');
       expect(await readFile(config, 'utf8')).toBe(source);
     }
   } finally { await rm(dir, { recursive: true, force: true }); }

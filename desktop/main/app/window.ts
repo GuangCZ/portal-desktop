@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ClientBrowser } from '../browser/browser';
 
-const CLIENT_NAME = 'Portal Desktop';
+const CLIENT_NAME = 'Being Desktop';
 
 export interface MainWindowOptions {
   shellURL: () => string;

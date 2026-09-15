@@ -22,7 +22,7 @@ export class UpdateChecker {
     this.publish({ phase: 'checking', latestVersion: undefined, message: '正在检查更新…' });
     try {
       const response = await this.fetcher(`https://api.github.com/repos/${this.repository}/releases/latest`, {
-        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'portal-desktop' },
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'being-desktop' },
         redirect: 'error', signal: AbortSignal.timeout(12_000),
       });
       if (response.status === 404) return this.publish({ phase: 'unavailable', message: '尚无可公开读取的正式版本；私有仓库请在浏览器登录后查看发布页。' });

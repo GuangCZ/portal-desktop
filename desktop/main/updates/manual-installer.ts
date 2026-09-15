@@ -5,6 +5,7 @@ import { mkdir, open, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path';
 import { command, windowsModulePath } from '../portal/background';
 import { macInstallLocation, validateMacApp } from './mac-package';
+import { profileOverride } from '../app/profile';
 import windowsInstaller from '../../windows-installer.json';
 import type { UpdateActivity } from '../../shared/types';
 
@@ -54,6 +55,8 @@ export function checksumFor(text: string, name: string) {
   return matches[0]![1];
 }
 export function macInstallerScript(parentPid: number, current: string, candidate: string, backup: string, profile?: string) {
+  // The relaunched build may be either the old or the new one, so hand over the
+  // profile under the name both understand (see app/profile.ts profileOverride).
   const launch = `/usr/bin/open${profile ? ` --env ${quote(`PORTAL_DESKTOP_USER_DATA=${profile}`)}` : ''} -n ${quote(current)}`;
   return `#!/bin/sh
 set -eu
@@ -142,7 +145,7 @@ export async function stageInstaller(directory: string, version: string, reposit
       if (apps.length !== 1) throw new Error('更新包内客户端结构无效。');
       const candidate = path.join(stage, apps[0]);
       await validateMacApp(candidate, version);
-      script = macInstallerScript(process.pid, current!, candidate, path.join(stage, 'Previous.app'), process.env.PORTAL_DESKTOP_USER_DATA ? directory : undefined);
+      script = macInstallerScript(process.pid, current!, candidate, path.join(stage, 'Previous.app'), profileOverride() ? directory : undefined);
       scriptFile = path.join(root, 'install.sh');
     } else {
       script = '\ufeff' + windowsInstallerScript(process.pid, installer, executable);

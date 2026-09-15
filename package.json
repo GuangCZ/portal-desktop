@@ -1,8 +1,8 @@
 {
-  "name": "portal-desktop",
-  "productName": "Portal Desktop",
-  "version": "0.1.3",
-  "description": "A desktop home for your Being, with Heart Portal built in.",
+  "name": "being-desktop",
+  "productName": "Being Desktop",
+  "version": "0.9.0",
+  "description": "A desktop home for your existing Being, Loom and local Portal.",
   "author": "Beings contributors",
   "license": "MIT",
   "main": ".vite/build/main.js",

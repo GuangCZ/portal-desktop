@@ -24,6 +24,8 @@ export async function loadDesktopScene(directory: string, version: string, devic
   }
   return {
     scene_id: sceneId,
-    scene_meta: { client: `portal-desktop/${version}`, scene_label: `桌面·${deviceName}` },
+    // BeingDesktop 0.8.26 reports the same client slug (src/being-chat.cjs line
+    // 372), so one Being sees one desktop client across both shells.
+    scene_meta: { client: `being-desktop/${version}`, scene_label: `桌面·${deviceName}` },
   };
 }

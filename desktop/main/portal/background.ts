@@ -178,7 +178,9 @@ export class BackgroundPortal {
   readonly label: string;
   get runtimeDirectory() { return path.join(this.directory, 'portal-service'); }
   constructor(private directory: string, private run: Command = command, private platform = process.platform, private home = os.homedir()) {
-    this.label = `town.beings.portal-desktop.portal.${hash(path.resolve(directory))}`;
+    // One LaunchAgent label / scheduled task per profile directory, in the
+    // `town.beings.desktop.portal.*` family that portal/external.ts recognizes.
+    this.label = `town.beings.desktop.portal.${hash(path.resolve(directory))}`;
     this.state = { supported: ['darwin', 'win32'].includes(platform), installed: false, enabled: false, running: false, existing: false,
       message: ['darwin', 'win32'].includes(platform) ? '未启用后台服务' : '此版本的后台服务支持 macOS 和 Windows' };
   }

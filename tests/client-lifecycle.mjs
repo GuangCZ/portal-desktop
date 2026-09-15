@@ -15,7 +15,7 @@ try {
   if (process.platform === 'win32') {
     // An older installation can leave this metadata after Windows removes its
     // task. The real packaged client must still open its UI and keep the record.
-    const label = 'town.beings.portal-desktop.portal.' + createHash('sha256').update(path.resolve(temporary)).digest('hex').slice(0, 16);
+    const label = 'town.beings.desktop.portal.' + createHash('sha256').update(path.resolve(temporary)).digest('hex').slice(0, 16);
     savedRuntime = JSON.stringify({ label, root: path.join(temporary, 'old-runtime'), file: '', existing: false });
     await writeFile(path.join(temporary, 'portal-service.json'), savedRuntime);
   }

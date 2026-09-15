@@ -75,7 +75,7 @@ export class AppModel extends Store {
     const cleanupWorkspace = this.workspace.start();
     if (!this.api) {
       this.startup = "error";
-      this.toast("请通过 Portal Desktop 桌面客户端打开此页面。");
+      this.toast("请通过 Being Desktop 桌面客户端打开此页面。");
       return () => {
         active = false;
         clearTimeout(this.toastTimer);

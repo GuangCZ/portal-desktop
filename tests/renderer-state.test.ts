@@ -98,7 +98,7 @@ describe("React desktop state lifecycle", () => {
   it("passes the proxy's exact scene identity to the chat without changing the cache identity", () => {
     const app = new AppModel(api().value);
     const snapshot = state();
-    snapshot.chatScene = { scene_id: "desktop-fixed", scene_meta: { client: "portal-desktop/0.1.3", scene_label: "桌面·测试 & PC" } };
+    snapshot.chatScene = { scene_id: "desktop-fixed", scene_meta: { client: "being-desktop/0.1.3", scene_label: "桌面·测试 & PC" } };
     app.applySnapshot(snapshot);
     const url = new URL(app.chatSource);
     expect(url.searchParams.get("scene_id")).toBe(snapshot.chatScene.scene_id);

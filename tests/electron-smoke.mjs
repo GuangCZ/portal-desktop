@@ -121,7 +121,7 @@ function cleanup() {
     await saveTrace().catch(() => {});
     if (app) await app.close().catch(() => {});
     if (backgroundTest) {
-      const label = 'town.beings.portal-desktop.portal.' + createHash('sha256').update(path.join(dir, 'profile')).digest('hex').slice(0, 16);
+      const label = 'town.beings.desktop.portal.' + createHash('sha256').update(path.join(dir, 'profile')).digest('hex').slice(0, 16);
       const run = promisify(execFile);
       await run('/bin/launchctl', ['bootout', `gui/${process.getuid()}/${label}`]).catch(() => {});
       await rm(path.join(homedir(), 'Library/LaunchAgents', label + '.plist'), { force: true });

@@ -25,11 +25,11 @@ describe('persistent desktop room', () => {
     const directory = await profile();
     const first = await loadDesktopScene(directory, '0.1.2', '广春泽PC');
     expect(first.scene_id).toMatch(/^desktop-[0-9a-f-]{36}$/);
-    expect(first.scene_meta).toEqual({ client: 'portal-desktop/0.1.2', scene_label: '桌面·广春泽PC' });
+    expect(first.scene_meta).toEqual({ client: 'being-desktop/0.1.2', scene_label: '桌面·广春泽PC' });
     expect(await loadDesktopScene(directory, '0.1.2', '广春泽PC')).toEqual(first);
     const upgraded = await loadDesktopScene(directory, '0.1.3', '新设备名');
     expect(upgraded.scene_id).toBe(first.scene_id);
-    expect(upgraded.scene_meta).toEqual({ client: 'portal-desktop/0.1.3', scene_label: '桌面·新设备名' });
+    expect(upgraded.scene_meta).toEqual({ client: 'being-desktop/0.1.3', scene_label: '桌面·新设备名' });
     expect(JSON.parse(await readFile(path.join(directory, 'chat-scene.json'), 'utf8'))).toEqual({ scene_id: first.scene_id });
     const other = await loadDesktopScene(path.join(directory, 'other-profile'), '0.1.2', '广春泽PC');
     expect(other.scene_id).not.toBe(first.scene_id);
@@ -52,7 +52,7 @@ describe('persistent desktop room', () => {
 
 describe('desktop scene request scope', () => {
   const connection = parseConnection('https://fixture.test/alice/?token=fixture');
-  const scene = { scene_id: 'desktop-fixture', scene_meta: { client: 'portal-desktop/0.1.2', scene_label: '桌面·PC' } };
+  const scene = { scene_id: 'desktop-fixture', scene_meta: { client: 'being-desktop/0.1.2', scene_label: '桌面·PC' } };
 
   it.each([scene, undefined])('leaves history, stop and config requests unchanged when the scene is %j', async configuredScene => {
     const upstream = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

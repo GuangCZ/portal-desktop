@@ -1,7 +1,7 @@
 import { app, Menu, nativeImage, Tray } from 'electron';
 import path from 'node:path';
 
-const CLIENT_NAME = 'Portal Desktop';
+const CLIENT_NAME = 'Being Desktop';
 
 export function createApplicationTray(showWindow: () => void, isPackaged: boolean) {
   const trayIcon = nativeImage.createFromPath(path.join(

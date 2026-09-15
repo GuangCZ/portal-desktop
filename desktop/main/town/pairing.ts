@@ -14,7 +14,7 @@ export async function requestTownPairCode(connection: Connection, requestId: str
       method: 'POST', credentials: 'omit', redirect: 'error', signal,
       headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: townPairPrompt, session_id: 'town-pair-' + requestId,
-        scene_id: 'town-pair-' + requestId, scene_meta: { client: 'portal-desktop', scene_label: 'Town 配对' } }),
+        scene_id: 'town-pair-' + requestId, scene_meta: { client: 'being-desktop', scene_label: 'Town 配对' } }),
     });
     if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
       await response.body?.cancel();

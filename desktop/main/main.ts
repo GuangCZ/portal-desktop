@@ -1,6 +1,6 @@
 import { app, clipboard, dialog, ipcMain, net, nativeTheme, protocol, safeStorage, shell, type BrowserWindow, type Tray } from 'electron';
 import { clientStartup } from './app/startup';
-import { clientUserData } from './app/profile';
+import { clientUserData, profileOverride } from './app/profile';
 import type { ClientBrowser } from './browser/browser';
 import { createMainWindow } from './app/window';
 import { configureLocalSession, registerLocalProtocol } from './app/protocol';
@@ -9,6 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { access, mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { SettingsStore } from './app/settings';
+import { loadDesktopId } from './app/identity';
 import { ClientErrorLog } from './app/error-log';
 import { portalLogText } from './portal/diagnostics';
 import { PortalSupervisor } from './portal/supervisor';
@@ -36,25 +37,31 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 declare const PORTAL_DESKTOP_UPDATE_REPOSITORY: string;
 declare const PORTAL_DESKTOP_BUILD: string;
 const startedAt = new Date().toISOString();
-const CLIENT_NAME = 'Portal Desktop';
-const CLIENT_ID = 'portal-desktop';
+// The display name, and — since Electron derives the profile directory and the
+// encrypted-storage identity from it — the application name as well. The
+// lower-case slug this client reports to Being, Town and GitHub is
+// `being-desktop`, spelled at each of its three call sites (chat/scene.ts,
+// town/pairing.ts, updates/checker.ts) as in BeingDesktop 0.8.26.
+const CLIENT_NAME = 'Being Desktop';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'beings', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
-// Electron uses its internal name for encrypted storage. Keep that identity
-// stable while the bundle, windows, menus and dialogs use the display name.
+// Electron derives the encrypted-storage identity from the application name, so
+// this has to run before any safeStorage call and has to match BeingDesktop
+// 0.8.26 (src/main.cjs line 87) exactly: a different name leaves every
+// credential already in the system keychain undecryptable.
 let profileError: unknown;
 let userData: string;
 try {
-  app.setName(CLIENT_ID);
+  app.setName(CLIENT_NAME);
   app.setAboutPanelOptions({ applicationName: CLIENT_NAME });
-  userData = clientUserData(() => app.getPath('appData'), process.env.PORTAL_DESKTOP_USER_DATA);
+  userData = clientUserData(() => app.getPath('appData'), profileOverride());
   app.setPath('userData', userData);
   app.setPath('sessionData', userData);
 } catch (error) {
   profileError = error;
   // This directory only receives startup diagnostics; never start a fresh
   // client profile when the real profile cannot be resolved.
-  userData = path.join(os.tmpdir(), 'portal-desktop-startup');
+  userData = path.join(os.tmpdir(), 'being-desktop-startup');
 }
 let window: BrowserWindow | null = null;
 let windowReady = false;
@@ -72,6 +79,7 @@ let quitting = false;
 let quitCleanupDone = false;
 let sessionEnding = false;
 let tray: Tray | undefined;
+let desktopId = '';
 let lifecycleError = '';
 const errorLog = new ClientErrorLog(userData, () => [store?.connection?.token || '', store?.connection?.relaySecret || '']);
 let mutation = Promise.resolve();
@@ -130,6 +138,12 @@ async function ready() {
   let startupNotice: string | undefined;
   try { await store.load(); }
   catch (error) { startupNotice = errorLog.report('settings-load', error, '连接配置读取失败，请检查密钥库或连接设置。'); }
+  // The Desktop ID is this profile's persistent identity towards the Being
+  // (BeingDesktop src/desktop-identity.cjs, loaded from restore() right after
+  // the profile directory). A profile that cannot mint one still opens; the
+  // identity stays absent rather than being invented again on every launch.
+  try { desktopId = await loadDesktopId(directory); }
+  catch (error) { startupNotice = errorLog.report('desktop-identity', error, 'Desktop 身份读取失败，请检查客户端配置目录后重试。'); }
   let configCandidates: string[] = [];
   const reusePreviousConfig = async () => {
     await store.reusePortalConfig(configCandidates);
@@ -146,7 +160,7 @@ async function ready() {
     // An explicitly selected profile is independent (including test profiles).
     // Its own saved service can still migrate, but it must not import the user's
     // global Being connection or workspace just because it is initially empty.
-    if (!store.connection && !process.env.PORTAL_DESKTOP_USER_DATA) configCandidates.push(path.join(os.homedir(), '.heart-portal/portal.toml'), path.join(os.homedir(), '.heart-portal/runtime/portal.toml'));
+    if (!store.connection && !profileOverride()) configCandidates.push(path.join(os.homedir(), '.heart-portal/portal.toml'), path.join(os.homedir(), '.heart-portal/runtime/portal.toml'));
     await reusePreviousConfig();
   } catch (error) { startupNotice = errorLog.report('portal-config-import', error, '已有 Portal 配置读取失败，请检查后重试。'); }
   const townCredentials = new TownCredentials(directory, secretStorage);
@@ -335,7 +349,7 @@ async function ready() {
   handle('beings:check-updates', showUpdates);
   handle('beings:cancel-update', () => { updateDownload?.abort(); });
   handle('beings:update-state', () => updates.state);
-  const snapshot = () => ({ settings: store.settings, portal: portal.state, background: background.state, chatScene, notice: [startupNotice && errorLog.report('startup-notice', startupNotice), chatSceneNotice].filter(Boolean).join('\n') || undefined });
+  const snapshot = () => ({ settings: store.settings, desktopId, portal: portal.state, background: background.state, chatScene, notice: [startupNotice && errorLog.report('startup-notice', startupNotice), chatSceneNotice].filter(Boolean).join('\n') || undefined });
   const verifyConnection = async () => {
     await reusePreviousConfig();
     await verifyBeingConnection(store.connection, net.fetch.bind(net) as typeof fetch);
@@ -423,6 +437,9 @@ async function ready() {
   handle('beings:save', (input: SaveSettings) => exclusive(async () => {
     cancelTownPairing?.();
     const previous = { ...store.settings }; const previousConnection = store.connection;
+    // Restore the saved address itself on rollback: a link reassembled from the
+    // parsed parts would drop the parameters this client does not model (`api=`).
+    const previousAddress = store.connectionAddress;
     await store.save(input);
     try {
       await verifyConnection();
@@ -434,7 +451,7 @@ async function ready() {
       });
       await publishCurrentPortal();
     } catch (error) {
-      if (previousConnection) await store.save({ ...previous, connectionLink: previousConnection.link + '&relay_secret=' + encodeURIComponent(previousConnection.relaySecret) });
+      if (previousConnection) await store.save({ ...previous, connectionLink: previousAddress || previousConnection.link + '&relay_secret=' + encodeURIComponent(previousConnection.relaySecret) });
       throw error;
     }
     townLive?.dispose();
@@ -569,7 +586,7 @@ async function ready() {
   windowReady = true;
   createWindow();
   await exclusive(() => restoreStartup());
-  if (app.isPackaged && !process.env.PORTAL_DESKTOP_USER_DATA) {
+  if (app.isPackaged && !profileOverride()) {
     void updates.check();
     updatePoll = setInterval(() => { void updates.check(); }, 6 * 60 * 60 * 1000);
     updatePoll.unref();

@@ -57,7 +57,7 @@ export function Diagnostics({ model }: { model: AppModel }) {
       </div>
       <p id="diagnostics-version" className="utility-subtitle">
         {state
-          ? `Portal Desktop ${state.version} · ${state.platform}\n构建 ${state.build}\n主进程 ${state.pid} · 启动 ${new Date(state.startedAt).toLocaleString()}`
+          ? `Being Desktop ${state.version} · ${state.platform}\n构建 ${state.build}\n主进程 ${state.pid} · 启动 ${new Date(state.startedAt).toLocaleString()}`
           : ""}
       </p>
       <div id="diagnostics-checks" aria-live="polite">

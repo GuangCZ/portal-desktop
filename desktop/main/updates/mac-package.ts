@@ -10,10 +10,10 @@ export async function macInstallLocation(executable: string) {
   const current = path.resolve(executable, '../../..');
   if (!current.endsWith('.app')) throw new Error('无法识别当前 macOS 应用目录。');
   if ((await realpath(current)).includes('/AppTranslocation/')) {
-    throw new Error('请先将 Portal Desktop 放入“应用程序”文件夹，再从该位置打开并更新。');
+    throw new Error('请先将 Being Desktop 放入“应用程序”文件夹，再从该位置打开并更新。');
   }
   try { await access(path.dirname(current), constants.W_OK); }
-  catch { throw new Error('当前应用目录不可写。请将 Portal Desktop 移到可写的应用程序目录后重试，原服务未停止。'); }
+  catch { throw new Error('当前应用目录不可写。请将 Being Desktop 移到可写的应用程序目录后重试，原服务未停止。'); }
   return current;
 }
 
@@ -21,7 +21,7 @@ export async function macInstallLocation(executable: string) {
 // outside the Portal executable's separate checksum manifest.
 export async function validateMacApp(candidate: string, version: string) {
   const plist = JSON.parse(await command('/usr/bin/plutil', ['-convert', 'json', '-o', '-', path.join(candidate, 'Contents/Info.plist')]));
-  if (plist.CFBundleIdentifier !== signing.clientIdentifier || plist.CFBundleExecutable !== 'Portal Desktop' ||
+  if (plist.CFBundleIdentifier !== signing.clientIdentifier || plist.CFBundleExecutable !== 'Being Desktop' ||
       plist.CFBundleShortVersionString !== version || plist.CFBundleVersion !== version) {
     throw new Error('安装包版本或应用标识不匹配。');
   }

@@ -28,7 +28,7 @@ vi.mock('../desktop/main/app/window', () => ({ createMainWindow: vi.fn() }));
 
 it('defers repeated launch until initialization and opens one usable window even when background discovery fails', async () => {
   fixture.directory = await mkdtemp(path.join(os.tmpdir(), 'portal-window-startup-'));
-  vi.stubEnv('PORTAL_DESKTOP_USER_DATA', fixture.directory);
+  vi.stubEnv('BEING_DATA_DIR', undefined); vi.stubEnv('PORTAL_DESKTOP_USER_DATA', fixture.directory);
   const { app, protocol, dialog, ipcMain } = await import('electron');
   const { createMainWindow } = await import('../desktop/main/app/window');
   let releaseSettings!: () => void;
@@ -53,14 +53,14 @@ it('defers repeated launch until initialization and opens one usable window even
     await import('../desktop/main/main');
     await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
     // NSIS launch plus updater fallback, or a double click during credential IO.
-    app.emit('second-instance', {}, ['portal-desktop.exe']);
+    app.emit('second-instance', {}, ['being-desktop.exe']);
     app.emit('activate');
     const earlyWindows = protocolReadyAtCreation.length;
     releaseSettings();
     await fixture.startup;
     expect(dialog.showErrorBox).not.toHaveBeenCalled();
     expect({ earlyWindows, protocolReadyAtCreation }).toEqual({ earlyWindows: 0, protocolReadyAtCreation: [true] });
-    app.emit('second-instance', {}, ['portal-desktop.exe']);
+    app.emit('second-instance', {}, ['being-desktop.exe']);
     app.emit('activate');
     expect(createMainWindow).toHaveBeenCalledOnce();
     expect(reuse).toHaveBeenCalledWith([]);

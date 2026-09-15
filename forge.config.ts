@@ -33,7 +33,7 @@ const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
     // Packager also derives macOS's display name from its executable name.
-    executableName: process.platform === 'darwin' ? 'Portal Desktop' : 'portal-desktop',
+    executableName: process.platform === 'darwin' ? 'Being Desktop' : 'being-desktop',
     appBundleId: signing.clientIdentifier,
     ...(process.platform === 'darwin' ? {
       osxSign: macSignOptions,
@@ -71,7 +71,7 @@ const config: ForgeConfig = {
   },
   makers: [
     new MakerZIP({}, ['darwin', 'linux', 'win32']),
-    new MakerDMG({ title: 'Portal Desktop', icon: path.resolve('resources/branding/app.icns'), format: 'ULFO' }, ['darwin']),
+    new MakerDMG({ title: 'Being Desktop', icon: path.resolve('resources/branding/app.icns'), format: 'ULFO' }, ['darwin']),
   ],
   plugins: [new VitePlugin({
     build: [

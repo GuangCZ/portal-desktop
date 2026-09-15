@@ -5,7 +5,7 @@ export async function desktopExecutable() {
   const { productName } = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
   const executable = process.env.PORTAL_DESKTOP_EXECUTABLE || (process.platform === 'darwin'
     ? path.resolve(`out/${productName}-darwin-${process.arch}/${productName}.app/Contents/MacOS/${productName}`)
-    : path.resolve(`out/${productName}-${process.platform}-${process.arch}`, process.platform === 'win32' ? 'portal-desktop.exe' : 'portal-desktop'));
+    : path.resolve(`out/${productName}-${process.platform}-${process.arch}`, process.platform === 'win32' ? 'being-desktop.exe' : 'being-desktop'));
   try { await access(executable); }
   catch { throw new Error(`客户端测试包不存在，请先运行 npm run package：${executable}`); }
   return executable;

@@ -23,12 +23,12 @@ export async function isolateWindowsInstallation(root) {
     @{desktop=[Environment]::GetFolderPath('Desktop'); programs=[Environment]::GetFolderPath('Programs'); local=[Environment]::GetFolderPath('LocalApplicationData')} | ConvertTo-Json -Compress
   `));
   const files = [];
-  for (const file of [path.join(metadata.desktop, 'Portal Desktop.lnk'), path.join(metadata.programs, 'Portal Desktop.lnk'),
-    path.join(metadata.local, 'portal-desktop-updater', 'installer.exe')]) {
+  for (const file of [path.join(metadata.desktop, 'Being Desktop.lnk'), path.join(metadata.programs, 'Being Desktop.lnk'),
+    path.join(metadata.local, 'being-desktop-updater', 'installer.exe')]) {
     const bytes = await readFile(file).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
     files.push({ file, bytes });
   }
-  const installedRoot = path.join(root, '安装目录', 'Portal Desktop');
+  const installedRoot = path.join(root, '安装目录', 'Being Desktop');
   await writeFile(path.join(root, 'installation-metadata.json'), JSON.stringify({ keys, installedRoot,
     files: files.map(s => ({ file: s.file, base64: s.bytes?.toString('base64') ?? null })) }));
   return {

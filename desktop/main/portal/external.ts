@@ -123,6 +123,10 @@ export class ExternalPortalObserver {
       const domain = `gui/${process.getuid!()}`;
       const disabled = await this.run('/bin/launchctl', ['print-disabled', domain]);
       for (const name of await readdir(agents).catch(() => [])) {
+        // `desktop.portal` is the family this client registers (portal/background.ts);
+        // `portal-desktop.portal` is what an earlier build of this shell left behind,
+        // and `heart-portal` is the official installer's own agent. Takeover has to
+        // see all three or a sleeping guardian relaunches the engine it replaced.
         if (!/^town\.beings\.(?:(?:portal-desktop|desktop)\.portal|heart-portal)\.[a-f0-9]+\.plist$/.test(name)) continue;
         const file = path.join(agents, name);
         let data: { Label: string; ProgramArguments: string[] }, contents: string, root: string, script: string;
@@ -150,6 +154,8 @@ export class ExternalPortalObserver {
         found.push(conflict);
       }
     } else if (this.platform === 'win32') {
+      // Same two scheduled-task families as the macOS agents above; Windows has
+      // no official heart-portal installer task to recognize.
       const script = windowsModulePath + `$ErrorActionPreference='Stop'; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
 @(@(Get-ScheduledTask) | Where-Object { $_.TaskPath -eq '\\' -and $_.TaskName -match '^town\\.beings\\.(?:(?:portal-desktop|desktop)\\.portal)\\.[a-f0-9]+$' } | ForEach-Object {
   try { $owner=New-Object -TypeName Security.Principal.NTAccount -ArgumentList $_.Principal.UserId; $owned=$owner.Translate([Security.Principal.SecurityIdentifier]).Value -eq $sid } catch { $owned=$_.Principal.UserId -eq $sid }

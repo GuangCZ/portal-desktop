@@ -14,10 +14,37 @@ export function parseConnection(input: string): Connection {
   // Portal parses token verbatim rather than URL-decoding it. Restrict to URL-safe tokens.
   if (!/^[a-zA-Z0-9._~-]{1,2048}$/.test(token)) throw new Error('链接缺少有效的 token。');
   const being = url.pathname.replaceAll('/', '');
-  const endpoint = `${url.origin}/${being}`;
+  const loom = `${url.origin}/${being}`;
+  // BeingDesktop 0.8.x addresses may carry `api=` when Loom and the Being API are
+  // served from different paths of one origin (BeingDesktop src/security.cjs
+  // parseConnection, 2026-09-16). It moves the API base only; the token must never
+  // reach another site, so the origin has to match and the value carries no query,
+  // fragment or credentials of its own.
+  const api = url.searchParams.get('api');
+  let endpoint = loom;
+  if (api) {
+    let target: URL;
+    try { target = new URL(api); } catch { throw new Error('链接中的 api 参数必须是同源的完整地址。'); }
+    if (target.origin !== url.origin || target.search || target.hash || target.username || target.password) {
+      throw new Error('Loom 和 API 必须位于同一来源，避免将连接凭据发送到其他网站。');
+    }
+    endpoint = target.href.replace(/\/+$/, '');
+  }
   const relaySecret = url.searchParams.get('relay_secret') || url.searchParams.get('secret') || token;
   if (/[\r\n]/.test(relaySecret)) throw new Error('无效的 relay secret。');
-  return { endpoint, being, token, relaySecret, link: `${endpoint}/?token=${token}` };
+  // The link is the Loom address Portal connects to and is written to disk as
+  // `connection.url`: it deliberately carries no relay secret.
+  return { endpoint, being, token, relaySecret, link: `${loom}/?token=${token}` };
+}
+
+/** BeingDesktop 0.8.x stores the connection address itself, normalized the same
+ * way (fragment removed, every other parameter verbatim), so a settings.json
+ * written here stays readable by BeingDesktop's own parseConnection. */
+export function connectionCredential(input: string): string {
+  parseConnection(input);
+  const url = new URL(input.trim());
+  url.hash = '';
+  return url.href;
 }
 
 export function redact(text: string, secrets: string[] = []): string {

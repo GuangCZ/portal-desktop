@@ -32,7 +32,7 @@ describe('SDK 284bef4 automatic pairing via authenticated chat', () => {
     expect(url).toBe('https://fixture.test/willow/api/chat/stream?token=loom-private-fixture');
     expect(init).toMatchObject({ method: 'POST', credentials: 'omit', redirect: 'error' });
     expect(new Headers(init.headers).has('authorization')).toBe(false);
-    expect(JSON.parse(String(init.body))).toMatchObject({ session_id: 'town-pair-' + requestId, scene_id: 'town-pair-' + requestId, scene_meta: { client: 'portal-desktop', scene_label: 'Town 配对' } });
+    expect(JSON.parse(String(init.body))).toMatchObject({ session_id: 'town-pair-' + requestId, scene_id: 'town-pair-' + requestId, scene_meta: { client: 'being-desktop', scene_label: 'Town 配对' } });
     expect(JSON.parse(String(init.body)).chat_id).toBeUndefined();
     expect(cancel).toHaveBeenCalledOnce();
   });

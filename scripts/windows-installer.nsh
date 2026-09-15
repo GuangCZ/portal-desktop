@@ -11,7 +11,7 @@
     Pop $0
     Pop $1
     ${If} $0 != 0
-      MessageBox MB_OK|MB_ICONSTOP "Portal Desktop could not stop safely. Close the client and retry installation.$\r$\n$1"
+      MessageBox MB_OK|MB_ICONSTOP "Being Desktop could not stop safely. Close the client and retry installation.$\r$\n$1"
       SetErrorLevel 1
       Quit
     ${EndIf}

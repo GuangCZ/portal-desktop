@@ -25,13 +25,13 @@ async function temporary() {
   directories.push(root); return root;
 }
 async function appFixture(root: string, version: string) {
-  const app = path.join(root, 'Portal Desktop.app'), contents = path.join(app, 'Contents');
+  const app = path.join(root, 'Being Desktop.app'), contents = path.join(app, 'Contents');
   await mkdir(path.join(contents, 'MacOS'), { recursive: true });
   await mkdir(path.join(contents, 'Resources'));
   // System binaries can be arm64e; compile the same architecture as the client.
   const source = path.join(root, 'fixture.c');
   await writeFile(source, 'int main(void) { return 0; }\n');
-  const executable = path.join(contents, 'MacOS/Portal Desktop');
+  const executable = path.join(contents, 'MacOS/Being Desktop');
   await command('/usr/bin/clang', ['-arch', process.arch === 'x64' ? 'x86_64' : process.arch, source, '-o', executable]);
   await rm(source);
   const engine = path.join(contents, 'Resources/heart-portal');
@@ -41,7 +41,7 @@ async function appFixture(root: string, version: string) {
     clientVersion: version, portalVersion: '0.8.2', platform: process.platform, arch: process.arch, sha256: digest(await readFile(engine)) }));
   await writeFile(path.join(contents, 'Resources/app.asar'), 'fixture UI');
   const plist = path.join(contents, 'Info.plist');
-  await writeFile(plist, JSON.stringify({ CFBundleIdentifier: 'town.beings.portal-desktop', CFBundleExecutable: 'Portal Desktop',
+  await writeFile(plist, JSON.stringify({ CFBundleIdentifier: 'town.beings.desktop', CFBundleExecutable: 'Being Desktop',
     CFBundlePackageType: 'APPL', CFBundleShortVersionString: version, CFBundleVersion: version }));
   await command('/usr/bin/plutil', ['-convert', 'xml1', plist]);
   await command('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', app]);
@@ -61,11 +61,11 @@ mac('stages a signed ZIP without touching the installed app or profile; cancella
   const candidate = await appFixture(path.join(root, 'download'), '0.1.4');
   await mkdir(profile); await writeFile(path.join(profile, 'connection.json'), 'unchanged encrypted fixture');
   const old = await readFile(path.join(current, 'Contents/Info.plist'));
-  const handoff = await stageInstaller(profile, '0.1.4', 'd5z/portal-desktop', path.join(current, 'Contents/MacOS/Portal Desktop'), await archiveFetcher(root, candidate, '0.1.4'));
+  const handoff = await stageInstaller(profile, '0.1.4', 'd5z/portal-desktop', path.join(current, 'Contents/MacOS/Being Desktop'), await archiveFetcher(root, candidate, '0.1.4'));
   expect((await readdir(path.dirname(current))).some(name => name.startsWith('.portal-desktop-update-'))).toBe(true);
   expect(await readFile(path.join(current, 'Contents/Info.plist'))).toEqual(old);
   await handoff.discard();
-  expect(await readdir(path.dirname(current))).toEqual(['Portal Desktop.app']);
+  expect(await readdir(path.dirname(current))).toEqual(['Being Desktop.app']);
   expect(await readdir(path.join(profile, 'client-updates'))).toEqual([]);
   expect(await readFile(path.join(profile, 'connection.json'), 'utf8')).toBe('unchanged encrypted fixture');
 }, nativeTimeout);
@@ -76,11 +76,11 @@ mac('rejects corrupt downloads, modified UI, wrong versions and missing executab
   for (const failure of ['digest', 'ui', 'version', 'executable', 'engine']) {
     const candidate = await appFixture(path.join(root, failure), failure === 'version' ? '0.1.5' : '0.1.4');
     if (failure === 'ui') await writeFile(path.join(candidate, 'Contents/Resources/app.asar'), 'modified UI');
-    if (failure === 'executable') await rm(path.join(candidate, 'Contents/MacOS/Portal Desktop'));
+    if (failure === 'executable') await rm(path.join(candidate, 'Contents/MacOS/Being Desktop'));
     if (failure === 'engine') await writeFile(path.join(candidate, 'Contents/Resources/heart-portal'), 'corrupted engine');
-    await expect(stageInstaller(path.join(root, 'profile'), '0.1.4', 'd5z/portal-desktop', path.join(current, 'Contents/MacOS/Portal Desktop'),
+    await expect(stageInstaller(path.join(root, 'profile'), '0.1.4', 'd5z/portal-desktop', path.join(current, 'Contents/MacOS/Being Desktop'),
       await archiveFetcher(root, candidate, '0.1.4', failure === 'digest'))).rejects.toThrow();
-    expect(await readdir(path.dirname(current))).toEqual(['Portal Desktop.app']);
+    expect(await readdir(path.dirname(current))).toEqual(['Being Desktop.app']);
     expect(await readdir(path.join(root, 'profile/client-updates'))).toEqual([]);
     await expect(validateMacApp(current, '0.1.3')).resolves.toMatchObject({ clientVersion: '0.1.3' });
   }
@@ -89,10 +89,10 @@ mac('rejects corrupt downloads, modified UI, wrong versions and missing executab
 mac('rejects translocated and read-only install locations before starting a download', async () => {
   const root = await temporary();
   const translocated = await appFixture(path.join(root, 'AppTranslocation/test'), '0.1.4');
-  await expect(macInstallLocation(path.join(translocated, 'Contents/MacOS/Portal Desktop'))).rejects.toThrow('应用程序');
+  await expect(macInstallLocation(path.join(translocated, 'Contents/MacOS/Being Desktop'))).rejects.toThrow('应用程序');
   const current = await appFixture(path.join(root, 'read-only'), '0.1.4');
   await chmod(path.dirname(current), 0o500);
-  try { await expect(macInstallLocation(path.join(current, 'Contents/MacOS/Portal Desktop'))).rejects.toThrow('不可写'); }
+  try { await expect(macInstallLocation(path.join(current, 'Contents/MacOS/Being Desktop'))).rejects.toThrow('不可写'); }
   finally { await chmod(path.dirname(current), 0o700); }
 }, nativeTimeout);
 

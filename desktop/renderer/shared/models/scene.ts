@@ -8,7 +8,7 @@ export interface SceneObservation {
 }
 export interface SceneEvent { id: string; at: string; label: string; scene: string; state?: string }
 export interface SceneEnvelope {
-  schema: 'being.environment/v1'; messageId: string; source: { channel: 'portal-desktop'; instanceId: string };
+  schema: 'being.environment/v1'; messageId: string; source: { channel: 'being-desktop'; instanceId: string };
   audience: string; capturedAt: string; environment: SceneObservation; delivery: 'local-only';
 }
 const titles: Record<SceneView, string> = { chat: '与你的 Being 交谈', town: '小镇广场', bonfire: '篝火', firesides: '围炉', mail: '私信', seeds: '种子花园', embers: '书架', scrolls: '卷轴', kits: '工具间', portal: 'Portal 设置' };
@@ -65,7 +65,7 @@ export class SceneStore extends EventTarget {
   }
   capture(messageId: string) {
     const observation = structuredClone(this.reference || this.current);
-    const envelope: SceneEnvelope = { schema: 'being.environment/v1', messageId, source: { channel: 'portal-desktop', instanceId: this.instanceId }, audience: this.being, capturedAt: new Date().toISOString(), environment: observation, delivery: 'local-only' };
+    const envelope: SceneEnvelope = { schema: 'being.environment/v1', messageId, source: { channel: 'being-desktop', instanceId: this.instanceId }, audience: this.being, capturedAt: new Date().toISOString(), environment: observation, delivery: 'local-only' };
     // Excerpts stay in the explicit reference preview; environment snapshots carry IDs, not private text.
     if (envelope.environment.selection) envelope.environment.selection.excerpt = '';
     this.envelopes = [envelope, ...this.envelopes].slice(0, 30);

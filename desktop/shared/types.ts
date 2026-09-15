@@ -15,7 +15,12 @@ export interface Settings {
   endpoint: string;
   being: string;
   hasToken: boolean;
+  /** The Portal working directory. BeingDesktop 0.8.x keeps this in
+   * `managedPortal.workspace` / `portalWorkspace`. */
   workspace: string;
+  /** BeingDesktop 0.8.x's own top-level `workspace`: the Desktop project
+   * directory. Read and preserved here; not used by this shell yet. */
+  projectWorkspace?: string;
   portalBinary: string;
   portalName: string;
   autoStart: boolean;
@@ -41,7 +46,10 @@ export type PortalPhase = 'running' | 'stopped' | 'starting' | 'connected' | 're
 export interface PortalState { phase: PortalPhase; pid?: number; managed?: boolean; runtimePath?: string; conflict?: boolean; message: string; logs: string[] }
 export interface BackgroundState { supported: boolean; installed: boolean; enabled: boolean; running: boolean; existing: boolean; label?: string; pid?: number; message: string }
 export interface ChatScene { scene_id: string; scene_meta: { client: string; scene_label: string } }
-export interface Snapshot { settings: Settings; portal: PortalState; background?: BackgroundState; chatScene?: ChatScene; notice?: string }
+export interface Snapshot { settings: Settings; portal: PortalState; background?: BackgroundState; chatScene?: ChatScene; notice?: string;
+  /** The profile's persistent Desktop ID (desktop-id.json). Absent while the
+   * identity file cannot be read; see main/app/identity.ts. */
+  desktopId?: string }
 export interface ClientStartup { supported: boolean; enabled: boolean; message: string }
 export interface BrowserState { open: boolean; address: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean; error?: string }
 export interface DiagnosticReport { version: string; build: string; platform: string; pid: number; startedAt: string; checkedAt: string; checks: { name: string; status: 'ok' | 'warning' | 'error'; detail: string }[]; logs: string[] }

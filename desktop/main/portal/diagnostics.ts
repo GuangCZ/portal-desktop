@@ -7,7 +7,7 @@ export function portalLogText(input: { version: string; platform: string; portal
     .replace(/(["']?(?:token|secret|password|api[_-]?key|access[_-]?token)["']?\s*[:=]\s*["']?)[^\s,"'}]+/gi, '$1[redacted]')
     .split(input.home || '\0').join('~');
   const diagnostics = {
-    client: `Portal Desktop ${input.version}`,
+    client: `Being Desktop ${input.version}`,
     platform: input.platform,
     captured_at: new Date().toISOString(),
     portal: { phase: input.portal.phase, message: clean(input.portal.message).slice(0, 500), managed: input.portal.managed },

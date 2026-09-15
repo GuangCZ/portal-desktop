@@ -26,7 +26,7 @@ async function until(label, predicate, timeout = 45_000) {
 async function clients() {
   const { stdout } = await execute('/bin/ps', ['-axo', 'pid=,comm=']);
   return stdout.split('\n').flatMap(line => {
-    const match = /^\s*(\d+)\s+(.+\/Contents\/MacOS\/Portal Desktop)$/.exec(line);
+    const match = /^\s*(\d+)\s+(.+\/Contents\/MacOS\/Being Desktop)$/.exec(line);
     return match ? [{ pid: Number(match[1]), executable: match[2] }] : [];
   });
 }
@@ -46,7 +46,7 @@ const previousVersion = pkg.version.replace(/\d+$/, number => String(Number(numb
 assert.notEqual(previousVersion, pkg.version);
 const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "portal-upgrade 中文 ' ")));
 const profile = path.join(root, 'profile'), workspace = path.join(root, 'workspace'), kits = path.join(root, 'kits');
-const current = path.join(root, 'Applications/Portal Desktop.app'), executable = path.join(current, 'Contents/MacOS/Portal Desktop');
+const current = path.join(root, 'Applications/Being Desktop.app'), executable = path.join(current, 'Contents/MacOS/Being Desktop');
 let app, upgradedPid, relay, nextId = 0, passed = false, mounted = false;
 const mount = path.join(root, 'mounted');
 const ownedPortalPids = new Set(), pending = new Map();

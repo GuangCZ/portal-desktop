@@ -13,4 +13,4 @@ await new Promise((resolve, reject) => {
   child.once('error', reject);
   child.once('exit', code => code === 0 ? resolve() : reject(new Error(`Forge exited ${code}`)));
 });
-if (process.platform === 'win32') await buildWindowsInstaller(path.join(out, 'Portal Desktop-win32-x64'), path.join(make, 'nsis'));
+if (process.platform === 'win32') await buildWindowsInstaller(path.join(out, 'Being Desktop-win32-x64'), path.join(make, 'nsis'));

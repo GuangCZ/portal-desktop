@@ -47,7 +47,7 @@ const setup = path.join(make, setups[0]), asset = `portal-desktop-${pkg.version}
 const sums = `${sha(await readFile(setup))}  ${asset}\n`;
 const installation = await isolateWindowsInstallation(root);
 const env = { ...installation.environment, PORTAL_DESKTOP_USER_DATA: profile };
-const installed = () => path.join(installation.installedRoot, 'portal-desktop.exe');
+const installed = () => path.join(installation.installedRoot, 'being-desktop.exe');
 const ownedPids = new Set(), pending = new Map();
 let app, upgradedPid, relay, nextId = 0, passed = false;
 const token = 'local-windows-upgrade-fixture';
@@ -85,7 +85,7 @@ function rpc(method, params = {}) {
 async function clients() {
   return JSON.parse(await powershell(`
     $root=${psQuote(installation.installedRoot + path.sep)};
-    $items=@(Get-CimInstance Win32_Process -Filter "Name='portal-desktop.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root,[StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine -notmatch '--type=' } | Select-Object ProcessId,ExecutablePath,@{Name='MainWindowHandle';Expression={$p=Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; if ($p) { $p.MainWindowHandle.ToInt64() } else { 0 }}});
+    $items=@(Get-CimInstance Win32_Process -Filter "Name='being-desktop.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root,[StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine -notmatch '--type=' } | Select-Object ProcessId,ExecutablePath,@{Name='MainWindowHandle';Expression={$p=Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; if ($p) { $p.MainWindowHandle.ToInt64() } else { 0 }}});
     ConvertTo-Json -InputObject $items -Compress
   `));
 }

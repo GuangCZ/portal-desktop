@@ -66,7 +66,7 @@ export function App({ model }: { model: AppModel }) {
         hidden={app.startup === "ready"}
       >
         <div className="startup-content">
-          <img src={logo} alt="Portal Desktop" width={56} height={56} />
+          <img src={logo} alt="Being Desktop" width={56} height={56} />
           <span
             id="startup-spinner"
             className="startup-spinner"
@@ -110,7 +110,7 @@ export function App({ model }: { model: AppModel }) {
                   <img
                     className="welcome-logo"
                     src={logo}
-                    alt="Portal Desktop"
+                    alt="Being Desktop"
                     width={88}
                     height={88}
                   />
