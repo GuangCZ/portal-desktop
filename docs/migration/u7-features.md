@@ -548,6 +548,47 @@ vitest 改写注意：`assert.rejects(p, c => c === error)` → `await expect(p)
 `detailId(route)`：必须以 `/api/scrolls/` 开头，取其后的 id，`scrollId(id)` 要求
 `/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/` 且不在 `RESERVED_SCROLL_IDS = new Set(['help','search','graph','match'])` 中。
 
+### src/feature-task-discussion.cjs（33 行）+ test/feature-task-discussion.test.cjs（49 行，4 个用例）—— 已读完
+
+源码导出：`module.exports = {discussFeatureTask}`。依赖 `./town.cjs` 的 `prepareLoomDraft`
+（**仅作为 `prepareDraft` 的默认值**；town.cjs 不在本 worktree → 移植后 `prepareDraft` 改为必填注入项，参数名保持不变）。
+
+`STATUS = {running:'进行中', waiting:'等待结果核对', succeeded:'已完成', failed:'未完成',
+cancelled:'已结束本地跟踪，远端执行未取消', needs_input:'需要你决定'}`。
+
+`async discussFeatureTask(id, {getLedger, getContext, prepareDraft = prepareLoomDraft})`：
+1. `typeof id !== 'string' || id.length > 128` → `throw new Error('请选择有效的功能任务。')`。
+2. `ledger = getLedger()`；`task = ledger.get(id)`；falsy → `throw new Error('任务不存在或连接身份已变化，请重新选择。')`。
+3. `context = getContext()`；闭包 `current()`：
+   - `getLedger() !== ledger` → `throw new Error('连接身份已变化，任务内容未转交。')`；
+   - `next = getContext()`；`next.connection !== context.connection || next.generation !== context.generation`
+     → `throw new Error('连接已变化，请重新选择任务。')`；否则返回 `next`。
+4. prompt 由六行 `filter(Boolean).join('\n')`（逐字）：
+   `'我选择将这个功能任务带到聊天里讨论。请先根据下面的记录说明结果或下一步，涉及执行、安装或发送消息时，先和我确认具体操作。'`、
+   `\`任务：${task.title}\``、`\`状态：${STATUS[task.status] || '待核对'}\``、
+   `task.summary ? \`结果摘要：${task.summary}\` : ''`、`task.detail ? \`当前情况：${task.detail}\` : ''`、
+   `task.mayDelayChat ? '这个任务使用 Being 执行，目前尚未确认与聊天执行队列隔离。' : ''`。
+5. `await prepareDraft(prompt, current)`；再 `current()`（**落盘/交付后二次纪元校验**）；返回 `{prepared: true, taskId: id}`。
+
+测试夹具 `fixture()`（原样照抄）：`let ledger = new FeatureTasks()`（**无 identityKey**）；
+`task = ledger.begin({feature:'bonfire', operation:'read', title:'读取篝火', execution:'being'})`；
+`ledger.complete(task.id, {summary:'已读取 10 条消息。token=private-value'})`（safeText 会把它变成 `token=[已隐藏]`）；
+`let context = {connection:{}, generation:1}`；`drafts = []`；
+`options = {getLedger: () => ledger, getContext: () => context,
+prepareDraft: async (text, getContext) => { getContext(); drafts.push(text); }}`；
+`changeLedger: () => { ledger = new FeatureTasks(); }`；`changeContext: () => { context = {...context, generation: 2}; }`。
+
+用例：
+1. `discussion explicitly prepares only a safe summary, without sending or changing task status` —
+   返回 `{prepared:true, taskId}`；`drafts.length === 1`；草稿匹配 `/读取篝火/`、`/已读取 10 条/`、`/尚未确认与聊天执行队列隔离/`；
+   不匹配 `/private-value/`；任务仍 succeeded。
+2. `unknown and previous identity tasks cannot prepare a draft` — `discussFeatureTask({}, options)` 拒绝并匹配 `/有效/`；
+   `'missing'` 匹配 `/不存在/`；`changeLedger()` 后原 id 也匹配 `/不存在/`；`drafts.length === 0`。
+3. `draft preparation propagates existing-draft errors and preserves the task` —
+   `prepareDraft` 抛 `new Error('Loom 中已有草稿')` → 拒绝匹配 `/已有草稿/`，任务仍 succeeded。
+4. `identity and connection are checked again during asynchronous preparation` —
+   对 `['changeLedger','changeContext']`：`prepareDraft = async (_prompt, current) => { f[kind](); current(); }` → 拒绝匹配 `/变化/`。
+
 ## 进度
 
 | 模块 | 状态 |
@@ -557,11 +598,11 @@ vitest 改写注意：`assert.rejects(p, c => c === error)` → `await expect(p)
 | src/feature-tasks.cjs | 已读 |
 | src/feature-task-runner.cjs | 已读 |
 | src/feature-task-history.cjs | 已读 |
-| src/feature-task-discussion.cjs | 未开始 |
+| src/feature-task-discussion.cjs | 已读 |
 | test/feature-tasks.test.cjs | 已读（15 个用例） |
 | test/feature-task-runner.test.cjs | 已读（21 个用例） |
 | test/feature-task-history.test.cjs | 已读（10 个用例） |
-| test/feature-task-discussion.test.cjs | 未开始 |
+| test/feature-task-discussion.test.cjs | 已读（4 个用例） |
 | test/town-error-ipc.test.cjs（feature-tasks 相关用例） | 未开始 |
 | src/loom-town-sync.cjs `normalizeTownSyncRecords`（外部依赖） | 已读 |
 | src/main.cjs boot() 注入面 | 未开始 |
