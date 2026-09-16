@@ -186,9 +186,18 @@ function ProjectGroup({ project, connected, busy, conversation, app, children }:
   const [open, setOpen] = useState(true);
   const [menu, setMenu] = useState(false);
   const id = useId();
+  const row = useRef<HTMLDivElement>(null);
+  // Same dismissal as the conversation menu below: a click anywhere else closes
+  // it, so a menu is never left hanging over the list.
+  useEffect(() => {
+    if (!menu) return;
+    const outside = (event: Event) => { if (!row.current?.contains(event.target as Node)) setMenu(false); };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [menu]);
   return (
     <section className="sidebar-section" aria-label={`项目 ${project.name}`}>
-      <div className="sidebar-project-row">
+      <div className="sidebar-project-row" ref={row}>
         <button
           type="button"
           className="sidebar-project-toggle"
