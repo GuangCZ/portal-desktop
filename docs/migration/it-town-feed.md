@@ -245,7 +245,7 @@ BD 的 `acceptTownState` 在身份变化时只 `clearPrivate()`，不重读，�
 | --- | --- |
 | `npm run typecheck` | 绿 |
 | `npx vitest run` | **128 文件通过 / 8 跳过；1420 通过 / 24 跳过**（基线 127 / 8；1398 / 24 → 新增 22 条：`town-conversation-rules` 17 + `town-session-session` 5；**没有删除或弱化任何一条既有用例**） |
-| 打包 | `PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package` + `codesign --force --deep --sign -`，成功（第一次 `electron-forge package` 因 GitHub `ETIMEDOUT` 失败，重试即过——网络抖动，不是构建问题） |
+| 打包 | `PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package` + `codesign --force --deep --sign -`，成功。**本机上它会间歇性地因 GitHub `connect ETIMEDOUT 20.205.243.166:443` 失败**（`@electron/get` 去取校验文件；Electron 的 zip 本身是有缓存的），重试即过——网络抖动，不是构建问题。最后一次冒烟是在**当前 HEAD 重新打包后**跑的 |
 | `npm run test:town-ui` | **18 条通过 / 1 条红**。红的那条是 `an ambiguous recipient offers the choices Town returned` —— `contextBridge` 剥掉 `error.candidates`，**待 IN**（IM openIssue 1 的第二个后果）。基线是 13 过 2 红 |
 | `npm run test:town-sdk` | **13 条通过 / 4 条红**，四条全是同一个 `contextBridge` 剥 `error.code`，**待 IN**；与基线一模一样，本单元没有让它变好也没有让它变差 |
 | `npm run test:town-names` | **PASS** |
