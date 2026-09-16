@@ -297,3 +297,39 @@
 
 **状态机 status 取值**：`unpaired` / `connecting` / `connected` / `reconnecting` / `paused` / `auth_required` / `identity_mismatch` / `pair_storage_error`。
 **authReason 取值**：`''` / `NO_SAVED_CREDENTIAL` / `SECURE_STORAGE_UNAVAILABLE` / `CREDENTIAL_UNREADABLE`。
+
+### 依赖摘要：candidates / sanitizeText / portal-desktop 既有 town/client.ts（已读）
+
+**`candidates(value)`**（BeingDesktop `renderer/town-mentions.js:8-12`，本单元要在 main 层自带一份，因为 portal-desktop 禁止 main import renderer）：
+```
+clean(value, limit=100) = 字符串 ? value.replace(/[\x00-\x1f\x7f‪-‮⁦-⁩]/g,'').slice(0,limit) : ''
+validId(value) = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/
+candidates(value):
+  seen = new Set()
+  (Array.isArray(value) ? value : []).slice(0,100)
+    .filter(item => validId(item?.town_id) && !seen.has(item.town_id) && seen.add(item.town_id))
+    .map(item => ({town_id: item.town_id, display_name: clean(item.display_name) || item.town_id}))
+```
+（`seen.add` 返回 Set 是真值，所以 filter 通过——这是原文写法，保留。）
+
+**`sanitizeText(value, secrets = [])`**（BeingDesktop `src/services.cjs:12-36`）：注入项，本单元用注入的 `sanitize`。行为：去 ANSI 转义 → 逐个 secret（长度 ≥4）替换为 `[redacted]` → URL 去 username/password/search/hash（解析失败 → `[redacted URL]`）→ `Cookie/Set-Cookie/Authorization/Proxy-Authorization` 头行 → `[redacted header]` → `Bearer xxx` → `Bearer [redacted]` → `token/secret/password/credential/api_key/key/authorization/cookie` 形式的赋值 → `$1[redacted]` → `sk-*` → `[redacted]` → JWT `eyJ…` → `[redacted]` → `\b[a-f0-9]{32,}\b` → `[redacted]` → `\b[a-zA-Z0-9_+/=-]{48,}\b` → `[redacted]` → 去控制字符 → `.slice(0, 2000)`。
+
+**portal-desktop 既有 `desktop/main/town/client.ts`（213 行）——与本单元的重叠分析**（写进 client.ts 顶部注释）：
+
+重叠的能力：
+- `TOWN_ORIGIN = 'https://beings.town'` 固定来源；`credentials:'omit'`、`redirect:'error'`、`AbortSignal.timeout(20000)`。
+- 配对 `POST /api/client/pair/confirm`，`t_` 前缀走 `town_id` 字段否则 `being_id`；`data.ok !== true` 拒绝；`town_id` 必须 `t_` 前缀；`429` 有专门文案。
+- 发言长度上限 bonfire 4000 / fireside 32000 按码点计；`reply_to`；私信不能发给自己；发送未确认返回「消息可能已送达，请刷新核对」。
+- `readTownJson` 检查 `content-type` 含 `application/json` 并流式读取。
+
+portal-desktop **没有**的能力（本单元补齐）：
+- **DTO 严格校验**（`town-wire` / `town-library-contract` / `town-session` 的 `messagesDto` 等）；portal-desktop 直接把 `data` 原样返回给渲染层。
+- **hear 的 `limit`/`since` 分页**：portal-desktop 把 `limit` 写死在路由里（bonfire 100 / fireside 50），没有 `since`、没有 `total_count`/`global_latest_seq` 语义。
+- **错误码映射**：portal-desktop 用 `{ok:false, code:'auth'|'forbidden'|'not-found'|'http'|'network'}`，本单元用 `error.code` 错误码目录（`AUTH_REQUIRED`/`NOT_SENT`/`RESULT_UNKNOWN`/`RATE_LIMITED`/`IDENTITY_MISMATCH`/`PAIR_*` 等）。
+- **`AUTH_REQUIRED` 判定**：本单元把读路径的 `403` 也当作 `AUTH_REQUIRED`，写路径的 `403` 当 `NOT_SENT`；portal-desktop 一律 `forbidden`。
+- **响应体上限 1MB**（portal-desktop 是 4MB）、**`referrerPolicy:'no-referrer'`**、**`cache:'no-store'`**（portal-desktop 都没有）。
+- **SSE 客户端流**（`/api/client/stream` + `consumeEvents` + hello 校验 + 90 秒看门狗 + 指数退避重连）；portal-desktop 的 `live.ts` 是另一套。
+- **身份纪元校验**（`_context`/`_epoch`/`SESSION_CHANGED`）与**单飞**（`_credentialLoading`/`_verification`）。
+- **Town ID 首次迁移绑定**（REST + SSE 两端一致才 `bindTownId`）。
+- **配对落盘失败后的 `_pairReceipt` 暂存 + `retryPairStorage()`**。
+- **`mentions` 回执与 `recipient_warning.candidates` 歧义收件人**处理。
