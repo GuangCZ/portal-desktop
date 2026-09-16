@@ -146,3 +146,154 @@
   若 `!list || list.length > 2000 || (record(value) && (ok===false || hasOwn 'error' || (has_more !== undefined && has_more !== false) || (hasMore !== undefined && hasMore !== false) || (total !== undefined && (!sequence(total) || total !== list.length)) || (offset !== undefined && offset !== 0)))` → `invalid('Town 居民目录不完整，请刷新后重试。')`。
   逐项：`id = memberId(item)`；`record(item) && typeof id==='string' && ID.test(id) && typeof display_name==='string' && !seen.has(id)`，否则 `invalid('Town 居民目录格式发生变化，请刷新后重试。')`。
   返回 `{id, name: display(display_name,100) || id, description: display(about,500), status: display(status,50), human: null}`（**`human` 恒为 null——不从 ID 推断人类身份**）。
+
+### 源码 src/town-client.cjs（383 行，已读完）
+
+导出面：`module.exports = {TownClient, consumeEvents}`。
+顶部注释：`Public SDK protocol: jeremyliu16/beings-town-client-sdk @ ea56534, 2026-09-15.`
+
+**依赖（移植时要处理的注入点）**：
+- `require('./being-town-reader.cjs').validateTownToolResult` —— 中继模块，**不在本单元范围**，保留为注入实现 `validateResult`。
+- `require('./town-library-contract.cjs').{libraryRoute, libraryQuery}` —— 本单元内。
+- `require('../renderer/town-mentions.js').candidates` —— **renderer 层**，portal-desktop 的 main 不得 import renderer，需注入或搬到 shared（见下面的 town-mentions 摘要）。
+- `require('./services.cjs').sanitizeText` —— 脱敏，注入。
+- `require('./town-wire.cjs').{validId, normalizeTownResponse}` —— 本单元内。
+
+**常量**：
+- `ORIGIN = 'https://beings.town'`
+- `MAX = 1024 * 1024`（1MB，同时用于 SSE 与 JSON 响应体上限）
+- `IDENTITY_QUERY = {since_id: '9223372036854775807'}`
+- `ROUTES`（Map，route → 允许的 query key）：`/api/bonfire/hear`→`['since','limit','compact']`；`/api/bonfire/mentions`→`['since_id']`；`/api/fireside/list`→`[]`；`/api/fireside/members`→`['fireside_id']`；`/api/fireside/hear`→`['fireside_id','since','limit','compact']`；`/api/messages`→`[]`
+- `SPEAK_LIMIT = {bonfire: 4000, fireside: 32000}`
+- `MESSAGES`（错误码 → 中文文案，逐字保留）：
+  - `AUTH_REQUIRED: '请用 Being 提供的六位配对码连接 Town。'`
+  - `IDENTITY_MISMATCH: 'Town 授权身份与当前 Being 不一致，请重新配对。'`
+  - `NOT_CONNECTED: '请先连接 Being。'`
+  - `SESSION_CHANGED: 'Being 连接已变化，旧 Town 请求已取消。'`
+  - `INVALID_REQUEST: 'Town 请求参数无效。'`
+  - `INVALID_RESPONSE: 'Town 返回格式无效，已保留上次同步内容。'`
+  - `NETWORK_ERROR: 'Town 连接中断，请稍后重试。'`
+  - `RATE_LIMITED: 'Town 请求过于频繁，请稍后重试。'`
+  - `SERVICE_ERROR: 'Town 服务暂时不可用。'`
+  - `ABORTED: 'Town 请求已取消。'`
+  - `BUSY: 'Town 正在配对，请等待完成。'`
+  - `NOT_SENT: '本次消息未发送。'`
+  - `RESULT_UNKNOWN: '发送结果未确认，请刷新消息核对后再决定是否重发。'`
+  - `STORAGE_ERROR: 'Town 身份对应关系未能保存，现有配对已保留，请重试。'`
+  - `PAIR_CODE_INVALID: '配对码无效、已过期或已使用，请向 Being 获取新码。'`
+  - `PAIR_RESULT_UNKNOWN: '配对请求的结果未确认，请先核对；不要重复提交同一码。'`
+  - `PAIR_STORAGE_ERROR: '已取得 Town 授权，但未能保存到本机。请保持应用打开，点击「重试保存配对」。'`
+- `fail(code)` = `Object.assign(new Error(MESSAGES[code] || MESSAGES.SERVICE_ERROR), {code})`；`failWith(code, message)` = 自定义文案。
+- `Object.hasOwn(MESSAGES, error.code)` 是「已分类错误」判据，多处使用。
+
+**`readQuery(route, query = {})`**（内部纯函数）：
+- `libraryRoute(route)` 为真 → 直接 `libraryQuery(route, query)`。
+- 否则：`!ROUTES.has(route) || !query || Object.getPrototypeOf(query) !== Object.prototype || Object.keys(query).some(k => !ROUTES.get(route).includes(k))` → `INVALID_REQUEST`。
+- 逐项：`since_id` 必须 `=== IDENTITY_QUERY.since_id`；`compact` 必须 ∈ `[true, false, 'true', 'false']`；其余必须 `typeof ∈ ['string','number']`，字符串必须 `/^(0|[1-9]\d*)$/`，`Number.isSafeInteger(Number(value))`，`Number(value) >= (key === 'since' ? 0 : 1)`，`limit` 且 `Number(value) > 200` → bad。
+- 收尾：`route === '/api/bonfire/mentions' && query.since_id !== IDENTITY_QUERY.since_id` 或 `route ∈ ['/api/fireside/hear','/api/fireside/members'] && !query.fireside_id` → bad。
+- 返回 **原 query 对象**（非 library 路由不复制）。
+
+**`consumeEvents(body, onEvent, onActivity = () => {})`**（导出）：SSE 解析。
+- `!body` → `INVALID_RESPONSE`。
+- `body.getReader()` + `new TextDecoder('utf-8', {fatal: true})`。
+- 状态 `pending=''`, `type=''`, `data=[]`, `size=0`。
+- `line(value)`：空行 → 若 `data.length` 则 `JSON.parse(data.join('\n'))`（parse 失败 → `INVALID_RESPONSE`），`await onEvent(type, parsed)`；随后重置 `type=''`, `data=[]`, `size=0`。
+  否则 `size += value.length`，`size > MAX` → `INVALID_RESPONSE`；以 `:` 开头的注释行忽略；按第一个 `:` 切分 key/content，content 去掉一个前导空格；`key==='event'` → `type = content`；`key==='data'` → `data.push(content)`。
+- 主循环：`reader.read()`，`done` 退出；每块 `onActivity()`；`decoder.decode(part.value, {stream:true})` 追加到 `pending`；用 `/\r\n|\r(?!$)|\n/` 反复切行（**`\r(?!$)` 保证结尾单独的 `\r` 留到下一块**）；`pending.length + size > MAX` → `INVALID_RESPONSE`。
+- EOF 时未完成的事件被丢弃（重连后 REST 校准）。
+- `finally { void reader.cancel().catch(() => {}); }`
+
+**`class TownClient`**：
+构造 `{getContext, store, fetchImpl = globalThis.fetch, onChange = () => {}, onEvent = () => {}, retryMs = 1000}`。
+私有字段：`_epoch=0`、`_requests=new Set()`、`_token=null`、`_townId=''`、`_credentialLoading=null`、`_verification=null`、`_verified=''`、`_stream=null`、`_timer=null`、`_enabled=false`、`_pairing=false`、`_pairReceipt=null`。
+`_state` 初值：`{status:'unpaired', paired:false, beingId:'', loomBeingId:'', townId:'', displayName:'', errorCode:'', authReason:'', pairingPending:false, pairErrorCode:''}`。
+
+- `state()` → `{...this._state}`；`get pairing()` → `this._pairing`。
+- `_set(value)`：所有 key 都未变则直接返回（不触发 onChange）；否则 `Object.assign` 后 `try { this.onChange(this.state()); } catch {}`。
+- `_context(expected)`：`const c = this.getContext()`；`!c?.connected || !c.key || !validId(c.loomBeingId || c.beingId)` → `NOT_CONNECTED`。`next = {key, loomBeingId: c.loomBeingId || c.beingId, revision: c.revision, epoch: this._epoch}`；`expected` 存在且 `JSON.stringify` 不等 → `SESSION_CHANGED`。返回 `next`。
+- `reset()`：`_epoch++`；`_enabled=false`；`clearTimeout(_timer)`；abort 全部 `_requests` 并清空；清 `_stream/_token/_townId/_credentialLoading/_verification/_verified/_pairReceipt`；`_set` 回初值。
+- `_credential(ctx)`：无 token 时单飞加载（`_credentialLoading`）。优先 `store.loadCredential(ctx.key, ctx.loomBeingId)`，否则 `{token: await store.load(...)}`。加载出错先 `_context(ctx)`（纪元校验），若 `error.code === 'AUTH_REQUIRED'` 则 `_set({authReason: ['SECURE_STORAGE_UNAVAILABLE','CREDENTIAL_UNREADABLE'].includes(error.reason) ? error.reason : 'CREDENTIAL_UNREADABLE'})` 后抛出。成功后 `_context(ctx)`；`_token = saved?.token || null`；`_townId = saved?.townId || ''`；`typeof saved?.display === 'string'` → `_set({displayName: sanitizeText(saved.display).slice(0,100)})`。单飞 `finally` 清理只在同一个 pending 时清。
+  无 token → `_set({authReason:'NO_SAVED_CREDENTIAL'})` + `AUTH_REQUIRED`。
+  有 token → `_set({paired:true, beingId: ctx.loomBeingId, loomBeingId: ctx.loomBeingId, authReason:''})`，返回 token。
+- `_identity(value, ctx, legacy)`：非对象/数组 → `INVALID_RESPONSE`。有 `town_id`：`!validId(town_id)` → `INVALID_RESPONSE`；`(this._townId && town_id !== this._townId) || (hasOwn legacy && value[legacy] !== ctx.loomBeingId)` → `IDENTITY_MISMATCH`；返回 `town_id`。无 `town_id`：`!validId(value[legacy])` → `INVALID_RESPONSE`；`value[legacy] !== ctx.loomBeingId` → `IDENTITY_MISMATCH`；返回 `''`。
+- `_hello(value, ctx)`：`anonymous === true` → `AUTH_REQUIRED`；`anonymous !== false || token_kind !== 'client'` → `INVALID_RESPONSE`；否则 `_identity(value, ctx, 'being_id')`。
+- `_probeHello(ctx, token, signal)`：单独一次 SSE 只为取 hello。`AbortSignal.any([controller.signal, AbortSignal.timeout(20000), ...(signal?[signal]:[])])`。`fetch(new URL('/api/client/stream', ORIGIN).href, {headers:{Accept:'text/event-stream', Authorization:`Bearer ${token}`}, signal, credentials:'omit', redirect:'error', referrerPolicy:'no-referrer', cache:'no-store'})`。`401/403` → 取消 body → `AUTH_REQUIRED`；`!ok || redirected || content-type 不含 text/event-stream` → `INVALID_RESPONSE`。`consumeEvents` 回调里 `type !== 'hello'` → `INVALID_RESPONSE`；拿到后 `throw complete`（Symbol 哨兵）。正常跑完 → `NETWORK_ERROR`。catch 里先 `_context(ctx)`，`error !== complete` → 已分类则原样抛，否则 `NETWORK_ERROR`；否则返回 identity。
+- `_verifyIdentity(ctx, token, {signal, hello})`：单飞 `_verification`。
+  1. `_json('/api/bonfire/mentions', {ctx, query: IDENTITY_QUERY, token, signal})` → `townId = _identity(identity, ctx, 'being')`。
+  2. `townId && !this._townId`（首次迁移）：`streamed = hello ? this._hello(hello, ctx) : await this._probeHello(...)`；`streamed !== townId` → `IDENTITY_MISMATCH`；`_context(ctx)`；`await store.bindTownId?.(ctx.key, ctx.loomBeingId, token, townId, () => {纪元仍有效})`，出错时 `IDENTITY_MISMATCH`/`SESSION_CHANGED` 原样抛，其余 → `STORAGE_ERROR`；`_context(ctx)`；`this._townId = townId`。
+  3. `_context(ctx)`；`_verified = ctx.key`。
+  4. `displayName`：优先 `identity.display_name`（string → `sanitizeText().slice(0,100)`），否则 `identity.display`，否则沿用 `_state.displayName`。
+  5. `renamed = this._state.townId === this._townId && this._state.displayName && displayName && this._state.displayName !== displayName`。
+  6. `_set({loomBeingId, townId: this._townId, displayName})`；`renamed` → `try { onEvent({type:'profile_changed', townId}) } catch {}`（注释：改名通知不能使已验证身份失效）。
+  单飞 await 后 `_context(ctx)`；若传了 `hello`，再 `_hello(hello, ctx)`，`id && id !== this._townId` → `IDENTITY_MISMATCH`。
+- `_json(route, {ctx, query, token, body, signal, write=false})`：
+  - `pairing = route === '/api/client/pair/confirm'`。
+  - `AbortSignal.any([controller.signal, AbortSignal.timeout(20000), ...signal])`；URL query 用 `url.searchParams.set(k, String(v))`。
+  - 已 aborted → `ABORTED`。
+  - fetch：`method: body ? 'POST' : 'GET'`；headers `Accept: 'application/json'` + 有 token 加 Bearer + 有 body 加 `Content-Type: application/json`；`credentials:'omit'`、`redirect:'error'`、`referrerPolicy:'no-referrer'`、`cache:'no-store'`。
+  - 状态码：`401` → `AUTH_REQUIRED`；`403` → write 时 `failWith('NOT_SENT','你不是该围炉的成员；本次消息未发送。')`，读时 `AUTH_REQUIRED`；`429` → `RATE_LIMITED`；`pairing && 400` → `PAIR_CODE_INVALID`；`rejected = write && status === 400`；`(!res.ok && !rejected) || res.redirected` → `SERVICE_ERROR`。
+  - `content-type` 不含 `application/json` 或 `Number(content-length) > MAX` → `INVALID_RESPONSE`。
+  - 流式读 body 累计长度，`> MAX` → `INVALID_RESPONSE`；`JSON.parse(Buffer.concat(chunks).toString('utf8'))`。
+  - `rejected` 分支：`choices = candidates(value?.recipient_warning?.candidates || value?.candidates || value?.error?.candidates)`；`detail = sanitizeText(value.error 或 value.message 字符串).slice(0,500)`；抛 `failWith('NOT_SENT', choices.length ? '收件人有歧义；本次私信未发送，请选择 Town ID。' : 'Town 拒绝了本次发送参数；消息未发送。')` 并附 `{candidates: choices, ...(detail ? {detail} : {})}`。
+  - `!value || typeof !== 'object' || value.ok === false || hasOwn 'error'` → `INVALID_RESPONSE`。
+  - `finally { void res.body?.cancel().catch(()=>{}); }`（内层）。
+  - catch：`_context(ctx)`；`signal?.aborted` → `ABORTED`；已分类 → 原样；`error instanceof SyntaxError` → `INVALID_RESPONSE` 否则 `NETWORK_ERROR`；最终 `fail(pairing && NETWORK_ERROR ? 'PAIR_RESULT_UNKNOWN' : write && NETWORK_ERROR ? 'RESULT_UNKNOWN' : code)`。
+  - 外层 `finally { controller.abort(); this._requests.delete(controller); }`
+- `pair(value)`：校验 `Object.getPrototypeOf(value) === Object.prototype`、只能有 `code` 键、`typeof code === 'string'`、`/^[A-Z0-9]{6}$/.test(code.toUpperCase())`，否则 `INVALID_REQUEST`。`_pairing` → `BUSY`。`_pairReceipt` 存在 → `PAIR_STORAGE_ERROR`。
+  `ctx = this._context()`；`_set({pairErrorCode:''})`；`store.assertAvailable?.()`。
+  `boundTownId = this._townId`；若为空且有 `store.loadCredential`，尝试读已保存 townId（`AUTH_REQUIRED` 以外的错误抛出；注释：重新配对可以修复读不了的旧文件），再 `_context(ctx)`。
+  `identity = ctx.loomBeingId.startsWith('t_') ? {town_id: ctx.loomBeingId} : {being_id: ctx.loomBeingId}`。
+  `data = await this._json('/api/client/pair/confirm', {ctx, body: {...identity, code: code.toUpperCase()}})`。
+  校验：`typeof data.token !== 'string' || !/^[a-f0-9]{64}$/.test(data.token) || data.ok !== true` → `INVALID_RESPONSE`。
+  `modern = hasOwn(data,'town_id')`；`modern && (!validId(town_id) || !town_id.startsWith('t_'))` → `INVALID_RESPONSE`。
+  `(!modern || hasOwn(data,'being_id')) && data.being_id !== ctx.loomBeingId` → `IDENTITY_MISMATCH`。
+  `modern && ((ctx.loomBeingId.startsWith('t_') && !data.town_id.startsWith(ctx.loomBeingId)) || (boundTownId && boundTownId !== data.town_id))` → `IDENTITY_MISMATCH`。
+  `_pairReceipt = {ctx, token, townId: modern ? data.town_id : '', display: typeof data.display === 'string' ? sanitizeText(data.display).slice(0,100) : ''}`；`return await this._savePairReceipt()`。
+  catch：若 `ctx` 已取得 → `_context(ctx)` + `_set({pairErrorCode: 已分类 ? error.code : 'STORAGE_ERROR'})`；重抛。`finally { this._pairing = false; }`
+- `_savePairReceipt()`：无 receipt → `INVALID_REQUEST`。`_context(ctx)`。`store.save(key, loomBeingId, token, townId, display, () => 纪元仍有效)`。
+  出错：`_context(ctx)` → `this.lifecycle({enabled:false})` → `_set({status:'pair_storage_error', pairingPending:true, errorCode:'PAIR_STORAGE_ERROR'})` → 抛 `PAIR_STORAGE_ERROR`（token 留在内存，只重试落盘）。
+  成功：`_context(ctx)`；`this.reset()`；重新装回 `_token`/`_townId`；`_set({status:'connecting', paired:true, beingId, loomBeingId, townId, displayName: display, errorCode:''})`；`lifecycle({enabled:true})`；返回 `state()`。
+  > 注意 `reset()` 会 `_epoch++`，所以 receipt 里的 ctx 在此之后已失效——这是**故意的顺序**。
+- `retryPairStorage()`：`_pairing` → `BUSY`；置 `_pairing=true`，`_savePairReceipt()`，`finally` 复位。
+- `forget()`：`_pairing` → `BUSY`；`ctx = _context()`；`reset()`；`await store.remove(ctx.key)`；返回 `state()`。
+- `read(route, {query = {}, signal} = {})`：`query = readQuery(route, query)`；hear 路由补 `{compact:false, ...query}`；`ctx = _context()`；`token = await _credential(ctx)`；`_verified !== ctx.key` → `_verifyIdentity`；`value = await _json(route, {ctx, query, token, signal})`；`_context(ctx)`；若 `hasOwn(value,'town_id')`：`id = _identity(value, ctx, 'being')`，`!this._townId || id !== this._townId` → `IDENTITY_MISMATCH`。返回 `validateTownToolResult(normalizeTownResponse(value, route, ctx.loomBeingId), route, ctx.loomBeingId, query)`。
+- `identity({signal, force = false} = {})`：`ctx`+`token`；`force || _verified !== ctx.key` → `_verifyIdentity`；`_context(ctx)`；返回 `{loomBeingId, townId: this._townId, displayName: this._state.displayName}`。
+- `speak(value)`：键白名单 `['kind','message','firesideId','replyTo','signal']`，原型必须是 `Object.prototype`，否则 `INVALID_REQUEST`。
+  `kind ∉ ['bonfire','fireside']` → `INVALID_REQUEST`。
+  `typeof message !== 'string' || !message.trim() || message.includes('\0')` → `NOT_SENT` `'请输入要发送的内容；本次消息未发送。'`。
+  `[...message].length > SPEAK_LIMIT[kind]` → `NOT_SENT` `` `消息超过 ${SPEAK_LIMIT[kind]} 字上限；本次消息未发送。` ``（按码点计）。
+  `kind==='fireside'` 且 `!/^[1-9]\d{0,15}$/.test(String(firesideId)) || !Number.isSafeInteger(Number(firesideId))` → `NOT_SENT` `'围炉无效；本次消息未发送。'`。
+  `replyTo !== ''` 且同样的数字校验失败 → `NOT_SENT` `'被回复的消息无效；本次消息未发送。'`。
+  body：`{message, ...(fireside ? {fireside_id: Number(firesideId)} : {}), ...(replyTo !== '' ? {reply_to: Number(replyTo)} : {})}`，`_json('/api/${kind}/speak', {..., write: true})`。
+  回执校验：`try { id = _identity(result, ctx, 'being'); if (id && id !== this._townId) throw IDENTITY_MISMATCH } catch { throw fail('RESULT_UNKNOWN') }`（**任何身份校验异常都折叠为 `RESULT_UNKNOWN`**）。
+  `result.ok !== true || !Number.isSafeInteger(result.seq) || result.seq < 1` → `RESULT_UNKNOWN`。
+  `mentions`：数组 → `filter(string).slice(0,20).map(n => n.slice(0,100))`，否则 `[]`。
+  返回 `{ok:true, id: String(result.seq), seq: result.seq, mentions, ...(hasOwn(result,'mention_warnings') ? {mention_warnings: result.mention_warnings} : {}), via: typeof result.via === 'string' ? result.via.slice(0,120) : ''}`。
+- `sendDirectMessage(value)`：键白名单 `['recipient','content','replyTo','signal']`。
+  `recipient` 非字符串/空白/长度 >100/含 `\0` → `NOT_SENT` `'请填写有效的收件人；本次私信未发送。'`。
+  `content` 非字符串/空白/含 `\0` → `NOT_SENT` `'请输入要发送的内容；本次私信未发送。'`。
+  `[...content].length > SPEAK_LIMIT.fireside`（32000）→ `NOT_SENT` `` `私信超过 ${SPEAK_LIMIT.fireside} 字上限；本次私信未发送。` ``。
+  `replyTo !== ''` 且（非字符串/空白/长度 >200）→ `NOT_SENT` `'被回复的私信无效；本次私信未发送。'`。
+  `ctx = _context()`；`recipient.trim() === ctx.loomBeingId` → `NOT_SENT` `'Town 不允许给自己发私信；本次私信未发送。'`。
+  `token`+（必要时）`_verifyIdentity`，**之后**再检查 `recipient.trim() === this._townId` → 同一条自发私信文案。
+  body `{recipient: recipient.trim(), content, ...(replyTo !== '' ? {reply_to: replyTo} : {})}`（**reply_to 是字符串，不转数字**）。
+  `result.ok !== true || typeof result.message_id !== 'string' || !result.message_id` → `RESULT_UNKNOWN`。
+  `resolvedRecipient = result.recipient_town_id ?? result.recipient`。
+  返回 `{ok:true, id: message_id.slice(0,200), recipient: 字符串 ? slice(0,100) : '', via: 字符串 ? slice(0,120) : ''}`。
+- `lifecycle({enabled})`：关闭 → `_enabled=false`、清 timer、abort 全部请求、`_stream=null`、`_verified=''`；若 status ∈ `['connected','connecting','reconnecting']` → `_set({status:'paused'})`。
+  开启 → `_enabled=true`；`!this._stream && !this._timer && !this._pairReceipt && !['auth_required','identity_mismatch'].includes(status)` → `void this._connect()`。
+- `_connect()`：`ctx = _context()` 失败直接 return。controller 入 `_requests` 并记为 `_stream`。
+  `token = await _credential(ctx)`；若已 abort return；`_set({status:'connecting', errorCode:''})`；`timer = setTimeout(abort, 20000)`。
+  fetch `/api/client/stream`（同 `_probeHello` 的头与选项，但 `signal: controller.signal`）。
+  `401/403` → `AUTH_REQUIRED`；`!ok || redirected || content-type 不含 text/event-stream` → `SERVICE_ERROR`。
+  `consumeEvents` 回调：
+  - `type==='hello'`：已收过 hello → `INVALID_RESPONSE`；`townId = _hello(data, ctx)`；`townId && !this._townId` → `await _verifyIdentity(ctx, token, {signal: controller.signal, hello: data})`；`_context(ctx)`+abort 检查；`hello=true`；`this.retryMs = 1000`；重置看门狗为 **90000ms**；`_verified = ctx.key`；`_set({status:'connected', loomBeingId, townId, errorCode:''})`；`onEvent({type:'hello'})`。
+  - `type ∈ ['bonfire','fireside','dm']`：`!hello || 非对象 || 数组` → `INVALID_RESPONSE`；`onEvent({type, ...(type==='fireside' ? {firesideId: String(data.fireside_id || '')} : {})})`（**载荷只是失效提示，不进状态**）。
+  - `type==='error'` → `SERVICE_ERROR`。
+  - `onActivity`：`hello` 之后每次数据到达重置 90 秒看门狗。
+  正常跑完 → `NETWORK_ERROR`。
+  catch：`ctx.epoch !== this._epoch || !this._enabled || this._stream !== controller` → 直接 return（迟到结果丢弃）。`code = 已分类 ? error.code : 'NETWORK_ERROR'`；`_verified=''`；`blocked = code ∈ ['AUTH_REQUIRED','IDENTITY_MISMATCH']`；`_set({status: AUTH_REQUIRED?'auth_required':IDENTITY_MISMATCH?'identity_mismatch':'reconnecting', errorCode: code})`；非 blocked → `_timer = setTimeout(重连, this.retryMs)`，`this.retryMs = Math.min(retryMs*2, 30000)`，`this._timer.unref?.()`。
+  `finally`：清 timer、abort controller、从 `_requests` 删除、`_stream === controller` 时清空。
+
+**状态机 status 取值**：`unpaired` / `connecting` / `connected` / `reconnecting` / `paused` / `auth_required` / `identity_mismatch` / `pair_storage_error`。
+**authReason 取值**：`''` / `NO_SAVED_CREDENTIAL` / `SECURE_STORAGE_UNAVAILABLE` / `CREDENTIAL_UNREADABLE`。
