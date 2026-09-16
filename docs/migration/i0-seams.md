@@ -113,3 +113,181 @@ shared 纯净 + `renderer/shared/` 不反向依赖；`renderer/chat/` 必须不�
 - [x] 读 integration-plan.md
 - [x] 读真实代码（main/extensions/chat-ipc/preload/shared/renderer/architecture/构建配置）
 - [x] 核实同源副本（含方案标「未核实」的三处）
+- [x] §2.5 `main/common/` 四个模块 + 一次性收敛全部副本 + `tests/identity-partition.test.ts`
+- [x] §2.1 子系统注册表 + chat 改造成第一个子系统 + `tests/subsystem-registry.test.ts`
+- [x] §2.1 main.ts 注入 `electron` 门面（唯一一处改动）
+- [x] §2.2 preload 每子系统一个 channels 文件
+- [x] §2.3 shared 类型拆分为聚合器
+- [x] §2.4 renderer 四个插槽 + model 注册表 + `tests/renderer-slots.test.ts`
+- [x] §2.6 ws 提级、node-pty + xterm + auto-unpack-natives、`packagerIgnore`
+- [x] §2.7 typecheck / vitest / architecture / prepare:desktop / **package 实测通过**
+- [x] 记录（本文件 + MIGRATION.md「集成阶段 I0」）
+
+---
+
+## 接缝契约（给 I1–I7）
+
+### A. 主进程子系统
+
+**新增**：`desktop/main/subsystems/types.ts`（契约）、`desktop/main/subsystems/chat.ts`（第一个子系统，也是模板）。
+**改写**：`desktop/main/extensions.ts` 变成注册表 + 生命周期扇出。`desktop/main/main.ts` 只有一处调用，**I0 之后任何单元都不得再改 main.ts**。
+
+一个子系统文件固定长这样：
+
+```ts
+// desktop/main/subsystems/tools.ts
+import type { DesktopSubsystem, SubsystemContext } from './types';
+export interface ToolsSubsystem extends DesktopSubsystem { readonly link: DesktopToolLink }
+declare module './types' { interface SubsystemMap { 'tools': ToolsSubsystem } }
+export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
+  // 只构造自己的实例；跨子系统引用一律存成惰性 getter
+  const sessions = () => ctx.registry.get('chat')?.sessions ?? null;
+  ...
+  return { key: 'tools', link, connectionVerified(c) {...}, async quitting() {...} };
+}
+```
+
+**铁律**：install 的同步体里**不得** `ctx.registry.get(...)` 取值，只能把它包成 `() => ctx.registry...` 的闭包。
+chat → orchestration → tools → orchestration → chat 是个环，任何构造期解引用都会拿到 `null`。
+`tests/subsystem-registry.test.ts` 用两个假子系统把「两种安装顺序都能解析」钉住了。
+
+`SubsystemContext` 的成员：
+`handle`（main.ts 的 `createTrustedHandle` 产物，自带来源校验 + quitting 守卫）、`exclusive`（串行队列）、`window()`、
+`store`（`SubsystemSettings`）、`electron`（`ElectronBindings` 门面）、`userData`、`desktopId`、`clientVersion`、`fetchImpl`、
+`onError(scope, error)`、`registry`、`push(channel, payload)`（**窗口守卫已经在里面**，子系统不必自己判断 destroyed）。
+
+`DesktopSubsystem` 可选实现 `connectionVerified(connection)`（**同步，不得 await `exclusive`**，它自己就跑在 exclusive 里）、
+`connectionCleared()`、`quitting()`、`ready`。扇出规则：verified / cleared 按安装顺序，quitting 逆序；任何一个抛错只记 `onError`，不打断其余。
+安装抛错记 `subsystem-install:<函数名>`，不影响其它子系统。
+
+`SubsystemSettings` 与方案 §2.1 的**偏差**：方案写的是一个 `settings: Settings & Record<string, unknown>`；
+真实的 `SettingsStore.settings` 只有类型化的那半，未知键在私有 `disk` 里。于是拆成两个成员：
+`settings: Settings` 与 `extras: Readonly<Record<string, unknown>>`，外加 `saveExtra(patch)`（合并进 settings.json，保留其它所有键，值为 `undefined` 即删键）。
+`SettingsStore` 新增了 `extras` getter 与 `saveExtra`。**I6 的侧栏 / 编排设置写盘走这两个，不要给 `Settings` 加字段**（0.8.x 不认识）。
+
+`ElectronBindings` 里 `WebContentsView` / `session` / `net.request` 是 `unknown`：给它们真实类型会逼每个建上下文的测试造一个真 electron 类。
+需要它们的单元（I3 的工具浏览器、I7 的 Portal 窗口）在使用处 `as` 一次并写明理由。
+`clipboard` 是 **Promise 形态**（`readText(): Promise<string>`）——Electron 44 实测如此，不是文档推断。
+
+### B. preload 通道
+
+**新增**：`desktop/preload/channels/bridge.ts`（`subscribe` / `enveloped` 两个助手）、`channels/chat.ts`、`channels/index.ts`。
+`desktop/preload/desktop-channels.ts` 保留为 re-export（一个版本），`preload.ts` 的 `isMainFrame` 守卫原样不动，且**不会再变**（它 spread `desktopChannels`）。
+
+### C. shared 类型
+
+`desktop/shared/desktop-types.ts` 变成聚合器，原内容搬到 `desktop/shared/chat-types.ts`。
+各单元建自己的 `desktop/shared/<key>-types.ts`，在聚合器加一行 `export *`。
+**类型名不能撞车**：`export *` 撞名是静默丢弃，按 `Chat*` 的做法给自己的类型加前缀。
+
+### D. renderer 插槽
+
+**新增**：`desktop/renderer/app/slots.tsx`（`PANEL_SLOTS` / `SIDEBAR_SLOTS` / `TOPBAR_SLOTS` / `SHEET_SLOTS` 四个数组 + 四个读取函数）、
+`desktop/renderer/app/models/registry.ts`（`FEATURE_MODELS` + `AppFeatureModels`）。
+`page.tsx`（`<Browser>` 之后挂面板、`<Town>` 之后挂 sheet）、`sidebar.tsx`（head / scroll / foot 三处）、`topbar.tsx`（`topbar-actions` 开头）
+已经接好，**这三个文件后续单元不需要再改**。
+`AppModel` 新增 `readonly features`，构造末尾建全部注册 model（单个抛错只 toast，不阻断），`start()` 里把每个 model 的 `subscribe` 接进 `changed()`。
+
+排序是 `order` 升序、同 order 按 `key` 字典序，所以数组里的位置没有语义；`order` 请用百位（100、200…）留空隙。
+插槽组件自带边框、空态与错误处理，壳层只负责 mount。`tests/renderer-slots.test.ts` 钉住了这些规则。
+
+### E. 六个一行式冲突点（后续单元只允许在这些文件里 append）
+
+| 文件 | 加什么 |
+| --- | --- |
+| `desktop/main/extensions.ts` | 一行 `import { installXSubsystem } from './subsystems/x';` + `INSTALLERS` 里一行 `installXSubsystem,` |
+| `desktop/preload/channels/index.ts` | 一行 `import { x } from './x';` + `desktopChannels` 里一行 `x,` |
+| `desktop/shared/desktop-types.ts` | 一行 `export * from './x-types';` |
+| `desktop/shared/types.ts` | `DesktopAPI` 的注释块内一行 `x: XAPI;`（按字母序排在 `chat` 之后） |
+| `desktop/renderer/app/slots.tsx` | 一行 import + 对应数组里一行条目 |
+| `desktop/renderer/app/models/registry.ts` | 一行 import + `FEATURE_MODELS` 里一行条目 |
+
+**只有 I0 能改**：`desktop/main/main.ts`、`package.json`、`forge.config.ts`、`vite.*.config.ts`。
+需要新依赖（比如 I3 若还缺什么）就回到 I0 补一次，不要在自己的单元里改这四处。
+`DesktopSubsystem` 接口若要加成员（比如 §3.4 提到的 `linked?()`），同样回 I0。
+
+### F. `desktop/main/common/`（共享正式实现）
+
+| 文件 | 导出 |
+| --- | --- |
+| `common/sanitize.ts` | `sanitizeText(value, secrets?: readonly unknown[])` |
+| `common/platform.ts` | `desktopPlatform`、`desktopEnvironment`、`shellPath`、`consoleEnvironment`、`WINDOWS_RUNNER`、`DesktopPlatformInfo` |
+| `common/loom-connection.ts` | `parseConnection`、`sessionPartition`、`endpoint`、`publicModelUrl`、`allowedNavigation`、`LoomConnection`、`ConnectionIdentity` |
+| `common/message-context.ts` | `desktopMessageContext`、`DESKTOP_PORTAL_NAME`、`DesktopRuntime`、`DesktopMessageContextOptions` |
+
+**偏差（与方案 §2.5 的分步走不同）**：方案让 I0 只建文件、各单元自己删副本。本次按任务要求**在 I0 里一次收敛完**——
+副本全部删除、导入全部改指 `common/*`，所以 I1–I5 的 PR 里**不再有「删除自己的副本」这一步**（他们 rebase 后基线已经是收敛后的）。
+已删除：`town/session/sanitize.ts`、`town/channel/sanitize.ts`、`town/channel/loom-connection.ts`、
+`tools/platform.ts`、`tools/terminal/platform.ts`、`tools/message-context.ts`、`chat/context.ts`、`orchestration/vendored.ts`。
+`tools/security.ts` 只剩 `protocolFile`（核实过：除 `tests/tools-security.test.ts` 外无人使用）。
+`tools/console.ts` 去掉了内联的 `ENVIRONMENT_KEYS` / `consoleEnvironment` / `WINDOWS_RUNNER`。
+`chat/titles.ts` 去掉了本地 `sanitizeText`。`chat/session-recovery.ts` 改 import `common` 的 `sessionPartition`。
+
+`tests/architecture.test.ts` 新增一条：`main/common/` 只能 import node 内建与自己目录内的文件。
+往 `common/` 加东西前先想清楚——它是所有单元的公共底座。
+
+**仍留在原地、不要合并**的三份 SSE 解析（`town/session/client.ts` 的 `consumeEvents`、`town/channel/sse.ts`、`chat/being-chat.ts` 的 `consumeEvents`）：
+上限与错误码语义不同（Town 1MB + `INVALID_RESPONSE`；chat 自带码表），u3 已实测 `data:null` 必须原样传。
+
+### G. 身份字符串（磁盘格式）
+
+`beingIdentityKey(address)` 现在是 `sessionPartition(parseConnection(address))` 的一行代理。
+`tests/identity-partition.test.ts` 用七个 BeingDesktop 夹具地址（含 `api=`、`relay_secret=`、`secret=` 别名、路径尾斜杠、http 回环）
+把两个入口与**写死的 32 位十六进制常量**钉在一起。改动 `common/loom-connection.ts` 时这条会先炸——它就是干这个的。
+
+### H. 依赖与打包（**本节含一个推翻方案的实测结论**）
+
+`ws` 8.21.3、`node-pty` 1.1.0、`@xterm/xterm` 6.0.0、`@xterm/addon-fit` 0.11.0 都进了 `dependencies`（版本与 BeingDesktop 0.8.26 一致）；
+`@electron-forge/plugin-auto-unpack-natives` ^7.11.2 进 devDependencies 并挂进 `forge.config.ts`；
+`vite.main.config.ts` 的 external 从 `['electron']` 变成 `['electron', 'node-pty', 'ws']`。
+
+**方案 §2.6 的前提是错的，实测推翻**：方案说「@electron/packager 默认 prune devDependencies，所以把 ws 挪到 dependencies 就能进 asar」。
+真实情况是 `@electron-forge/plugin-vite` 的 `resolveForgeConfig` 把 `packagerConfig.ignore` 设成
+`file => !file.startsWith('/.vite')`（`node_modules/@electron-forge/plugin-vite/dist/VitePlugin.js:114-131`），
+于是 **node_modules 整棵树根本不进包**——第一次打包出来的 asar 只有 15 个条目，一个 node_modules 都没有。
+提级到 dependencies 是必要条件，不是充分条件。
+
+修法：`forge.config.ts` 自己提供 `packagerConfig.ignore`（插件检测到已有 ignore 就不覆盖），
+即 `packagerIgnore`：放行 `/.vite`、放行 `/node_modules` 目录本身、放行 `PACKAGED_MODULES = ['ws', 'node-pty', 'node-addon-api']` 三个模块，
+其余一律 ignore。
+`@electron/packager` 的 `copy-filter.js:90-95` 对 node_modules 下**模块根目录**走 pruner（生产依赖图），对模块内的文件才走用户 ignore ——
+所以 react / marked / tar 这些还会留下一个空目录条目，内容不会进包。
+
+**打包实测（本机，2026-09-16，`PORTAL_DESKTOP_MAC_LOCAL_TEST=1` + 临时 stub heart-portal）**：
+
+- `npm run package`（即 `electron-forge package`）在 darwin-arm64 上**全绿**。注意 npm 必须绕过代理，否则 Electron 下载会 TLS 失败。
+- `node-pty` 1.1.0 自带 N-API prebuilds（darwin-arm64 / darwin-x64 / win32-x64 / win32-arm64），本机安装**不需要** node-gyp 编译。
+  但 Forge 打包时仍会跑 `@electron/rebuild`（日志里的「Preparing native dependencies」），它在**拷贝后的**目录里重建，
+  产出 `build/Release/pty.node`（Electron ABI 149）——源码树里始终没有 `build/`，这是实测。
+  因此 `binding.gyp`、`src/`、`deps/`、`third_party/` 必须跟着进包，不能过滤掉。
+- `node-pty` 的 prebuilds 有 58 MB（四平台）。`packagerIgnore` 只放行 `prebuilds/<打包主机平台>-*`，asar 从 63 MB 降到 **7.1 MB**。
+  跨平台打包原生模块本来就不可行，CI 三平台各自打自己的包。
+- 用干净的 Electron 44.2.0 以 `ELECTRON_RUN_AS_NODE=1` 对打出来的 asar 实测：
+  `require('ws')` → `app.asar/node_modules/ws/index.js` ✅；`require('node-pty')` → `app.asar/node_modules/node-pty/lib/index.js` ✅；
+  `loadNativeModule('pty').dir` → `../build/Release/`（落在 `app.asar.unpacked/`）✅。
+  `pty.spawn` 在 `ELECTRON_RUN_AS_NODE` 模式下报 `posix_spawnp failed.`——那是 node 模式下 helper 路径的问题，**不是打包问题**，
+  真正的 spawn 冒烟留给 I3 在真实应用里做。
+- Linux **没有** node-pty prebuild，`MakerZIP` 的 linux 目标需要构建机上有 python3 + make + g++。本次没验证。
+
+`tests/packaging-contract.test.ts` 把这一整套钉住了：依赖位置与固定版本、main bundle 的 external、
+auto-unpack-natives 真的产出 `*.node` 的 unpack 规则、`packagerIgnore` 的每一条放行与拦截。
+这是 typecheck 与 vitest 都看不见的那部分，改 `forge.config.ts` / `vite.main.config.ts` / `package.json` 时它会先炸。
+
+`scripts/prepare-desktop.mjs` 的三方许可证清单补了 `ws`、`node-pty`、`@xterm/xterm`、`@xterm/addon-fit`。
+
+### I. 核实过的、与方案不同的点（汇总）
+
+| 方案的说法 | 实测 |
+| --- | --- |
+| §2.6「ws 提级即可进 asar」 | 错。plugin-vite 把整个 node_modules 排除在外，必须自己写 `packagerConfig.ignore`（见 H） |
+| §2.6「node-pty 版本未核实，猜 1.0.0」 | 实际 BeingDesktop 0.8.26 用 **1.1.0** |
+| §2.6「三平台各自需要构建工具链」 | darwin / win32 有 N-API prebuild，安装不需要；打包仍会跑 electron-rebuild（本机 Xcode CLT 已满足）。Linux 确实需要 |
+| §1.4「`desktopMessageContext` 两份未逐行比对」 | 去空白后**逐字节相同**（4626 字节） |
+| §1.4「`candidates` 与 renderer `mentions.ts` 未核实是否同源」 | **不同源**。renderer 那份是 `collectMentionNames`，两者无关；`candidates` 留在 `town/session/` |
+| §1.4「`protocolFile` 未核实谁在用」 | 只有 `tests/tools-security.test.ts`。留在 `tools/security.ts` |
+| §1.4 副本清单 | **漏了第四份 `sessionPartition`**：`chat/session-recovery.ts:15`。已一并收敛（`common` 的 `sessionPartition` 参数放宽成 `ConnectionIdentity`） |
+| §2.1 `SubsystemSettings.settings` 是交叉类型 | 拆成 `settings` + `extras` + `saveExtra`（见 A） |
+| §2.1 `ElectronBindings.clipboard` 是同步的 | Electron 44 是 **Promise 形态** |
+| §2.1 `connectionCleared` 生命周期 | 接口与扇出都在，但 **main.ts 从来没有调用过它**。既有缺口，I0 原样保留 |
+| §2.5 分步收敛（I0 只建文件） | 按任务要求一次收敛完（见 F） |
+| §2.7「architecture 六条」 | 既有六条按目录模式写，新目录自动覆盖，不需要改；另补了两条（`common/` 的依赖边界、`subsystems/` 不得 import electron），现在是八条 |
