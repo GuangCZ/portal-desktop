@@ -26,6 +26,7 @@ import type {
   TownDesktopScrollSummary,
   TownDesktopTimeline,
 } from "../../../shared/desktop-types";
+import type { ModelSettingsState } from "../../../shared/model-settings-types";
 
 // The Town page's model.
 //
@@ -240,6 +241,14 @@ export class TownModel extends Store {
   /** Set while the one read for the current feed is in flight (rule 3). */
   reading = false;
   olderBusy = false;
+  /** Whether the Being's side-by-side loop is configured, as the model-settings
+   * subsystem last confirmed it. `null` is "not read yet", which is not "off".
+   *
+   * Read from `beings:model-settings-state` on purpose: this repository has
+   * exactly one reader of `/api/llm/config` and it is that subsystem
+   * (docs/migration/i6b-model-settings.md openIssue 2). The Town page shows the
+   * fact, it does not go and fetch it. */
+  sideBySide: boolean | null = null;
 
   directId?: string;
   selectedId = "";
@@ -293,10 +302,21 @@ export class TownModel extends Store {
       this.town.onState(state => { if (active) this.receiveState(state); }),
       this.town.onMessages(value => { if (active) this.receivePush(value); }),
       this.town.onMembersInvalidated(() => { if (active) void this.loadMembers(true); }),
+      // The side-by-side fact comes from the one subsystem that reads
+      // /api/llm/config, never from a second read of that route
+      // (docs/migration/i6b-model-settings.md openIssue 2). `?.` because a fixture
+      // may install the Town page without the model-settings bridge.
+      this.api.modelSettings?.onModelSettings(state => { if (active) this.receiveModelSettings(state); }) ?? (() => {}),
     ];
     void this.town.appState()
       .then(state => { if (active) this.receiveState(state); })
       .catch(() => { /* The page still opens; the panel says it is not paired. */ });
+    // Read once as well: the push is normally sent before this page exists
+    // (i6b §9.1 — the window is created first and the Being is bound one status
+    // round trip later). It touches no network.
+    void this.api.modelSettings?.modelSettingsState()
+      .then(state => { if (active) this.receiveModelSettings(state); })
+      .catch(() => { /* The strip simply does not claim to know. */ });
     return () => {
       active = false;
       this.authBusy = false;
@@ -389,6 +409,15 @@ export class TownModel extends Store {
     this.changed();
   }
 
+  /** What the model-settings subsystem last confirmed about the waking loop.
+   * Display only: this page never writes it and never reads /api/llm/config. */
+  receiveModelSettings(state: ModelSettingsState) {
+    const next = state.runtime.sideBySide.configured;
+    if (next === this.sideBySide) return;
+    this.sideBySide = next;
+    this.changed();
+  }
+
   receiveState(state: TownDesktopAppState) {
     const previous = this.townApp;
     this.townApp = state;
@@ -404,10 +433,25 @@ export class TownModel extends Store {
       return;
     }
     if (this.me !== identity) {
+      // An identity that merely ARRIVED is not a change of identity.
+      //
+      // BeingDesktop acceptTownState (renderer/town-app.js:1701) says exactly
+      // that: `Boolean(previousId && nextId && nextId !== previousId)` — an empty
+      // previous id is no change — and it never starts a feed read from a state
+      // update at all; only `open()` reads. Here the identity lands one state push
+      // after the page opened, so re-reading on arrival issued a SECOND
+      // `/api/bonfire/hear` roughly 250 ms behind the first, both with `since:null`
+      // (MEASURED by IM 2026-09-16 on the packaged build; tests/town-ui.mjs
+      // 「the pending directory did not stop the feed read」).
+      const arrived = !this.me;
       this.me = identity;
       this.authLabel = identity ? "@" + identity : state.client.paired ? "Town 连接" : "配对 Being";
       this.scenes.update({ identity: this.me });
-      if (definitions[this.view]) void this.load();
+      // Knowing who I am changes how the directory reads back (`withSelf`) and
+      // which messages count as mentioning me. That is a re-projection of what is
+      // already here, not a reason to ask Town again.
+      if (arrived) this.applyMembers(this.members);
+      else if (definitions[this.view]) void this.load();
     }
     this.updateLive();
   }
@@ -440,6 +484,17 @@ export class TownModel extends Store {
     const identity = envelope.snapshot.identity;
     if (identity && this.townApp && identity.connectionRevision !== undefined
       && identity.connectionRevision !== this.townApp.identity.connectionRevision) return;
+    // And a feed's answer belongs to that feed. Switching rings starts the new
+    // ring's read while the previous ring's is still in flight, and both carry the
+    // same `request` generation because switching rings is not a new page — so
+    // without this the late answer for ring 1 lands in ring 2's list
+    // (BeingDesktop test/town-conversation-ui.cjs 「late previous-room events and
+    // read completion cannot overwrite the selected room」 and 「old completions
+    // after a room round trip cannot replace content or unlock the new read」).
+    // `receivePush` has kept this rule for pushed envelopes all along; the read
+    // paths need the same one.
+    const current = this.feed();
+    if (!current || this.feedKey(current) !== this.feedKey({ kind: envelope.kind, firesideId: envelope.firesideId } as TownDesktopFeed)) return;
     this.timeline = envelope.snapshot;
     this.timelineStatus = envelope.status;
     this.changedFeeds.delete(this.feedKey({ kind: envelope.kind, firesideId: envelope.firesideId } as TownDesktopFeed));
@@ -585,7 +640,7 @@ export class TownModel extends Store {
     this.changed();
     try {
       const result = await shared;
-      if (generation !== this.request) return;
+      if (!this.onFeed(key, generation)) return;
       if (result.envelope) this.applyTimeline(result.envelope);
       if (result.rooms) this.roomDirectory = result.rooms;
       if (result.members) this.roomMembers = result.members.members;
@@ -594,7 +649,7 @@ export class TownModel extends Store {
         : "来自 beings.town";
       this.error = undefined;
     } catch (error) {
-      if (generation !== this.request) return;
+      if (!this.onFeed(key, generation)) return;
       // A readable cached timeline stays on screen; only an empty feed becomes
       // an error page.
       if (this.timeline?.messages.length) this.status = errorText(error);
@@ -603,8 +658,20 @@ export class TownModel extends Store {
       // Only the opener that registered this read frees the slot, and only while
       // it is still the registered one.
       if (owner && this.reads.get(key) === shared) this.reads.delete(key);
-      if (generation === this.request) { this.reading = false; this.changed(); }
+      // The previous ring's answer must not unlock the read controls while the
+      // ring now on screen is still reading (BeingDesktop 「late previous-room
+      // events and read completion cannot overwrite the selected room」).
+      if (this.onFeed(key, generation)) { this.reading = false; this.changed(); }
     }
+  }
+
+  /** Whether the feed this call opened is still the feed on screen. Switching
+   * rings keeps the same `request` generation — it is not a new page — so the
+   * generation alone cannot tell two rings' answers apart. */
+  private onFeed(key: string, generation: number): boolean {
+    if (generation !== this.request) return false;
+    const current = this.feed();
+    return Boolean(current) && this.feedKey(current!) === key;
   }
 
   private codeOf(error: unknown): string {
@@ -1124,8 +1191,14 @@ export class TownModel extends Store {
     this.changed();
     try {
       const receipt = await this.town.speak(request);
-      if (target !== this.sendTarget) return;
+      // A receipt belongs to the target it was sent for, whatever the composer is
+      // showing by now: BeingDesktop 「late successful receipt clears only its
+      // original room draft」 and 「returning to confirmed room shows a cleared
+      // draft without resending」 (test/town-conversation-ui.cjs). Everything
+      // below this line is about what is ON SCREEN and belongs to the current
+      // target alone.
       this.drafts.delete(JSON.stringify(target));
+      if (target !== this.sendTarget) { this.changed(); return; }
       this.content = "";
       // The message was accepted. A mention that Town could not resolve is
       // reported with the choices it would have accepted instead, and those are

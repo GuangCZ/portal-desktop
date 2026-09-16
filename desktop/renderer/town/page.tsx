@@ -166,6 +166,15 @@ export function Town({ model }: { model: TownModel }) {
         >
           {town.status}
         </div>
+        <div
+          id="town-refresh-status"
+          className="list-status"
+          role="status"
+          aria-live="polite"
+          hidden={!feed || !refreshLabel(town)}
+        >
+          {feed ? refreshLabel(town) : ""}
+        </div>
         <div id="town-body" aria-busy={town.loading ? true : undefined}>
           {definition && <TownBody town={town} />}
         </div>
@@ -193,6 +202,53 @@ export function liveMessage(town: TownModel): string {
   if (client.status === "identity_mismatch") return "Town 返回的身份与已保存的配对不一致，读取已停止；已读取的内容仍可阅读。";
   if (client.status === "paused") return "Town 连接已暂停（离线或休眠）。";
   return "正在连接 Town…";
+}
+
+/** Where the background collection stands for the feed on screen.
+ *
+ * Ported from BeingDesktop renderer/town-app.js `refreshLabel` (:163-175) and its
+ * `backgroundNotConfigured` (:161), keeping the sentences and their order:
+ * prefix · 最近检查 · 最近采集 · 显示上次同步内容. The rules it encodes are the ones
+ * test/town-conversation-ui.cjs names —「empty background cache uses the message
+ * placeholder without a status strip」,「missing background registration is shown
+ * in the empty message area」,「authorization pause labels retained snapshot stale
+ * instead of claiming empty or fresh」— which is why an idle feed with nothing
+ * collected yet produces NO strip at all rather than a reassuring one.
+ *
+ * ONE ADDITION over BeingDesktop, and it invents no new sentence: 0.8.26 can only
+ * learn that the waking loop is unset from a read that already failed with
+ * `SBS_NOT_CONFIGURED`. This shell is told directly, on
+ * `beings:model-settings-state`, so the same sentence is said as soon as the fact
+ * is known (docs/migration/i6b-model-settings.md openIssue 2: the Town page reads
+ * that channel and never opens a second reader of /api/llm/config). A confirmed
+ * `configured: true` is never used to contradict the reader — a loop that is on
+ * and not collecting is still not collecting. */
+export function refreshLabel(town: TownModel): string {
+  const status = town.timelineStatus;
+  if (!status) return "";
+  const timestamp = (value: number | null, label: string) => {
+    const date = value ? new Date(value) : null;
+    return date && !Number.isNaN(date.getTime())
+      ? `${label} ${date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
+      : "";
+  };
+  const checked = timestamp(status.lastCheckedAt, "最近检查");
+  const collected = timestamp(status.lastSuccessAt, "最近采集");
+  const paused = status.status === "paused";
+  const permission = /auth|trust|permission/i.test(`${status.reason || ""} ${status.errorCode || ""}`);
+  const notConfigured = status.errorCode === "SBS_NOT_CONFIGURED"
+    || status.reason === "sbs_not_configured"
+    || (town.sideBySide === false && !collected);
+  const prefix = !town.connected ? "等待连接"
+    : paused && permission ? "Town 需要配对"
+    : notConfigured ? "后台采集尚未设置，可立即同步"
+    : status.errorCode === "REQUEST_ACCEPTED" ? "请求已送达 · 等待 Being 完成"
+    : status.reason === "being_busy" ? "Being 正忙 · 稍后可读取一次"
+    : status.status === "refreshing" ? "正在同步 Town 消息"
+    : status.status === "error" ? "结果检查失败 · 可刷新显示"
+    : status.reason === "waiting_sbs" || !collected ? "等待 Town 同步"
+    : "已显示读取结果";
+  return [prefix, checked, collected, status.stale ? "显示上次同步内容" : ""].filter(Boolean).join(" · ");
 }
 
 function TownBody({ town }: { town: TownModel }) {
