@@ -351,8 +351,106 @@ string / `mention|name|display_name|query|token|input` / `message|reason|warning
 
 ### R2（high · 私有卷轴正文读不到）—— 属实，已改（按 visibility 路由）
 
+核对：`main/town/catalog.ts:70-74` 把 `kit|ember|scroll` 一律 `private:false`，`:90-94` 只发
+`Accept: application/json` + `credentials:'omit'`；而基线 `town/client.ts:48-51` 对 `kind:'scroll'` 是
+`private:true`，`:151-153` 会带 `Authorization`。「我的卷轴」页签（`models/town.ts:696`）已经走配对客户端
+`this.town.scrolls({visibility:'private'})` 列出行，行一点开却又回到匿名 `this.api.town(query)`
+（`components/catalog.tsx:144-148` → `models/town.ts:860`），于是私有/分享卷轴的正文必然 401。
+`beings:town-scroll` 通道与 preload 成员都已注册，但没有任何调用方。
+
+处理（`models/town.ts`）：
+
+- 新增 `scrollVisibility(id)`：从当前列表里取该卷轴的 `visibility`；取不到（从链接直接打开）当作**非公开**。
+- 新增 `readScrollBody(query)`：走 `this.town.scroll({id, offset?})`，把校验过的 DTO（`beingName`/`updatedAt`/`hasMore`）
+  投影成公开目录那一份（`display_name`/`updated_at`/`has_more`），所以阅读面板仍然只认一种形状。
+- `loadDetail` 的路由判据：`kind==='scroll' && paired && visibility!=='public'` → 配对客户端；其余（未配对的匿名浏览、
+  以及目录已经标成 `public` 的那一份）继续走 `beings:town`。公开的那一份**故意**留在匿名路由上：
+  校验过的 DTO 不带 `trigger_context`/`outcome`，而公开阅读面板要渲染它们（`components/catalog.tsx:307-308`）。
+- 失败时 `detailError.auth = (code==='AUTH_REQUIRED')`，按钮给「去配对」而不是一个只会再失败一次的重试。
+
+用例：`tests/renderer-state.test.ts` 新增 2 条（「我的卷轴」→ 打开 → 带凭据读、公开那一份仍然匿名；
+以及 `AUTH_REQUIRED` 时 `detailError.auth`）。
+
 ### R3（medium · `tests/town-identity.test.ts` 的渲染层用例没有去向）—— 属实，已补
 
-### R4（medium · 自己发出的私信无法回复）—— 属实，但成因比复审写的更深一层，已改
+核对：被删文件确实同时 import 了 `models/feed.ts` 的 `feedMessages`/`feedReplyAuthor`/`mailReply`，
+而 `feed.ts` 是**重写**不是删除。§5.1 授权删除的是「旧模块的专属测试」，这半个文件不在授权范围内；
+D8 的去向表把这 9 条整体记给了 `town-session-*` / `town-mentions`，那三处都不碰渲染层的回复规则。
+删除后 `grep -rn 'mailReply\|feedReplyAuthor' tests/` 为空——两个导出零覆盖。
 
-详见 §10。
+处理：新建 `tests/town-feed.test.ts`（10 条），把回复规则按新 DTO 逐条重述：
+
+| 旧用例 | 新用例 |
+| --- | --- |
+| 显示名与大小写敏感回复地址分离（收件/发件） | 「keeps display names separate from case-sensitive reply addresses…」 |
+| 回复用精确 Town ID | 「answers the exact Town id and never a differently cased one」 |
+| 绝不拿 feed 序号当私信回复 ID | 「never uses a feed sequence as a private message reply id」 |
+| 服务端解析的 mention 列表优先 | 已在 `tests/renderer-state.test.ts` 的「prefers the mention list Town resolved」 |
+| 显示名兜底（无 Town ID 时） | **有意改变**，见下「declines a letter of mine…」 |
+| 回复作者取显示字段 | 「resolves through the member directory and falls back to the neutral label」 |
+
+有意改变的一条：旧实现在没有 Town ID 时把**显示名**当收件地址。新实现拒绝——显示名可以同时指两个 Being，
+Town 对这种情况回 `NOT_SENT` + 候选而不是投递（`session/client.ts:472`），预填一个发不出去的收件人不如不给回复按钮。
+这条在测试里带注释写明了是改变，不是漏掉。
+
+### R4（medium · 自己发出的私信无法回复）—— 属实，已改；成因在 DTO 而不只在渲染层
+
+核对确认了复审说的症状：`feed.ts` 的 `inboxMessages` 对 `mine` 的消息写 `recipientId: ''`，
+`mailReply` 的 `message.mine ? message.recipientId : message.authorId` 于是恒为空 → 回复按钮消失
+（`components/feed.tsx:252`）。而同一个组件 `:295` 又写着 `{mail && m.recipient && !m.received && <span>→ …</span>}`，
+界面本来就是按「发件人是我时显示收件人」画的。
+
+但**光改渲染层改不动**：地址根本没进来。`session/session.ts` 的 `directMessagesDto`（逐行移植自 BD
+`src/town-session.cjs:81-95`）只取 `sender*`，把收件人整个丢了。Town 是发了的——
+`session/wire.ts:45`（同样逐行移植）专门为 `/api/messages` 做了 `recipient_town_id → recipient` 的改名，
+`tests/town-session-client.test.ts:259-260` 与 `tests/town-session-identity-migration.test.ts:142` 的真实载荷样本里也都有
+`recipient`/`recipient_town_id`。BD 丢得起，是因为 BD 的收件箱只画一个方向、回复恒定填 `entry.senderId`
+（`renderer/town-app.js:1623-1629`）；本外壳的收件箱会标「本 Being 发送」并提供继续这段对话，就需要另一端的地址。
+
+处理（三层，都是**增量字段**，不改任何请求、头、校验或既有字段）：
+
+1. `main/town/session/types.ts`：`TownDirectMessage` 增 `recipientId?` / `recipientName?`。
+2. `main/town/session/session.ts`：新增 `recipientField(item)`，与既有 `viaField`/`replyField` 同一写法——
+   只在载荷真有的时候带上（`validId(recipient) || validId(recipient_being_id)`；名字取 `recipient_name` 或 `recipient_display`，
+   且只在有地址时才带名字）。这是**超出逐行移植的一处增量**，注释里写了理由与证据。
+3. `shared/town-desktop-types.ts`：`TownDesktopDirectMessage` 同步增两个可选字段。
+4. `renderer/town/models/feed.ts`：`inboxMessages` 用 Town 给的收件人；给我的信没带收件人时仍然算给我的；
+   我发的信没带收件人时地址为空，`mailReply` 于是**照旧不给回复按钮**（诚实：确实无处可回），显示名照常显示。
+
+顺带修掉自测暴露的第二个缺陷：`mailReply` 之前对一条**篝火消息**也会返回回复（feed 的 id 是纯数字序号，
+正好过 `[a-zA-Z0-9_-]{1,160}`，`authorId` 又在），也就是旧用例点名的「拿 feed 序号当私信回复 ID」。
+现在 `FeedMessage` 带一个 `mail: boolean`（`feedMessages` 给 false、`inboxMessages` 给 true），
+`mailReply` 先看它再看 id——两套 id 空间不再有机会混。
+
+用例：`tests/town-feed.test.ts` 10 条（含「我发的信回给另一端」「篝火行不给私信回复」「没有地址就不给按钮」），
+`tests/town-session-client.test.ts` 与 `tests/town-session-identity-migration.test.ts` 各加一条断言（不删不弱化任何既有断言），
+钉住 `recipient` 与 `recipient_town_id` 都能落进 DTO。
+
+---
+
+## 10. 复审修复后的门槛与账目
+
+| 项 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 绿 |
+| `npx vitest run` | 93 文件通过 / 8 跳过；**1039 通过 / 34 跳过** |
+
+1026（本单元结束）→ 1039：R1 +1（`town-integration-ipc`：`profile_changed` 之后时间线与 `sync.bonfire.lastSuccessAt` 仍在）、
+R2 +2（`renderer-state`）、R3/R4 +10（新建 `tests/town-feed.test.ts`）。
+`town-session-client` 与 `town-session-identity-migration` 是在既有用例里**加断言**，条数不变。
+
+复审修复轮触碰的文件（前三个是本单元自己的，后两个是 u1 移植模块的增量字段）：
+
+| 文件 | 改动 |
+| --- | --- |
+| `desktop/main/subsystems/town.ts` | R1：删掉 `invalidateMembers()` 里的 `identityRevision++` |
+| `desktop/renderer/town/models/town.ts` | R2：`scrollVisibility()` / `readScrollBody()` / `loadDetail` 路由 / `detailError.auth` |
+| `desktop/renderer/town/models/feed.ts` | R4：`FeedMessage.mail`、`inboxMessages` 收件人、`mailReply` 守卫 |
+| `desktop/main/town/session/types.ts` | R4：`TownDirectMessage` 增两个可选字段 |
+| `desktop/main/town/session/session.ts` | R4：`recipientField()` 与 `directMessagesDto` 里的一行展开 |
+| `desktop/shared/town-desktop-types.ts` | R4：`TownDesktopDirectMessage` 增两个可选字段（本单元自建文件） |
+
+`session/{types,session}.ts` 属于 u1 已合入的移植模块，不在任何单元的独占目录里；I7（`main/town/channel/`）在并行组 B，
+与这两个文件不重叠。改动是纯增量字段，合回时应无冲突。
+
+§7 的真机项（两个 E2E、打包 smoke、手工点篝火）仍然**没有执行**，条件与 §7、§8 记的一样（本机无 `cargo`）。
