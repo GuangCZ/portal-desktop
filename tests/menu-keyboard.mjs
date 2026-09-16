@@ -13,18 +13,34 @@ const bundle = await build({
         subscribe: () => () => {}, getVersion: () => 0,
         snapshot: { settings: { hasToken: true, being: 'fixture' } },
         api: { platform: 'darwin' }, connection: 'online',
+        // The slot registry asks every registered topbar action whether it is
+        // visible, and each one reads its own model out of features —
+        // desktop/renderer/tools/slot.tsx:39 is app.features.tools. An absent
+        // features map is not "no feature" but a TypeError that takes the whole
+        // topbar down with it, which is what this fixture did from the moment
+        // the slots landed (IM, 2026-09-16, first run since). Empty is the
+        // honest fixture here: no feature is mounted in it.
+        features: {},
         chatLoading: false, searchOpen: false,
         openClientSettings() { window.settingsOpened = (window.settingsOpened || 0) + 1; },
       };
       createRoot(document.getElementById('root')).render(<Topbar model={model} />);`,
     resolveDir: process.cwd(), loader: 'tsx',
   },
-  bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic',
+  // `outdir` with `write:false` keeps the build in memory but gives esbuild a
+  // place to name a CSS output. Since the slot registry landed (I2/I3/I4/I6),
+  // `Topbar` pulls in `app/slots.tsx`, and every slot imports its own
+  // stylesheet — without an output path esbuild refuses the whole build with
+  // "Cannot import … into a JavaScript file without an output path configured"
+  // (IM, 2026-09-16: this script had not been re-run since those units merged).
+  bundle: true, write: false, outdir: 'menu-keyboard-fixture', format: 'iife', platform: 'browser', jsx: 'automatic',
+  loader: { '.png': 'dataurl' },
   define: { 'process.env.NODE_ENV': '"production"' },
 });
-const css = await readFile('desktop/renderer/app/styles.css');
+const output = extension => bundle.outputFiles.find(file => file.path.endsWith(extension));
+const css = Buffer.concat([await readFile('desktop/renderer/app/styles.css'), Buffer.from(output('.css')?.contents ?? [])]);
 const server = createServer((request, response) => {
-  if (request.url === '/menu.js') { response.setHeader('Content-Type', 'text/javascript'); response.end(bundle.outputFiles[0].contents); return; }
+  if (request.url === '/menu.js') { response.setHeader('Content-Type', 'text/javascript'); response.end(output('.js').contents); return; }
   if (request.url === '/app.css') { response.setHeader('Content-Type', 'text/css'); response.end(css); return; }
   response.setHeader('Content-Type', 'text/html; charset=utf-8');
   response.end('<!doctype html><link rel="stylesheet" href="/app.css"><div id="root"></div><button id="outside">Outside</button><script src="/menu.js"></script>');

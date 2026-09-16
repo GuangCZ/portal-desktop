@@ -500,3 +500,18 @@ asar 里 `/.vite/renderer/main_window/index.html` 与 `/node_modules/node-pty/bi
   所以这次重复读**与目录是否就绪无关**，也不是 503 模型引入的，是打开篝火本身就读两次。
 - 顺带量到：干净成功的一次打开，公共目录 `/api` 被请求 **4** 次（失败时 9–12 次）——公共目录没有 in-flight 去重。
 - 这条 check 的断言（`=== 1`）是对的，**原样保留不动**；它现在红，指的正是上面这件事。
+
+### 4.6 `tests/menu-keyboard.mjs` 与 `tests/update-progress.mjs`
+
+- `update-progress`：**PASS**（更新弹窗的阶段、真实字节/百分比进度、未知总量、取消后焦点回到设置、安装中不可关闭）。
+- `menu-keyboard`：原来**两处都挂**，都是脚本层的，已修，现在 **PASS**：
+  1. **esbuild 没有输出路径**。脚本用 `write:false` 且不给 `outdir`，而 `Topbar` 现在经 `app/slots.tsx`
+     牵进四个 slot，每个 slot 都 `import "./styles.css"`（I2/I3/I4/I6 合入之后才有的），
+     于是整包构建被 esbuild 拒绝：`Cannot import … into a JavaScript file without an output path configured`。
+     加 `outdir`（仍 `write:false`，只是给 CSS 一个名字）+ `loader:{'.png':'dataurl'}`，
+     输出改成按扩展名挑（`outputFiles[0]` 不再一定是 JS），并把 slot 的 CSS 接在 `app/styles.css` 后面一起喂给夹具页面。
+  2. **夹具模型少了 `features`**。slot 注册表会问每个 topbar action 可不可见，
+     而 `desktop/renderer/tools/slot.tsx:39` 读的是 `app.features.tools`——
+     没有 `features` 不是「没有功能」，是 `Cannot read properties of undefined (reading 'tools')`，
+     整个 topbar 渲染失败，所以 `#options-trigger` 根本不存在（实测 pageerror 就是这一句）。
+     夹具补 `features: {}`（这个夹具本来就不挂载任何功能）。
