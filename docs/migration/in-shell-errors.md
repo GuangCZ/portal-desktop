@@ -75,3 +75,58 @@
   （`tests/sbs-refresh.mjs` 在真窗口里点 `#open-models` 等 `#model-settings-page`）。视图键要从 `app/slots.tsx` / 导航模型里实读。
 - openIssues 4：`CHAT_ERROR_CODES` 已被 I6b 追加 `'NEEDS_KEY', 'ROLLED_BACK'`（第七处共享文件）。
   → 本单元第 1 条必须覆盖 `beings:model-config-save` / `beings:model-side-by-side` 这两条写通道的 `NEEDS_KEY`。
+
+### 1.5 `docs/migration/i0-seams.md` §A/§B/§E + 真实接缝文件
+
+- `SubsystemContext` 成员：`handle` / `exclusive` / `window()` / `store` / `electron` / `userData` / `desktopId` /
+  `clientVersion` / `fetchImpl` / `onError` / `registry` / `push`。可选钩子 `linked()` / `connectionVerified(c)` /
+  `connectionCleared()` / `quitting()` / `ready`。**「只有 I0 能改」的清单里含 `main.ts`、`subsystems/types.ts` 的接口成员、
+  `renderer/app/models/app.ts`——本单元是这三处的授权例外持有者**（任务书「本单元的例外」）。
+- `desktop/preload/channels/index.ts` 是 append-only 的九项对象；`preload.ts` 里 `...desktopChannels` 之后
+  `if (process.isMainFrame) contextBridge.exposeInMainWorld('beings', api);` 是整条桥唯一的出口。
+- `tests/architecture.test.ts`：shared 层不得 import electron / node 内置；renderer 不得 import main/preload/electron。
+  → 主世界解码器必须**零 import**，才能既被 preload 用又能进 vitest。
+
+---
+
+## 2. 实测：contextBridge 到底吃掉什么、什么能过河（2026-09-17，本机 Electron 44.2.0）
+
+夹具在 `…/scratchpad/cb-fixture/`（`main.js` + `preload.js` + `page.html`，第二轮 `main2.js` + `preload2.js` + `helper.js`），
+两轮都是独立两文件夹具，不依赖本仓库任何代码。**全部为实测，不是源码推断。**
+
+| 传法 | 页面侧 `Object.getOwnPropertyNames` | `code` | `candidates` | `instanceof Error` |
+| --- | --- | --- | --- | --- |
+| `throw Object.assign(new Error(m), {code, candidates})`（**今天 preload 的做法**） | `["message","stack"]` | **null** | **null** | true |
+| 同步 `throw` 同一个值 | `["message","stack"]` | **null** | — | true |
+| `return envelope`（普通对象） | `["__townError","candidates","code","message"]` | `NOT_SENT` | 原样 | — |
+| **`throw envelope`（普通对象，此前无人实测）** | `["__townError","candidates","code","message"]` | `NOT_SENT` | **原样** | **false** |
+| `throw Object.freeze({...envelope})` | 同上 | `NOT_SENT` | 原样 | false |
+| **主世界里用 `executeInMainWorld` 重建的 Error** | `["candidates","code","message","stack"]` | `NOT_SENT` | **原样** | **true** |
+
+→ **IM §4.4 的结论复现无误**：Error 跨 contextBridge 只留 `message` 与 `stack`。
+
+另外三条决定设计的实测：
+
+1. `typeof contextBridge.executeInMainWorld === 'function'`（Electron 44.2.0 有）。
+   传进去的 `func` 是**被字符串化后在主世界重新求值的**：引用 preload 模块作用域的常量一律
+   `THREW: OUTER is not defined` / `HELPER_CONST is not defined`，**另一个模块里定义的函数可以用，只要它自身自足**。
+   → 解码函数必须零外部引用，输入全部走 `args`（普通数据或被代理的 api 对象）。
+2. `exposeInMainWorld` 定义的名字在主世界是 `writable:false, configurable:false`：
+   `window.probe = x` 静默失败、`Object.defineProperty` 抛 `Cannot redefine property`。
+   → **渲染层无法接管 `window.beings` 这个名字**，「渲染层自己包一层」只能覆盖走 `AppModel` 的那一半，
+   覆盖不了 `tests/town-sdk.mjs` 里直接 `window.beings.townDesktop.bonfire()` 的调用。
+3. 整条安装路径实测跑通：`executeInMainWorld` 里 `Object.defineProperty(window,'beings',{value: walk(raw,1)})` 之后，
+   `window.beings.chat.send()` 的拒绝值是 `isError:true / own ["code","message","stack"] / code:'BUSY'`；
+   `platform` 这类普通值照抄；`onEvent(cb)` 这类**同步返回退订函数**的方法返回值仍是 `function`；
+   主世界拿到的属性描述符同样是 `writable:false, configurable:false`（与 `exposeInMainWorld` 同等）。
+
+**为什么不能只让 preload 抛普通对象（第 4 行）就收工**：`desktop/shared/errors.ts:3` 的 `publicErrorMessage`
+第一句是 `String(error instanceof Error ? error.message : error)`，普通对象会被 `String()` 成 `[object Object]`
+（长度 15、无换行、不触发任何兜底正则），于是 `errorText(error)` —— 渲染层到处在用（`app/models/app.ts` 六处、
+`renderer/channel/models/channel.ts` 等）—— 会把 `[object Object]` 直接显示给用户。**必须是真 Error。**
+
+### 2.1 因此定下的机制
+
+包络以**普通对象**穿过 contextBridge（走拒绝路径，`DesktopAPI` 的 `Promise<T>` 签名一个字不用改），
+由 `contextBridge.executeInMainWorld` 在**主世界**装一层解码器，把带 `__townError` 的拒绝值重建成
+带 `code` / `candidates` / `detail` 的真 Error。消费者（渲染层 model、E2E 脚本、`errorText`）**一行都不用改**。
