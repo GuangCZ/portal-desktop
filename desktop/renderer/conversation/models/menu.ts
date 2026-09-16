@@ -101,11 +101,13 @@ export class ComposerMenuModel extends Store {
     this.settle({ open: true, token: next, items, selected, notice });
     // Reading the catalogue is what a `/` is worth once, and what an expired
     // member list is worth again (chat-composer.js line 138). A failed read is
-    // NOT: the retry button is its cure, and re-reading on every keystroke would
-    // be a request per character. DEVIATION from 0.8.26, which leaves
-    // `membersExpiresAt` at zero after a failure and so does re-read.
+    // NOT: the retry button is its cure, and re-reading on every new token would
+    // be a request per keystroke while the catalogue is down. DEVIATION from
+    // 0.8.26, which re-reads on both paths after a failure — it leaves
+    // `membersExpiresAt` at zero and sets `loaded` even when the read threw.
     if (!this.directory.loading
-      && ((next.kind === 'kit' && previous !== 'kit' && this.directory.loaded) || (next.kind === 'member' && this.directory.stale)))
+      && ((next.kind === 'kit' && previous !== 'kit' && this.directory.loaded && !data.kitsError)
+        || (next.kind === 'member' && this.directory.stale)))
       void this.directory.load();
   }
 

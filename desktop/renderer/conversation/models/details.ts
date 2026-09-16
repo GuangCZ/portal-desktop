@@ -105,14 +105,18 @@ export class DetailsModel extends Store {
   }
 
   /**
-   * Open a card about a quotation. The previous card of this conversation is
-   * closed first, with no focus move — the user asked about something else, not
-   * for their attention to be sent somewhere.
+   * Open a card about a quotation.
+   *
+   * The previous card of this conversation is closed first, and its temporary
+   * conversation is given back — 0.8.26 passes `false` there for the focus move,
+   * not for the disposal (chat-selection.js line 131 into line 125). Skipping
+   * the release would leave a reader in the main process that nothing can ever
+   * close again.
    */
   async open(parentSessionId: string, reference: ChatDetailReference) {
     if (!this.chat || !parentSessionId) return;
     const previous = this.cards.get(parentSessionId);
-    if (previous) this.dispose(previous, false);
+    if (previous) this.dispose(previous, true);
     const card: DetailCardState = {
       parentSessionId, reference, sessionId: '', draft: '', sending: false, busy: false,
       status: '正在打开…', error: '', view: null, pinned: true, closed: false,
