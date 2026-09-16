@@ -22,7 +22,12 @@
 //
 // The two GONE families are accounted for in docs/migration/i7-channel-drafts.md.
 // What replaced them — the renderer's own refusal to overwrite a draft — is
-// tests/draft-integration.test.ts and tests/conversation-model.test.ts.
+// `placeChannelDraft` in tests/channel-integration-renderer.test.ts, which keeps
+// the Loom page's own reading of「已有草稿」down to the whitespace-only composer
+// (src/town.cjs line 134 compares against the EMPTY string). The transport around
+// it is tests/draft-integration.test.ts. `ConversationModel.placeDraft` — covered
+// by tests/conversation-model.test.ts — is the companion panel's rule and trims,
+// which is why the stricter one is made in front of it and not inside it.
 import { expect, it } from "vitest";
 import {
   assistanceDraft, featureDraft, firesideDraft, getTownCatalog, townPageUrl,
