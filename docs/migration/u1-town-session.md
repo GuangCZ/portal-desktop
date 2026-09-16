@@ -333,3 +333,137 @@ portal-desktop **没有**的能力（本单元补齐）：
 - **Town ID 首次迁移绑定**（REST + SSE 两端一致才 `bindTownId`）。
 - **配对落盘失败后的 `_pairReceipt` 暂存 + `retryPairStorage()`**。
 - **`mentions` 回执与 `recipient_warning.candidates` 歧义收件人**处理。
+
+### 源码 src/town-session.cjs（527 行，已读完）
+
+导出面：`module.exports = {TownSession, TOWN_AUTH_DETAIL, messagesDto, firesideMessagesDto, directMessagesDto}`。
+顶部注释：`Contracts: https://beings.town/api/{bonfire,fireside,beings,scrolls,channels}/help (2026-09-07). Production protected reads use the Town client SDK. A Loom token is never a Town credential.`
+
+**依赖**：`town-library-contract.cjs` 的 `{scrollId, libraryRoute, scrollListDto, scrollDto, beingsDto}`；`town-result-source.cjs` 的 `{relaySource}`（中继来源标注，**范围外**，注入）；`town-wire.cjs` 的 `{memberId, matchesTownIdentity, normalizeTownResponse}`。
+
+**常量**：
+- `TOWN_ORIGIN = 'https://beings.town'`
+- `TOWN_AUTH_DETAIL = 'Town 拒绝了本机的 GET 读取请求（401/403），当前连接没有消息读取权限。'`（**导出**）
+- `MAX_RESPONSE_BYTES = 1024 * 1024`；`MAX_QR_BYTES = 256 * 1024`
+- `ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/`
+- `ROUTES = new Set(['/api', '/api/bonfire/mentions', '/api/bonfire/hear', '/api/bonfire/speak', '/api/fireside/list', '/api/fireside/members', '/api/fireside/hear', '/api/channels/status', '/api/channels/register', '/api/channels/credentials'])`
+  > 注意：**`/api/messages` 不在 ROUTES 里**，但 `getDirectMessages` 调用 `request('/api/messages')`——所以私信只能走 `readImpl`（注入的 TownClient 读取）；直连 `_request('/api/messages')` 会抛 `INVALID_REQUEST`。这是有意的（私信无中继回退，读取必须走 client token）。
+
+**内部 helper**：
+- `failure(code, message)` = `new Error(message)` + `.code = code`。
+- `record(value)` = 非 null 对象且非数组（**比 library-contract 宽**，允许类实例）。
+- `text(value, limit = 2000)`：非字符串→`''`；先 `slice(0, limit*2)` 再剥控制字符 `/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f‪-‮⁦-⁩]/g` 再 `slice(0, limit)`。
+- `sequence(value)` = `Number.isSafeInteger && >= 0`；`validId(value)` = 字符串 + `ID.test`。
+- `firesideId(value)`：字符串形如 `/^[1-9][0-9]{0,15}$/` 转数字；`!Number.isSafeInteger(n) || n < 1` → `INVALID_REQUEST` `'请选择有效的围炉。'`；返回数字。
+- `checkAborted(signal)`：`signal?.aborted` → `ABORTED` `'读取已取消。'`。
+- `plainRequest(value, allowed, required = allowed)`：非 record 或原型非 `Object.prototype` → `INVALID_REQUEST` `'请求格式无效。'`；用 `getOwnPropertyDescriptors` + `Reflect.ownKeys` 检查：key 非 string、不在 allowed、描述符无 `value`（getter）→ 抛；`required.some(key => !hasOwn(descriptors, key))` → 抛。返回原对象。
+- `imageData(bytes, mime)`：非 Buffer/空/`> MAX_QR_BYTES` → `''`；魔数校验：PNG `[137,80,78,71,13,10,26,10]`；JPEG `bytes[0]===255 && bytes[1]===216 && bytes[2]===255`；WEBP `ascii(0,4)==='RIFF' && ascii(8,12)==='WEBP'`；通过 → `data:${mime};base64,${base64}`，否则 `''`。
+- `inlineQr(value)`：非字符串或 `length > MAX_QR_BYTES * 1.4` → `''`；`/^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/`；`match[2].length % 4` → `''`；再 base64 往返一致才 `imageData`。
+- `viaField(item)` = `{via}`（`text(item.via, 120)` 非空时）否则 `{}`。
+- `replyField(item)` = `sequence(item.reply_to)` ? `{replyTo: {id: String(item.reply_to), beingId: validId(item.reply_to_being) ? item.reply_to_being : '', preview: text(item.reply_to_preview, 200)}}` : `{}`。
+
+**DTO 函数**：
+- `membersDto(value)`（内部）：`!record(value) || !Array.isArray(value.community)` → `INVALID_RESPONSE` `'Town 成员目录格式发生变化，请稍后重试。'`。`community.slice(0,2000)` → filter（record + `validId(memberId(member))` + 去重）→ map `{id: memberId(m), name: text(display_name,100) || memberId(m), description: text(about,500)}`。
+- `messagesDto(value, members = [])`（**导出**）：`!record(value) || value.ok !== true || !Array.isArray(value.messages) || !sequence(value.global_latest_seq)` → `INVALID_RESPONSE` `'篝火消息格式发生变化，请稍后重试。'`。
+  `messages.slice(0,200)` → filter（record + `sequence(item.seq)` + `typeof item.message === 'string'` + `typeof item.being === 'string'` + seq 去重）→ map：
+  `byId = members.find(m => m.id === item.being)`；
+  `beingId = validId(item.town_id) ? item.town_id : validId(item.being_id) ? item.being_id : byId?.id || (/^t_/.test(item.being) && validId(item.being) ? item.being : '')`（**成员目录优先，最后才采信 `being` 字段，且只接受 `t_` 前缀**）；
+  返回 `{id: String(seq), beingId, ...(validId(town_id) ? {townId: town_id} : {}), ...(!beingId ? {authorUnknown: true} : {}), beingName: text(speaker_name,100) || text(being,100), content: text(message,4000), createdAt: text(at,64), revisedAt: text(revised_at,64), mentions: [], ...viaField, ...replyField}`。
+  然后 `.sort((l, r) => Number(l.id) - Number(r.id))`（**升序**）。
+  返回 `{messages, latestSeq: value.global_latest_seq, ...(sequence(value.total_count) ? {total: value.total_count} : {}), ...relaySource(value)}`。
+- `directMessagesDto(value)`（**导出**）：`!record(value) || !Array.isArray(value.messages)` → `INVALID_RESPONSE` `'私信格式发生变化，请稍后重试。'`。
+  `messages.slice(0,100)`（**收件箱最新在前，顺序保留，不排序**）→ filter（record + `typeof id === 'string' && id` + `typeof content === 'string'` + id 去重）→ map：
+  `senderId = validId(item.sender) ? item.sender : validId(item.sender_being_id) ? item.sender_being_id : ''`；
+  `reply = typeof item.reply_to === 'string' && item.reply_to ? {replyTo: {id: text(reply_to,200), beingId: validId(reply_to_sender) ? reply_to_sender : '', preview: text(reply_to_preview,200)}} : {}`；
+  `{id: text(id,200), senderId, senderName: text(sender_name,100) || senderId || '未知', content: text(content,32000), createdAt: text(created_at,64) || text(at,64), ...viaField, ...reply}`。
+  返回 `{messages}`。
+- `firesidesDto(value)`（内部）：`!record(value) || !Array.isArray(value.owned) || !Array.isArray(value.joined)` → `INVALID_RESPONSE` `'围炉列表格式发生变化，请稍后重试。'`。
+  `rooms(entries)`：`slice(0,2000)` → filter（record + `Number.isSafeInteger(room.id) && room.id > 0` + `typeof room.name === 'string'` + id 去重，**owned/joined 共用同一个 seen**）→ map `{id, name: text(name,200), ...(sequence(member_count) ? {member_count} : {})}`。
+  返回 `{owned: rooms(value.owned), joined: rooms(value.joined)}`。注释：owned 圈可能含私密邀请 key，只有展示字段离开 main。
+- `firesideMembersDto(value)`（内部）：`!Array.isArray(value)` → `INVALID_RESPONSE` `'围炉成员格式发生变化，请稍后重试。'`。`slice(0,2000)` → filter（record + `validId(member.being_id)` + 去重）→ map `{being_id, display_name: text(display_name,100) || being_id, joined_at: text(joined_at,64)}`。返回 `{members}`。
+- `firesideMessagesDto(value, expected)`（**导出**）：
+  `!record(value) || value.being !== expected.beingId` → `IDENTITY_MISMATCH` `'Town 授权身份与当前 Being 不一致，请检查连接。'`（**先查身份**）。
+  `!Array.isArray(value.messages) || !sequence(value.latest_seq) || value.messages.some(item => record(item) && item.truncated === true)` → `INVALID_RESPONSE` `'围炉消息格式发生变化，请稍后重试。'`。
+  `slice(0,200)` → filter（record + `sequence(seq)` + `validId(item.being)` + `typeof message === 'string'` + seq 去重）→ map `{id: String(seq), beingId: item.being, beingName: text(speaker_name,100) || item.being, content: text(message,32000), createdAt: text(at,64), revisedAt: text(revised_at,64), mentions: Array.isArray(item.mentions) ? [...new Set(item.mentions.filter(validId))].slice(0,20) : [], ...viaField, ...replyField}` → 升序排序。
+  返回 `{messages, latestSeq: value.latest_seq, ...(sequence(value.total_count) ? {total: value.total_count} : {})}`。
+- `channelDto(value, channel)`（内部）：`source = record(value) ? value : {}`。
+  `known = new Set(['connected','disconnected','pending','registered','disabled','waiting','expired','error'])`；
+  `status = known.has(source.status) ? source.status : source.ready === true ? 'connected' : source.ready === false ? 'registered' : 'unknown'`。
+  `result = {channel, status, detail: status === 'unknown' ? '渠道状态尚未确认，请刷新后查看。' : ''}`。
+  `app_id` 匹配 `/^cli_[A-Za-z0-9_-]{1,120}$/` → `result.appId`。
+  QR 取 `source.qr_code_url || source.qrcode_url || source.qr_url || source.qrcode || source.qr_code`；`inlineQr(qr)` 非空 → `result.qrCodeDataUrl`。
+  若 `typeof qr === 'string' && qr.length <= 4096`：`new URL(qr)`，要求 `protocol === 'https:'`、无 username/password、`!port || port === '443'`、hostname ∈ `['beings.town','weixin.qq.com','wx.qq.com','open.weixin.qq.com']` → `result.qrCodeUrl = url.href`；解析异常吞掉。
+
+**`class TownSession`**：
+构造 `{getContext, fetchImpl = globalThis.fetch, readImpl = null, writeImpl = null, getIdentity = null, onChange = () => {}, now = Date.now, membersTtlMs = 60000} = {}`。
+`typeof getContext !== 'function' || typeof fetchImpl !== 'function' || (readImpl !== null && typeof readImpl !== 'function')` → `new Error('Town 会话配置无效。')`（**普通 Error，无 code**）。
+字段：`_membersRevision=0`、`_membersExpiresAt=0`、`_epoch=0`、`_requests=new Set()`、`_mutations=new Set()`、`_members=null`；构造里又 `_membersExpiresAt = 0; _membersRevision++`（→ 构造后 `_membersRevision === 1`）。
+`_state` 五个区：`bonfire / fireside / channel / scroll / beings`，各 `{status:'unknown', detail:''}`。
+> 注意 `_read` 还会用到 `'inbox'` 区（`getDirectMessages`），但 `_state` 初值里**没有** `inbox` —— `_set('inbox', …)` 会新增该键。这是原行为，保留。
+
+- `state()` → 深拷贝一层：`Object.fromEntries(Object.entries(this._state).map(([area, s]) => [area, {...s}]))`。
+- `reset()`：`_epoch++`；abort 并清空 `_requests`；清空 `_mutations`；`_members=null`；`_membersExpiresAt=0`；`_membersRevision++`；`_state` 回五区初值（**丢掉 inbox 键**）。
+- `_set(area, status, detail = '')`：写 `_state[area] = {status, detail}`；`try { onChange(state()) } catch {}`。
+- `_context(expected, connectionRevision)`：`current = getContext()`；`loomBeingId = current.loomBeingId || current.beingId || current.beingName`；`beingId = loomBeingId`。
+  `!current.configured || !current.connected || current.exiting || !validId(beingId) || !sequence(current.connectionId)` → `NOT_CONNECTED` `'请先连接 Being 并等待会话加载完成。'`。
+  `identity = {beingId, loomBeingId, connectionId, identityRevision, epoch: this._epoch}`。
+  `(expected && Object.keys(identity).some(k => identity[k] !== expected[k])) || (connectionRevision !== undefined && current.connectionId !== connectionRevision)` → `SESSION_CHANGED` `'连接身份已变化，请在当前 Being 下重新操作。'`。
+- `_request(route, {query, body, expected, mutation = false, signal})`：
+  `!ROUTES.has(route) && !libraryRoute(route)` → `INVALID_REQUEST` `'不支持此 Town 操作。'`。
+  `expected` → `_context(expected)`；`checkAborted(signal)`。
+  URL `new URL(route, TOWN_ORIGIN)` + `searchParams.set(k, String(v))`。
+  controller 入 `_requests`，把外部 signal 的 abort 转发。
+  fetch：`method: body === undefined ? 'GET' : 'POST'`；headers `Accept: 'application/json'`（+ POST 的 `Content-Type`）；`credentials:'omit'`、`redirect:'error'`、`cache:'no-store'`。**注意：没有 Authorization 头**（这条直连路径靠 IP Trust / 公开端点；带凭据的读走 `readImpl`）。**也没有 `referrerPolicy`**。
+  `401|403` → `AUTH_REQUIRED` `TOWN_AUTH_DETAIL`；`429` → `RATE_LIMITED` `'Town 请求过于频繁，请稍后重试。'`；`!ok` → `mutation ? RESULT_UNKNOWN '操作未获确认，请先刷新状态；不要重复提交。' : SERVICE_ERROR 'Town 暂时不可用，请稍后重试。'`。
+  `content-type` 小写不含 `application/json` → `mutation ? RESULT_UNKNOWN : INVALID_RESPONSE`，文案 `'Town 返回了无法识别的结果，请先刷新状态。'`。
+  `Number(content-length) > MAX_RESPONSE_BYTES` → `INVALID_RESPONSE` `'Town 返回的数据过大。'`。
+  无 reader → `INVALID_RESPONSE` `'Town 返回的数据不完整。'`；流式累计 `> MAX` → `INVALID_RESPONSE` `'Town 返回的数据过大。'`。
+  `JSON.parse` 失败 → `mutation ? RESULT_UNKNOWN : INVALID_RESPONSE` `'Town 返回了无法识别的结果，请先刷新状态。'`。
+  `(!record(value) && !(['/api/fireside/members','/api/beings'].includes(route) && Array.isArray(value))) || value.ok === false || hasOwn(value,'error')` → `mutation ? RESULT_UNKNOWN '操作未获确认，请先刷新状态；不要重复提交。' : SERVICE_ERROR 'Town 暂时无法完成此操作。'`。
+  catch：`_context(expected)` + `checkAborted(signal)`；已分类码 ∈ `['AUTH_REQUIRED','RATE_LIMITED','RESULT_UNKNOWN','SERVICE_ERROR','INVALID_RESPONSE','SESSION_CHANGED','NOT_CONNECTED']` → 原样抛；否则 `mutation ? RESULT_UNKNOWN '连接中断，操作结果未知，请先刷新状态；不要重复提交。' : NETWORK_ERROR '无法连接 Town，请检查网络后重试。'`。
+- `_authorized(area, expected, {signal})`：`_request('/api/bonfire/mentions', {expected, signal, query: {since_id: '9223372036854775807'}})` → `verified = await _townIdentity(expected, signal)` → `!matchesTownIdentity(identity, verified)` → `IDENTITY_MISMATCH` `'Town 授权身份与当前 Being 不一致，请检查连接。'`；然后 `_context` + `checkAborted` + `_set(area, 'ready')`。
+  catch：`_context(expected)`；`ABORTED` 原样抛；否则 `_set(area, code === 'AUTH_REQUIRED' ? 'auth_required' : 'error', error.message)` 再抛。
+- `_townIdentity(expected, signal)`：`townId = getContext().townId || ''`；为空且有 `getIdentity` → `await getIdentity({signal})`，`_context(expected)`，`townId = identity.townId || ''`；`error.code !== 'AUTH_REQUIRED'` 才抛。最后 `_context(expected)`，返回 `{loomBeingId: expected.loomBeingId, townId}`。
+- `memberCacheState()` → `{revision: this._membersRevision, expiresAt: this._membersExpiresAt}`。
+- `memberDisplayName(townId)` → `this.now() < this._membersExpiresAt ? this._members?.get(townId)?.name || '' : ''`。
+- `invalidateMembers()`：清缓存、`_membersRevision++`、`try { onChange(state()) } catch {}`，返回 `memberCacheState()`。
+- `getMembers({signal, force = false} = {})`：`checkAborted`；未 force 且缓存未过期 → `{members: [...this._members.values()], source: 'public'}`。
+  记 `epoch`+`revision`；`value = await _request('/api', {signal})`（**注意没传 expected**）；若 epoch 或 revision 变了 → `SESSION_CHANGED` `'成员目录已失效，请重新读取。'`；`members = membersDto(value)`；缓存 Map + `_membersExpiresAt = now() + membersTtlMs`；返回 `{members, source: 'public'}`。
+- `listScrolls(value = {}, {signal})`：`plainRequest(value, ['offset','limit','visibility'], [])`；`offset` 非 sequence 或 `> 4294967295`、`limit` 非 sequence 或 `<1`/`>200`、`visibility` 不在三值内 → `INVALID_REQUEST` `'卷轴列表分页参数无效。'`。`query = {offset: offset ?? 0, limit: limit ?? 50, ...(visibility === undefined ? {} : {visibility})}`。`_read('scroll', expected, request => scrollListDto(await request('/api/scrolls', {query}), query))`。
+- `getScroll(value, {signal})`：`plainRequest(value, ['id','offset','limit'], ['id'])`；`!scrollId(id)`、offset/limit 越界（limit `<1`/`>10000`）→ `INVALID_REQUEST` `'请选择有效的卷轴和正文页码。'`。`query = {offset: offset ?? 0, limit: limit ?? 10000}`。`scrollDto(await request(`/api/scrolls/${id}`, {query}), id, query)`。
+- `listBeings(value = {}, {signal})`：`plainRequest(value, [], [])`。自带 `unchanged()` 检查（比较 `epoch` 与 `['connectionId','identityRevision','beingId','beingName']` 四个字段）→ `SESSION_CHANGED` `'连接身份已变化，请重新读取居民目录。'`。
+  `detail = '人类伙伴信息暂未公开。'`；`unchanged()` → `_request('/api', {signal})` → `unchanged()` + `checkAborted` → `beings = beingsDto({beings: value.community})` → `_set('beings','ready')` → 返回 `{beings, source: 'public', detail: 'Town 公开居民目录。人类伙伴信息暂未公开。'}`。
+  catch：`unchanged()`；非 `ABORTED` → `_set('beings','error', error.message)`；抛。
+  > **`listBeings` 不走 `_read`，也不做 `_authorized`**。
+- `getBonfireMessages(value = {}, {signal})`：`plainRequest(value, ['since','limit'], [])`；`since` 非 sequence 或 `limit` 非整数/`<1`/`>200` → `INVALID_REQUEST` `'篝火消息分页参数无效。'`。
+  `_read('bonfire', expected, async request => { const [response, members] = await Promise.all([request('/api/bonfire/hear', {query: {limit: value.limit || 10, ...(since === undefined ? {} : {since})}}), this.getMembers({signal}).then(r => r.members).catch(e => { if (e.code === 'ABORTED') throw e; return []; })]); this._context(expected); checkAborted(signal); return messagesDto(response, members); })`。
+  > **默认 limit 是 10**（不是 50）。成员目录读取失败只降级为空数组，不影响消息。
+- `getDirectMessages(value = {}, {signal})`：`plainRequest(value, [], [])`；`_read('inbox', expected, request => directMessagesDto(await request('/api/messages')))`。
+- `getFiresides(value = {}, {signal})`：`plainRequest(value, [], [])`；`_read('fireside', …, firesidesDto(await request('/api/fireside/list')))`。
+- `getFiresideMembers(value, {signal})`：`id = firesideId(value)`（**value 本身就是 id，不是对象**）；`_read('fireside', …, firesideMembersDto(await request('/api/fireside/members', {query: {fireside_id: id}})))`。
+- `getFiresideMessages(value, {signal})`：`plainRequest(value, ['firesideId','since','limit'], ['firesideId'])`；`id = firesideId(value.firesideId)`；分页校验同篝火（文案 `'围炉消息分页参数无效。'`）；`firesideMessagesDto(await request('/api/fireside/hear', {query: {fireside_id: id, limit: value.limit || 10, ...(since === undefined ? {} : {since})}}), expected)`。
+- `_beingRequest(route, {query, expected, signal})`：`_context` + `checkAborted`；controller 入 `_requests` 并转发 abort；`value = await this.readImpl(route, {query, signal: controller.signal})`；再 `_context` + `checkAborted`；catch 里也先 `_context` + `checkAborted` 再重抛。
+- `_read(area, expected, callback, {signal})`：
+  `throughBeing = Boolean(this.readImpl && ['bonfire','fireside','scroll','beings','inbox'].includes(area))`。
+  非 throughBeing → 先 `await _authorized(area, expected, {signal})`。
+  `request(route, options = {})` = throughBeing ? `_beingRequest(route, {...options, expected, signal})` : `_request(route, {...options, expected, signal}).then(async value => { if (hasOwn(value,'town_id') && !matchesTownIdentity(value, await this._townIdentity(expected, signal))) throw IDENTITY_MISMATCH 'Town 返回的身份与当前 Being 不一致。'; return normalizeTownResponse(value, route, expected.loomBeingId); })`。
+  `value = await callback(request)`；`_context` + `checkAborted`；`throughBeing` 时 `_set(area,'ready')`；返回。
+  catch：`_context(expected)`；非 `ABORTED` → `_set(area, code === 'AUTH_REQUIRED' ? 'auth_required' : 'error', error.message)`；抛。
+- `_mutate(area, expected, callback)`：`_mutations.has(area)` → `BUSY` `'当前操作正在提交，请等待结果。'`。`marker = `${this._epoch}:${area}``；加入 `_mutations`；`await _authorized(area, expected)`；`return await callback()`。
+  catch：`_context(expected)`；`_set(area, AUTH_REQUIRED ? 'auth_required' : 'error', error.message)`；抛。
+  finally：`marker === `${this._epoch}:${area}`` 才 delete（**reset 后的 epoch 变化会让旧标记不清理**）。
+- `sendBonfireMessage(value)`：`plainRequest(value, ['content','mentions','connectionRevision','requestId','replyTo'], ['content','mentions','connectionRevision'])`。
+  校验：`typeof content !== 'string' || !content.trim() || content.length > 4000 || /[\x00]/.test(content) || !Array.isArray(mentions) || mentions.length > 20 || mentions.some(id => typeof id !== 'string' || !ID.test(id)) || !sequence(connectionRevision)` → `INVALID_REQUEST` `'请输入 1–4000 字的篝火消息，并选择有效成员。'`。
+  `expected = this._context(undefined, value.connectionRevision)`。
+  **有 `writeImpl` 时**（中继路径）：`mentions = [...new Set(value.mentions)]`；`legacy = mentions.filter(id => !/^t_[A-Za-z0-9_-]+$/.test(id))`；有 legacy 才 `getMembers()`；`legacy.some(id => 目录里没有)` → `INVALID_REQUEST` `'所选 Being 已不在成员目录，请重新选择。'`；`missing = mentions.filter(id => !new RegExp(`(^|\\s)@${id}(?=$|[^A-Za-z0-9_-])`).test(content))`；`content = (missing.length ? missing.map(id => `@${id}`).join(' ') + '\n' : '') + value.content`；`writeImpl({kind:'bonfire', content, connectionRevision, ...(requestId ? {requestId} : {}), ...(replyTo ? {replyTo} : {})})`；`_context(expected)`；返回 result。
+  **无 `writeImpl` 时**：`_mutate('bonfire', expected, …)`：同样的 mentions/legacy/missing 计算，但 `message = (missing.map(id => `@${id}`).join(' ') + (missing.length ? '\n' : '') + value.content).trim()`；`message.length > 4000` → `INVALID_REQUEST` `'加入 @成员后消息超过 4000 字，请缩短内容。'`；
+  `response = await _request('/api/bonfire/speak', {expected, body: {message}, mutation: true})`；
+  `response.ok !== true || !sequence(response.seq) || !matchesTownIdentity(response, await this._townIdentity(expected)) || !Array.isArray(response.mentions)` → `RESULT_UNKNOWN` `'篝火未返回完整发送确认，请刷新消息后核对；不要重复提交。'`；
+  `_set('bonfire','ready')`；返回 `{ok:true, id: String(response.seq), ...(hasOwn(response,'mention_warnings') ? {mention_warnings} : {}), mentions: response.mentions.filter(字符串).slice(0,20).map(n => text(n,100))}`。
+- `getChannelStatus({signal} = {})`：`_read('channel', expected, async () => { value = await _request('/api/channels/status', {expected, signal, query: {being_id: expected.loomBeingId}}); if ((hasOwn 'town_id' || hasOwn 'being') && !matchesTownIdentity(value, await _townIdentity(expected, signal))) throw IDENTITY_MISMATCH '渠道状态返回了不同的 Town 身份。'; list = Array.isArray(value.channels) ? value.channels : record(value.channels) ? Object.entries(value.channels).map(([channel, entry]) => ({...(record(entry) ? entry : {}), channel})) : [value]; return {channels: ['feishu','wechat'].map(channel => channelDto(list.find(item => record(item) && item.channel === channel), channel))} })`。
+  > 这里回调忽略了传入的 `request`，直接用 `_request`——**即使有 `readImpl`，渠道状态也走直连**（`'channel'` 不在 throughBeing 的 area 白名单里，一致）。
+- `beginChannelConnection(value)`：`plainRequest(value, ['channel','connectionRevision'])`（required 默认 = allowed，两个键都必填）；`channel ∉ ['feishu','wechat'] || !sequence(connectionRevision)` → `INVALID_REQUEST` `'请选择飞书或微信渠道。'`。
+  `_mutate('channel', expected, async () => { response = await _request('/api/channels/register', {expected, body: {channel, being_id: expected.beingId}, mutation: true}); result = channelDto(response, channel); if (response.ok !== true && !['registered','pending','waiting','connected'].includes(result.status)) throw RESULT_UNKNOWN '渠道登记结果尚未确认，请先刷新状态。'; if (result.qrCodeUrl && !result.qrCodeDataUrl) { result.qrCodeDataUrl = await this._qrImage(result.qrCodeUrl, expected); if (!result.qrCodeDataUrl) result.detail = '渠道已登记，扫码图像暂时无法读取，请刷新渠道状态。'; } return {ok: true, ...result} })`。
+- `_qrImage(url, expected)`：`_context(expected)`；fetch `{method:'GET', headers:{Accept:'image/png,image/jpeg,image/webp'}, credentials:'omit', redirect:'error', cache:'no-store'}`；`mime = content-type 分号前、trim、小写`；`!ok || mime ∉ 三种 || Number(content-length) > MAX_QR_BYTES` → `''`；流式累计 `> MAX_QR_BYTES` → `''`；`imageData(Buffer.concat(chunks), mime)`。catch → `_context(expected)` 后 `''`（**纪元失效仍会抛**）。
+- `updateFeishuCredentials(value)`：`plainRequest(value, ['appId','appSecret','connectionRevision'])`（三个都必填）；`appId` 必须 `/^cli_[A-Za-z0-9_-]{1,120}$/`、`appSecret` 长度 1–4096 且不含 `/[\x00-\x20\x7f]/`、`connectionRevision` 是 sequence，否则 `INVALID_REQUEST` `'请输入有效的飞书 App ID 和 App Secret。'`。
+  `_mutate('channel', expected, async () => { response = await _request('/api/channels/credentials', {expected, body: {channel:'feishu', app_id: appId, app_secret: appSecret}, mutation: true}); if (response.ok !== true) throw RESULT_UNKNOWN '飞书配置结果尚未确认，请先刷新渠道状态。'; return {ok:true, channel:'feishu', status:'pending', detail:'凭据已提交，请在飞书完成机器人设置并刷新连接状态。'} })`。
