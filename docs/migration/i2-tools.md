@@ -34,3 +34,19 @@
 ## 进度
 
 - [x] 读方案
+
+### docs/migration/i0-seams.md + subsystems/{types,extensions}.ts + 四个 append-only 文件
+
+- **I0 已经一次收敛完副本**（偏离方案 §2.5 的分步走）：`tools/platform.ts`、`tools/message-context.ts`、
+  `tools/terminal/platform.ts`、`chat/context.ts`、`orchestration/vendored.ts` 等**已经删掉**，
+  `tools/console.ts` 的 `consoleEnvironment`/`WINDOWS_RUNNER` **已经改指 `common/platform`**。
+  `tools/security.ts` 只剩 `protocolFile`。→ **§3.2 的「要收敛的副本」这一步在 I2 里已无事可做**，只需核实。
+- `linked?(): void` 钩子已存在（I0 复审第二轮补的），在全部 installer 跑完后按安装顺序同步跑一趟，
+  错误报 `${key}-linked`。I0 明确点名给 I2 用来赋 `orchestration.presentation`。
+- `FeatureModel = Store & { start?(): () => void }`，`start()` 必须返回 cleanup，由 `AppModel.start()` 接管。
+- `ctx.push` 自带窗口守卫（destroyed 判断在里面），子系统不必自己判断。
+- `ctx.electron.clipboard` 是 **Promise 形态**（`readText(): Promise<string>`），Electron 44 实测。
+- `ctx.store` 是 `SubsystemSettings`：`connection` / `connectionAddress` / `settings: Settings` /
+  `extras` / `saveExtra(patch)`（不是方案写的交叉类型）。
+- `ElectronBindings.WebContentsView` / `session` / `net.request` 是 `unknown`，使用处 `as` 一次并写明理由。
+- `PANEL_SLOTS` 排序：`order` 升序、`key` 兜底；建议 order 取百位。`visiblePanels(app)` 已由 page.tsx 调用。
