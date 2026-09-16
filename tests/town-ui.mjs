@@ -126,11 +126,6 @@ try {
       // The public homepage carries the member directory and needs no credential.
       if (url.pathname === '/api') {
         globalThis.town.members++;
-        // 同时在飞的公共目录请求数的峰值。「同一 in-flight 读合并」就是这个数字
-        // 永远是 1：TTL 缓存只在成功之后才写，所以并发调用者只能靠合并，不能靠缓存。
-        // IM 2026-09-16 在打包产物上实测到干净一次打开 4 条、失败时 9–12 条。
-        globalThis.town.membersOpen = (globalThis.town.membersOpen || 0) + 1;
-        globalThis.town.membersPeak = Math.max(globalThis.town.membersPeak || 0, globalThis.town.membersOpen);
         // 「成员目录还没到」= 请求真的挂着，直到 `releaseMembers()`。这正是下面两条
         // check 名字里的场景，也是 BeingDesktop test/town-conversation-ui.cjs
         //「while the member directory remains pending」的原样。
@@ -139,7 +134,6 @@ try {
         // `/api/bonfire/hear` 和 `getMembers()` 放进同一个 `Promise.all`，
         // `.catch` 接得住「拒绝」接不住「慢」（复审 finding 2，记录 §8 openIssue 10）。
         if (globalThis.town.holdMembers) await globalThis.town.membersHeld;
-        globalThis.town.membersOpen--;
         return Response.json({ community: [{ town_id: 't_River', display_name: '河流', description: '' }] });
       }
       if (!authorized) return Response.json({ error: 'unauthorized' }, { status: 401 });
