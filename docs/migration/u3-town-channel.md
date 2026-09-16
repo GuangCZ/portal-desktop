@@ -153,3 +153,18 @@
 - architecture.test.ts 扫 `desktop/{main,preload,renderer,shared}`：renderer 不得 import main/preload/electron/node；main/preload 不得 import renderer；shared 不得 import 任何层或 electron/node。**main 层可以 import node: 内置模块**（本单元只用 `node:crypto` 的 randomUUID；能注入就注入）。
 - 主进程风格：单引号、2 空格、`private` 字段 + 构造函数参数属性、`Data = Record<string, unknown>` 守卫函数、中文用户文案 + 英文注释。
 - 测试风格：`import { expect, it, vi } from 'vitest'`；本单元按指令统一用双引号（`tests/architecture.test.ts` 即双引号先例）。
+
+### src/town-pairing.cjs 补充细节（逐行移植必需）
+- `fail(code) = Object.assign(new Error(errors[code]), {code})`。
+- `_context(expected)`：`getContext()` → 要求 `connected && connection`；`parseConnection(value.connection.url || value.connection)`；context = `{connection, key: sessionPartition(connection), revision: value.revision, epoch: this._epoch}`；expected 存在且 key/revision/epoch 任一不同 → SESSION_CHANGED。
+- `reset()`：epoch++、abort、controller=null、`_set({status:'idle',busy:false,errorCode:''})`。
+- `connect()` 顺序：busy||client.pairing → BUSY；`_context()`；`client.store.assertAvailable?.()`；`client.state().pairingPending` → `return client.retryPairStorage()`；无 token → NOT_CONNECTED；建 AbortController + `AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)])`。
+- `url(route)` = `new URL(connection.apiBase + route)` 且 `searchParams.set('token', connection.token)`；`options = {signal, credentials:'omit', redirect:'error', referrerPolicy:'no-referrer', cache:'no-store'}`。
+- `_set({status:'requesting', busy:true, errorCode:''})` 在探活之前。
+- 探活：`GET url('/api/stream/active')`；try 内 `_context(ctx)`；`status !== 204` 时要求 ok + content-type 含 `application/json`，否则 READINESS_UNKNOWN；`data.finished !== true` → BUSY；**finally 一定 cancel body**。
+- 之后 `_context(ctx)`；`signal.aborted` → READINESS_UNKNOWN；`scene = createScene()`；再 `_context(ctx)`；`dispatched = true`；POST。
+- POST 后 `_context(ctx)`；`!ok || status === 202 || content-type 不含 text/event-stream` → PAIRING_INCOMPLETE。
+- 流内：每个事件先 `_context(ctx)`；`signal.aborted` → PAIRING_INCOMPLETE；`meta` 记 `current = data.scene_id`；`eventScene = data.scene_id ?? current`，≠scene 直接 return；`error` → failed=true；delta 取 `content_block_delta` 的 `data.delta?.text`，或 `['text','text_delta']` 的 `data.text ?? data.delta`；有 delta 则 `text += delta; complete = false`；`text.length > 2000` → PAIRING_INCOMPLETE；`['message_stop','done']` → `complete = true`，若 `!failed && /^[A-Z0-9]{6}$/.test(text.trim())` 则 **throw 哨兵对象 replyComplete**（catch 里只吞这个哨兵）。
+- 收尾：`_context(ctx)`；`aborted||failed||!complete||码不合法` → PAIRING_INCOMPLETE；`client.pair({code})`；`_context(ctx)`；`_set({status:'complete', errorCode:''})`；返回 pair 的结果。
+- catch：**先 `_context(ctx)`（可能抛 SESSION_CHANGED 覆盖原错误）**；`code = error.code || (dispatched ? 'PAIRING_INCOMPLETE' : 'READINESS_UNKNOWN')`；`_set({status:'manual_required', errorCode: code})`；`throw errors[code] ? fail(code) : error`。
+- finally：cancel response body、abort controller、若 `_controller === controller` 则置 null 并 `_set({busy:false})`。
