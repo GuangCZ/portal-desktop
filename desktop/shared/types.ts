@@ -1,3 +1,4 @@
+import type { ChatAPI } from './desktop-types';
 export interface UpdateState {
   phase: 'idle' | 'checking' | 'available' | 'current' | 'unavailable';
   currentVersion: string; latestVersion?: string; message: string; releaseUrl: string;
@@ -101,6 +102,8 @@ export interface DesktopAPI {
   exportDiagnostics(): Promise<boolean>;
   openLoom(): Promise<void>;
   onPortal(callback: (state: PortalState) => void): () => void;
+  /** Being Desktop's native conversations (desktop-types.ts). */
+  chat: ChatAPI;
 }
 declare global { interface Window { beings: DesktopAPI } }
 

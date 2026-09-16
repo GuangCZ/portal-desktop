@@ -11,7 +11,7 @@ import os from "node:os";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { ChatCache } from "../desktop/main/chat/cache";
 import type { SecretStorage } from "../desktop/main/app/settings";
-import type { ChatSnapshot } from "../desktop/main/chat/store-types";
+import type { ChatSnapshot } from "../desktop/main/chat/types";
 
 const IDENTITY = "https://echo.beings.town/cz_being";
 const OTHER = "https://echo.beings.town/another_being";

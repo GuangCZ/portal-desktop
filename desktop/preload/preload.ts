@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopAPI, PortalState, TownLiveState } from '../shared/types';
+import { chat } from './desktop-channels';
 const api: DesktopAPI = {
   platform: process.platform,
   clientStartup: enabled => ipcRenderer.invoke('beings:client-startup', enabled),
@@ -62,5 +63,6 @@ const api: DesktopAPI = {
     ipcRenderer.on('beings:portal-state', listener);
     return () => ipcRenderer.removeListener('beings:portal-state', listener);
   },
+  chat,
 };
 if (process.isMainFrame) contextBridge.exposeInMainWorld('beings', api);

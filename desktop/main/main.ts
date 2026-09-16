@@ -31,6 +31,7 @@ import { TownLive } from './town/live';
 import { TownClient, TownCredentials, TOWN_ORIGIN } from './town/client';
 import { registerTownIpc } from './town/ipc';
 import { registerKitsIpc } from './kits/ipc';
+import { installDesktopExtensions, type DesktopExtensions } from './extensions';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -73,6 +74,7 @@ let background: BackgroundPortal;
 let kitInstaller: KitInstaller;
 let townLive: TownLive;
 let cancelTownPairing: (() => void) | undefined;
+let extensions: DesktopExtensions | undefined;
 let updatePoll: ReturnType<typeof setInterval> | undefined;
 let backgroundPoll: ReturnType<typeof setInterval> | undefined;
 let quitting = false;
@@ -354,6 +356,7 @@ async function ready() {
     await reusePreviousConfig();
     await verifyBeingConnection(store.connection, net.fetch.bind(net) as typeof fetch);
     startupNotice = undefined;
+    extensions?.connectionVerified(store.connection);
   };
   const externalPortal = new ExternalPortalObserver();
   const ownedRoot = () => background.installedService?.label === background.label && !background.installedService.existing ? background.installedService.root : undefined;
@@ -434,6 +437,7 @@ async function ready() {
     open: url => browser?.open(url),
   });
   registerKitsIpc({ handle, exclusive, window: () => window, store, kitInstaller });
+  extensions = installDesktopExtensions({ handle, exclusive, window: () => window, store, secretStorage, userData: directory, desktopId, clientVersion: app.getVersion(), fetchImpl: net.fetch.bind(net) as typeof fetch, onError: (scope, error) => { errorLog.report(scope, error); } });
   handle('beings:save', (input: SaveSettings) => exclusive(async () => {
     cancelTownPairing?.();
     const previous = { ...store.settings }; const previousConnection = store.connection;
@@ -637,7 +641,7 @@ else {
     quitting = true;
     cancelTownPairing?.();
     lifecycleError = '';
-    void exclusive(async () => { await kitInstaller?.dispose(); await portal.stop(); browser?.close(); await errorLog.flush(); }).then(() => {
+    void exclusive(async () => { await extensions?.quitting(); await kitInstaller?.dispose(); await portal.stop(); browser?.close(); await errorLog.flush(); }).then(() => {
       clearInterval(backgroundPoll); clearInterval(updatePoll);
       townLive?.dispose(); proxy.abortAll();
       quitCleanupDone = true; tray?.destroy(); app.quit();

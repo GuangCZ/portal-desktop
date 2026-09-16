@@ -225,6 +225,104 @@ fixture：`PARENT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`、可控 `historyGat
 3. `accepted replies are never resent and reset invalidates an opening card`
 4. `closing a card during dispatch cannot revive readers, timers or network requests`
 
+### desktop/shared/desktop-types.ts（任务 3 的 DTO）
+
+渲染层看到的对话契约，形状取自 interfaces.md §1.2 / §1.3，`shared` 纯净所以不 import 主进程模块——
+IPC 层用这些类型标注自己的返回值，靠 tsc 保持两边一致。导出：
+`ChatRowImage / ChatRow / ChatSentItem / ChatRepliedItem / ChatLiveReply / ChatView /
+ChatSessionSummary / ChatRecoveryState / ChatState / ChatImageUpload / ChatReferenceInput /
+ChatSendRequest / ChatSendResult / ChatStopResult / ChatReloadResult / ChatComposerEntry /
+ChatComposerData / ChatEventPayload / ChatAPI`。
+`desktop/shared/types.ts` 只加两处：`import type {ChatAPI}` 与 `DesktopAPI.chat`。
+
+### desktop/main/chat/ipc.ts（任务 3）
+
+`registerChatIpc({handle, exclusive, sessions, blocked?})`，照 `town/ipc.ts` 用 main.ts 传进来的
+`handle` 包装器注册，天然继承来源校验与退出守卫。9 个通道（顺序即注册顺序，
+`tests/chat-ipc.test.ts` 的 `CHANNELS` 逐字断言）：
+`beings:chat-sessions / -view / -send / -stop / -reload / -change-session / -rename-session /
+-forget-session / -composer-data`。
+两个改状态的走 `exclusive`（`-change-session`、`-rename-session`），对应 BeingDesktop
+src/main.cjs 行 137、142 的串行化。
+`beings:chat-sessions` 与 `-composer-data` 在未连接时**照常返回**（空快照 / 空目录），
+其余一律 `NOT_CONNECTED`。`blocked()` 返回非空串时用它替换「请先连接 Being。」——
+唯一的来源是 desktop-id.json 读不出来，此时怪连接会让用户去修没坏的东西。
+`-change-session` 传 `null`/`undefined` = 新建（`create({title:'新会话'})`，同 BeingDesktop 行 1176），
+两支都返回当前 active 的 id。
+校验是结构性的：`fields()` 拒绝白名单外的字段（不是丢弃——字段对不上说明调用方与契约不一致），
+`sessionId()` 要求 UUID。尺寸/图片/引用的实测上限**不在这里**，留给 `ChatSessions.send` 一处owner。
+`chatPush(target)` 给出 `{event, state}` 两个推送函数，通道名与 handler 同文件。
+
+### desktop/preload/desktop-channels.ts（任务 4）
+
+`export const chat: ChatAPI`，`ipcRenderer.invoke` 逐通道透传，两个订阅
+`beings:chat-event` / `beings:chat-state` 返回退订函数。
+`preload.ts` 只加 `import {chat} from './desktop-channels'` 与暴露表里的 `chat,` 两行，
+`process.isMainFrame` 守卫原样不动。
+
+### desktop/main/extensions.ts（任务 5）
+
+`installDesktopExtensions(ctx) → {connectionVerified, connectionCleared, quitting, chat, ready}`。
+不 import electron（window/fetch/密钥库/队列全部注入），所以整套挂钩可以脱离 Electron 测。
+ctx：`handle / exclusive / window() / store{connection, connectionAddress} / secretStorage /
+userData / desktopId / clientVersion? / fetchImpl? / onError?`。
+构造时建 `ChatCache({directory: userData/chat-cache, safeStorage})` 与 `ChatSessions`，
+`getContext: () => ({connected: !closed && Boolean(address), connection: address, revision})`。
+`desktopId` 不是 UUID 时 `ChatSessions` 抛 `TypeError`，这里吞掉并把 `blocked` 置为
+「Desktop 身份不可用……」，IPC 照常注册（否则通道全缺，渲染层只会看到 `undefined is not a function`）。
+- `connectionVerified(connection)`：**同步返回**。它由 main.ts 的 `verifyConnection` 调用，
+  而后者本身跑在 `exclusive` 里——在这里 await `exclusive` 会自锁；BeingDesktop 的
+  `startNativeChat`（src/main.cjs 行 550）同样是 fire-and-forget。
+  地址取 `store.connectionAddress`（回退 `connection.link`），身份不变且已 open 就**不重启**时间线，
+  只有身份真的变了才 `revision++` 并 `start(key)`；`revision` 变化会让在途请求 `SESSION_CHANGED`，
+  所以重连同一个 Being 不能动它。
+- `connectionCleared()` / `quitting()`：`sessions.end()` 后 `cache.flush()`。顺序是对的——
+  `ChatStore` 每次变更都同步把 payload 交给 cache（`void this._persist()`），
+  所以 flush 等的是已入队的写，不是在和它们赛跑。`quitting()` 之后 `closed` 为真，
+  `connectionVerified` 变成 no-op。
+
+### desktop/main/chat/connection.ts 追加：`beingIdentityKey(address)`
+
+逐字移植自 BeingDesktop src/security.cjs `sessionPartition`（行 45）加上它依赖的
+`parseConnection` 四个字段。**这是磁盘格式**：它再被 sha256 成 chat-cache 的文件名，
+差一个字节，0.8.x profile 的记录就变成不可见并被重写一份。
+所以它从**保存的原始地址**算，而不是从 portal-desktop 的 `Connection` 算——
+`displayUrl` 保留路径结尾斜杠、`apiBase` 去掉它，`Connection.link` 分不出这两者。
+金标准（2026-09-16 用 BeingDesktop 自己的代码算出，写进测试）：
+`https://echo.beings.town/cz_being/?token=c*64` → `persist:loom-v1-f7de495408e96692cad3d377cebea48d`；
+去掉结尾斜杠 → `…-9858af24a3d66ada7b19ee067f57ab0f`；
+加 `api=`+`relay_secret=` → `…-f828057408066361ee69ba2004d910e0`。
+
+### main.ts 的三处（任务 5）
+
+1. `registerKitsIpc(...)` 之后一行 `extensions = installDesktopExtensions({...})`
+   （模块级 `let extensions: DesktopExtensions | undefined`，与 `cancelTownPairing` 同一处声明——
+   `before-quit` 注册在 `ready()` 外面，够不到函数内的 const）。
+2. `verifyConnection()` 末尾一行 `extensions?.connectionVerified(store.connection)`。
+   放在这里而不是 `restoreStartup` 里，是因为三个入口（启动、`beings:save` 换 Being、
+   `beings:portal-start` 手动启动）都经过它，一行覆盖三处。
+3. `before-quit` 的 `exclusive` 块首行 `await extensions?.quitting()`。
+
+`connectionCleared()` 目前在 main.ts 没有调用点：portal-desktop 没有「清空连接」的成功路径
+（`verifyBeingConnection(null)` 直接抛）。保留在 API 上并由测试覆盖，等后续阶段的断开连接接上。
+
+### tests/chat-ipc.test.ts（新写，7 例）
+
+整套从 `installDesktopExtensions` 装起（顺带覆盖任务 5 的挂钩），fetch 假路由同
+chat-sessions 夹具。用例：
+1. `the bridge registers the documented channel set and refuses to work before a Being is bound`
+2. `a profile with no Desktop identity says so instead of blaming the connection`
+3. `a verified connection reads a baseline, probes for a breath already running, and never exposes the address`
+4. `input the renderer should never send is refused before it reaches the network`
+5. `a message sent through the bridge streams its reply to the window in the documented shape`
+6. `conversations are created, renamed, selected and forgotten through their own channels`
+7. `the cache is filed under BeingDesktop 0.8.x's own identity, and quitting flushes it before the layer closes`
+
+写测试时撞到的两条真实语义（不是 bug，别"修"）：
+- 没有 `scene_id` 的历史行**不进任何会话**，但照样推进 cursor。夹具的 UUID 是随机的，
+  所以要先 connect 拿到 id，再用 `sceneId(DESKTOP, id)` 打标签 reload。
+- `meta.confirmed` 只有服务端回显了我们发出的 `client_ref` 才为真，所以响应要从请求体里读它。
+
 ## 进度
 
 | 文件 | 状态 |
@@ -235,10 +333,26 @@ fixture：`PARENT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`、可控 `historyGat
 | `desktop/main/chat/context.ts` | 已移植 |
 | `desktop/main/chat/sessions.ts` | 已移植，测试通过 |
 | `desktop/main/chat/details.ts` | 已移植，测试通过 |
-| `desktop/shared/desktop-types.ts` | 未开始 |
-| `desktop/main/chat/ipc.ts` | 未开始 |
-| `desktop/preload/desktop-channels.ts` | 未开始 |
-| `desktop/main/extensions.ts` | 未开始 |
+| `desktop/shared/desktop-types.ts` | 已完成 |
+| `desktop/shared/types.ts`（`DesktopAPI.chat`） | 已完成 |
+| `desktop/main/chat/ipc.ts` | 已完成，测试通过 |
+| `desktop/main/chat/connection.ts`（`beingIdentityKey`） | 已完成，测试通过 |
+| `desktop/preload/desktop-channels.ts` + `preload.ts` | 已完成 |
+| `desktop/main/extensions.ts` | 已完成，测试通过 |
+| `desktop/main/main.ts`（三处挂钩） | 已完成 |
 | `tests/chat-sessions.test.ts` | 20 用例通过 |
 | `tests/chat-details.test.ts` | 4 用例通过 |
-| `tests/chat-ipc.test.ts` | 未开始 |
+| `tests/chat-ipc.test.ts` | 7 用例通过 |
+
+门槛（2026-09-16）：`npm run typecheck` 通过；
+`npx vitest run` → Test Files 56 passed | 7 skipped (63)，Tests 445 passed | 16 skipped (461)。
+
+未接线（留给后续阶段，不是遗漏）：
+- `prepareMessage` 没接。BeingDesktop 用 `nativeMessageContext({orchestration, environment:
+  desktopEnvironment})`，而 `desktopEnvironment`（src/main.cjs 行 200）读的是 orchestration、
+  desktopTools、portal、workspace——这个壳还没有。`desktopMessageContext` 在 BeingDesktop 里
+  从来不会只带半个 runtime 被调用，硬凑一个等于编造 wire 形状，所以宁可暂时不发帧
+  （`unwrapMessage` 对没帧的文本本来就是恒等）。注入点：`context.ts` + `frame.ts`。
+- `ChatDetails` 已移植已测，但没有 IPC 通道、没有在 `extensions.ts` 里实例化。
+- `ensureChannel` / `syncChannel`（飞书、微信）没有调用方。
+- portal-desktop 原有的 `ChatProxy` / `chat-scene.json` 仍在，本块的会话层不依赖它们。

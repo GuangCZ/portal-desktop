@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export interface Connection { endpoint: string; being: string; token: string; relaySecret: string; link: string }
 
 export function parseConnection(input: string): Connection {
@@ -51,4 +53,28 @@ export function redact(text: string, secrets: string[] = []): string {
   let safe = text.replace(/\u001b\[[0-9;]*m/g, '');
   for (const secret of secrets.filter(Boolean).sort((a, b) => b.length - a.length)) safe = safe.split(secret).join('[redacted]');
   return safe.replace(/((?:token|secret|api_key)=)[^\s&"']+/gi, '$1[redacted]');
+}
+
+// The Being identity a conversation cache is filed under. Ported verbatim from
+// BeingDesktop 0.8.26 src/security.cjs `sessionPartition` (line 45) together with
+// the four fields of its own `parseConnection` that feed it; 2026-09-16.
+//
+// This value is hashed again into the chat-cache file name, so it is a disk
+// format, not an implementation detail: reproduce it byte for byte or a 0.8.x
+// profile's transcripts become invisible and get written a second time under a
+// new name. That is why it is computed from the saved address rather than from
+// the parsed `Connection` above — `displayUrl` keeps the path's trailing slash
+// and `apiBase` drops it, a distinction `Connection.link` does not preserve.
+const SESSION_IDENTITY_VERSION = 'v1';
+export function beingIdentityKey(address: string): string {
+  const url = new URL(address.trim());
+  url.hash = '';
+  const api = new URL(url.searchParams.get('api') || `${url.origin}${url.pathname.replace(/\/+$/, '')}`);
+  const token = url.searchParams.get('token') || '';
+  // A relay secret is part of the identity: the same Being reached with a
+  // different secret is a different binding, and must not read the first's cache.
+  const secret = url.searchParams.get('relay_secret') || url.searchParams.get('secret') || token;
+  const identity = JSON.stringify([SESSION_IDENTITY_VERSION, `${url.origin}${url.pathname}`,
+    api.href.replace(/\/+$/, ''), token, secret]);
+  return `persist:loom-${SESSION_IDENTITY_VERSION}-${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`;
 }
