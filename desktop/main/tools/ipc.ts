@@ -180,7 +180,11 @@ export function registerToolsIpc({ handle, tools, clipboard, blocked }: ToolsIpc
     }
     // Ranges, flooring and the "keep the last rectangle while hiding" rule are
     // DesktopBrowser.setViewport's, ported with its own messages.
-    return require().browser.setViewport(viewport);
+    // Same as the panel's channel: on QUIT_ALLOWED, so it can arrive after the
+    // browser is destroyed. A detached rectangle is the answer, not an error.
+    const live = require().browser;
+    if (live.destroyed) return IDLE_TOOLS_STATE.browser;
+    return live.setViewport(viewport);
   });
 
   handle('beings:clipboard-read', async (): Promise<string> => {

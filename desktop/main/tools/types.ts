@@ -79,6 +79,15 @@ export interface DesktopBrowserLike {
    * why it was missing from the surface the migration unit wrote. I2,
    * 2026-09-16. */
   setViewport(options: { visible?: unknown; bounds?: unknown }): LiveBrowserSnapshot;
+  /** True once `destroy()` has run. Every other method on this surface throws
+   *「浏览器已经关闭。」afterwards (browser.ts `_alive`), which is right for a
+   * tool call and wrong for the two viewport channels: those are on
+   * `QUIT_ALLOWED`, so they still arrive while the window closes — after
+   * `tool-browser`'s `quitting()` has already destroyed the browser. Hiding a
+   * rectangle that no longer exists is not a failure, so those two handlers read
+   * this and answer quietly. IM, 2026-09-16 (measured: a quit with the panel
+   * open wrote a `beings:tool-browser-viewport` entry into client-errors.log). */
+  readonly destroyed: boolean;
   destroy(): void;
 }
 /** The narrow browser surface browser-links and worker presentation need. */

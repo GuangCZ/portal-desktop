@@ -98,11 +98,22 @@ export function registerToolBrowserIpc({ handle, browser, blocked }: ToolBrowser
   // Where the panel's placeholder is, in window coordinates. `visible:false`
   // without bounds keeps the last rectangle, which is what `DesktopBrowser`
   // expects when a panel is merely hidden rather than resized.
-  handle('beings:tool-browser-viewport', (value: unknown): ToolBrowserState =>
+  handle('beings:tool-browser-viewport', (value: unknown): ToolBrowserState => {
     // `setViewport` owns both checks: a non-boolean `visible` is
     //「浏览器显示选项无效。」and a rectangle that is not four finite numbers in
     // range is「浏览器显示区域无效。」.
-    state(required().setViewport(fields(value, ['visible', 'bounds'], '浏览器显示'))));
+    const options = fields(value, ['visible', 'bounds'], '浏览器显示');
+    // This channel is on QUIT_ALLOWED, so the panel's last `visible:false` can
+    // land after `tool-browser`'s `quitting()` destroyed the browser. There is
+    // no rectangle left to move and nothing to report: answer idle rather than
+    // throw「浏览器已经关闭。」into the error log on every quit. Only *destroyed*
+    // is quiet — `required()` still refuses when there is no browser at all
+    // (the Electron facade was rejected), and the argument is validated first,
+    // so a malformed payload is still refused.
+    const current = required();
+    if (current.destroyed) return idle;
+    return state(current.setViewport(options));
+  });
 }
 
 /** The one push, given the window to send on. */

@@ -44,15 +44,19 @@ function fixture() {
   /** What each registrar was told, so a call that got through is visible. */
   const viewports: { where: string; value: unknown }[] = [];
   const browser = {
+    destroyed: false,
     snapshot: () => ({ tabs: [], activeTabId: null, visible: false }),
     setViewport: (value: unknown) => { viewports.push({ where: "tool-browser", value }); return { tabs: [], activeTabId: null, visible: false }; },
     newTab: () => ({ tabs: [], activeTabId: null, visible: false }),
-  } as unknown as DesktopBrowser;
+  } as unknown as DesktopBrowser & { destroyed: boolean };
   const tools = {
     snapshot: () => ({ browser: { tabs: [], activeTabId: null, visible: false }, console: { jobs: [] }, link: { status: "disconnected" }, workspace: "", requestResult: null, requests: [] }),
     perform: async () => ({ browser: { tabs: [], activeTabId: null, visible: false }, console: { jobs: [] }, link: { status: "disconnected" }, workspace: "", requestResult: null, requests: [] }),
-    browser: { setViewport: (value: unknown) => { viewports.push({ where: "tools", value }); return { tabs: [], activeTabId: null, visible: false }; } },
-  } as unknown as DesktopTools;
+    browser: {
+      destroyed: false,
+      setViewport: (value: unknown) => { viewports.push({ where: "tools", value }); return { tabs: [], activeTabId: null, visible: false }; },
+    },
+  } as unknown as DesktopTools & { browser: { destroyed: boolean } };
 
   registerToolsIpc({ handle, tools: () => tools, clipboard: { readText: async () => "" } });
   registerToolBrowserIpc({ handle, browser: () => browser });
@@ -60,6 +64,12 @@ function fixture() {
   return {
     handlers, viewports,
     quit: () => { quitting = true; },
+    /** What `tool-browser`'s `quitting()` does: one `DesktopBrowser`, destroyed,
+     * seen through both surfaces because I2/I3/IM made them the same object. */
+    destroyBrowser: () => {
+      (browser as unknown as { destroyed: boolean }).destroyed = true;
+      (tools as unknown as { browser: { destroyed: boolean } }).browser.destroyed = true;
+    },
     call: (channel: string, ...args: unknown[]) => handlers.get(channel)!({ sender: window.webContents, senderFrame: frame }, ...args),
   };
 }
@@ -109,6 +119,37 @@ describe("the quitting guard", () => {
     // A different frame, on an allowed channel, during a quit: the sender check
     // is first, and being on QUIT_ALLOWED never weakens it.
     await expect(handler({ sender: {}, senderFrame: { url: SHELL_URL } }, { visible: false })).rejects.toThrow("Untrusted IPC sender");
+    expect(f.viewports).toEqual([]);
+  });
+
+  // Regression, found by the real-machine walk rather than by reading code
+  // (docs/migration/im-integration.md §4.7): putting the two viewport channels on
+  // QUIT_ALLOWED is only half the repair. They now reach `setViewport`, and
+  // `tool-browser`'s `quitting()` destroys the browser before the panel unmounts,
+  // so `_alive()` threw「浏览器已经关闭。」and `createTrustedHandle` wrote a
+  // `beings:tool-browser-viewport` entry into client-errors.log on every quit
+  // with the panel open. Letting go of a rectangle that no longer exists is not
+  // a failure.
+  it("answers quietly when the browser it would move is already destroyed", async () => {
+    const f = fixture();
+    f.quit();
+    f.destroyBrowser();
+    await expect(f.call("beings:tool-browser-viewport", { visible: false })).resolves
+      .toEqual({ tabs: [], activeTabId: null, visible: false });
+    await expect(f.call("beings:tools-browser-view", { visible: false })).resolves
+      .toMatchObject({ tabs: [], activeTabId: null, visible: false });
+    // Quietly means quietly: neither surface was asked to place anything.
+    expect(f.viewports).toEqual([]);
+  });
+
+  it("still validates the payload after the browser is destroyed", async () => {
+    const f = fixture();
+    f.quit();
+    f.destroyBrowser();
+    // A destroyed browser is not a reason to accept nonsense: the argument check
+    // runs before the liveness check on both surfaces.
+    await expect(f.call("beings:tool-browser-viewport", { visible: false, nope: 1 })).rejects.toThrow();
+    await expect(f.call("beings:tools-browser-view", { visible: "no" })).rejects.toThrow("浏览器显示参数无效。");
     expect(f.viewports).toEqual([]);
   });
 });
