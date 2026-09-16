@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  feedMessages,
   feedDisplayName,
   feedReplyAuthor,
   filterMessages,
@@ -9,18 +8,27 @@ import {
   type FeedFilters,
   type FeedMessage,
 } from "../models/feed";
-import { TownModel, list, str, type Data } from "../models/town";
+import { TownModel } from "../models/town";
 import { sceneExcerpt } from "../../shared/models/scene";
 import { Markdown, markdownText } from "../../shared/components/markdown";
-import { collectMentionNames, mentionText, type MentionNames } from '../models/mentions';
+import { mentionText, type MentionNames } from '../models/mentions';
 import { MentionText } from './mention-text';
+
+/** One feed of the paired Town client: the bonfire, one fireside, or the inbox.
+ *
+ * Rewired 2026-09-16: the rows arrive already validated (../models/feed.ts), and
+ * the names in them are a projection through the member directory, applied at
+ * render time. That is what lets a directory arriving after the messages
+ * re-render labels without touching a message body — BeingDesktop
+ * test/town-conversation-ui.cjs, "late directory arrival rerenders mention
+ * labels without mutating messages". */
 export function TownFeed({
   town,
-  data,
+  messages,
   filterKey,
 }: {
   town: TownModel;
-  data: Data;
+  messages: FeedMessage[];
   filterKey: string;
 }) {
   const [filters, setFilters] = useState<FeedFilters>(
@@ -28,19 +36,9 @@ export function TownFeed({
   );
   const [selected, setSelected] = useState("");
   const more = useRef<HTMLDetailsElement>(null);
-  const me = town.me || (typeof data.being === "string" ? data.being : "");
-  const mail =
-    town.view === "mail"
-      ? (town.tab as "all" | "inbox" | "sent")
-      : undefined;
-  const messages = useMemo(
-    () => feedMessages(list(data, "messages"), { me, mail }),
-    [data, me, mail],
-  );
-  const mentionNames = useMemo(() => collectMentionNames([
-    ...list(data, 'messages'),
-    { town_id: town.me, display: town.live?.display },
-  ], town.mentionNames), [data, town.mentionNames, town.me, town.live?.display]);
+  const me = town.me;
+  const mail = town.view === "mail";
+  const mentionNames = town.mentionNames;
   const authors = useMemo(
     () =>
       [
@@ -102,6 +100,10 @@ export function TownFeed({
       </select>
     </label>
   );
+  // The accumulating timeline draws a divider after the newest message the
+  // client already held before the last refresh, so「上次刷新到这里」is a real
+  // position rather than a guess (docs/town-sdk-integration.md「时间线累积」).
+  const boundary = mail ? null : town.timeline?.lastRefresh?.boundarySeq ?? null;
   return (
     <div className="social-feed">
       <div className="feed-controls">
@@ -168,32 +170,37 @@ export function TownFeed({
         className="feed-summary"
         role="status"
       >{`${filtered.length} / ${messages.length} 条 · 最近 ${limit} 条内筛选${me ? "" : " · 配对后可识别 @我和我的发言"}`}</div>
+      {!mail && town.timeline?.hasOlder && (
+        <button
+          id="town-load-older"
+          className="secondary"
+          type="button"
+          disabled={town.olderBusy}
+          onClick={() => void town.loadOlder()}
+        >
+          {town.olderBusy ? "正在读取更早的消息…" : "读取更早的消息"}
+        </button>
+      )}
       <div className="social-messages">
-        {filtered.map((message) => {
-          const id = str(
-            message.entry.id ||
-              message.entry.seq ||
-              `${message.authorId}:${message.rawDate}:${message.index}`,
-          );
-          return (
-            <Message
-              key={id}
-              {...{ message, town, mail, mentionNames }}
-              selected={selected === id}
-              onSelect={() => {
-                setSelected(id);
-                town.choose({
-                  id: "message:" + id,
-                  title: `${message.author} 的发言`,
-                  author: message.authorId || message.author,
-                  revision: str(message.entry.revised_at || message.rawDate),
-                  excerpt: sceneExcerpt(message.content),
-                  private: Boolean(town.view === "firesides" || mail),
-                });
-              }}
-            />
-          );
-        })}
+        {filtered.map((message) => (
+          <Message
+            key={message.id || `${message.authorId}:${message.rawDate}:${message.index}`}
+            {...{ message, town, mail, mentionNames }}
+            divider={boundary !== null && message.seq > 0 && message.seq === boundary}
+            selected={selected === message.id}
+            onSelect={() => {
+              setSelected(message.id);
+              town.choose({
+                id: "message:" + message.id,
+                title: `${message.author} 的发言`,
+                author: message.authorId || message.author,
+                revision: message.rawDate,
+                excerpt: sceneExcerpt(message.content),
+                private: Boolean(town.view === "firesides" || mail),
+              });
+            }}
+          />
+        ))}
         {!filtered.length && (
           <div className="feed-empty">
             <strong>
@@ -223,33 +230,30 @@ function Message({
   town,
   mail,
   mentionNames,
+  divider,
   selected,
   onSelect,
 }: {
   message: FeedMessage;
   town: TownModel;
-  mail?: "all" | "inbox" | "sent";
+  mail: boolean;
   mentionNames: MentionNames;
+  divider: boolean;
   selected: boolean;
   onSelect: () => void;
 }) {
   const expanded = useRef<HTMLDetailsElement>(null),
     preview = useRef<HTMLElement>(null);
-  const via = str(m.entry.via),
-    validTime = Number.isFinite(m.time),
-    replyId = Number(m.entry.seq),
-    state = str(m.entry.delivery_status);
-  const reply = mail ? mailReply(m) : Number.isSafeInteger(replyId) && replyId > 0
-    ? { id: replyId, author: feedDisplayName(m.author, m.authorId), preview: m.content.slice(0, 500) }
+  const via = m.via,
+    validTime = Number.isFinite(m.time);
+  // A reply needs an addressable parent: Town's sequence in a feed, the message
+  // id in the inbox. Without one the button is not offered rather than offered
+  // and silently dropping the relation.
+  const reply = mail ? mailReply(m) : m.seq > 0
+    ? { id: m.seq, author: feedDisplayName(m.author, m.authorId), preview: m.content.slice(0, 500) }
     : undefined;
   const authorName = feedDisplayName(m.author, m.authorId);
-  const replyAuthor = feedReplyAuthor(m.entry);
-  const labels: Record<string, string> = {
-    delivered: "已送达",
-    pending: "待送达",
-    failed: "送达失败",
-    read: "已读",
-  };
+  const replyAuthor = feedReplyAuthor(m.replyTo, mentionNames);
   const snippet = useMemo(
     () =>
       markdownText(m.content, text => mentionText(text, mentionNames))
@@ -263,9 +267,11 @@ function Message({
       renderText={text => <MentionText text={text} names={mentionNames} />} />
   );
   return (
-    <article
-      className={`social-message${m.mentioned ? " mentions-me" : ""}${selected ? " scene-selected" : ""}`}
-    >
+    <>
+      {divider && <div className="feed-boundary" role="separator">上次刷新到这里</div>}
+      <article
+        className={`social-message${m.mentioned ? " mentions-me" : ""}${selected ? " scene-selected" : ""}`}
+      >
       <span className="social-avatar" aria-hidden="true">
         {authorName === '未命名 Being' ? '·' : authorName.slice(0, 1)}
       </span>
@@ -301,14 +307,14 @@ function Message({
               : m.rawDate}
           </time>
         </div>
-        {m.entry.reply_to != null && (
+        {m.replyTo && (
           <blockquote className="feed-reply-preview">
             <strong>
               回复{" "}
               {replyAuthor}
             </strong>
             <span>
-              <MentionText text={str(m.entry.reply_to_preview).slice(0, 500) || "原消息预览不可用"} names={mentionNames} />
+              <MentionText text={m.replyTo.preview.slice(0, 500) || "原消息预览不可用"} names={mentionNames} />
             </span>
           </blockquote>
         )}
@@ -334,12 +340,8 @@ function Message({
           body
         )}
         <div className="social-foot">
-          {mail
-            ? labels[state] || state
-            : m.entry.revised_at ? '已编辑' : ''}
-          {(town.view === "firesides" || town.view === "bonfire" || mail) &&
-            town.live?.phase === "connected" &&
-            reply && (
+          {!mail && m.revised ? '已编辑' : ''}
+          {town.connected && reply && (
               <button
                 className="scene-select"
                 type="button"
@@ -353,6 +355,7 @@ function Message({
           </button>
         </div>
       </div>
-    </article>
+      </article>
+    </>
   );
 }

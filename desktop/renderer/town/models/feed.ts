@@ -1,12 +1,31 @@
-import { normalizeTownIdentity, validTownIdentity } from '../../../shared/town-identity';
+import { normalizeTownIdentity } from '../../../shared/town-identity';
+import type {
+  TownDesktopDirectMessage, TownDesktopMessage, TownDesktopReplyPreview,
+} from '../../../shared/desktop-types';
+import type { MentionNames } from './mentions';
 
-type Entry = Record<string, unknown>;
+// The feed's display projection.
+//
+// REWRITTEN 2026-09-16 for the direct Town client. The previous version read raw
+// Town envelopes and had to guess which of a dozen field spellings carried the
+// author, the recipient and the reply — `sender_display`, `sender_name`,
+// `speaker_name`, `being`, nested objects, and so on. None of that survives: the
+// main process validates every message against the DTO in
+// desktop/main/town/session/session.ts before it crosses IPC, so the author IS
+// `beingName`, the reply IS `replyTo`, and a field that is absent is absent
+// because Town did not send it — not because this file looked in the wrong place.
+//
+// What remains here is the part that is genuinely the renderer's: whether a
+// message is mine, addressed to me, or mentions me, and how the list is filtered
+// and ordered.
+
 export interface FeedFilters {
   relation: string;
   order: string;
   days: string;
   author: string;
 }
+
 export interface FeedReply {
   id: string | number;
   author: string;
@@ -14,208 +33,138 @@ export interface FeedReply {
   recipient?: string;
   recipientName?: string;
 }
-export const newFeedFilters = (): FeedFilters => ({
-  relation: "all",
-  order: "newest",
-  days: "all",
-  author: "",
-});
-const text = (value: unknown): string =>
-  typeof value === "string" || typeof value === "number" ? String(value) : "";
-const record = (value: unknown): Entry =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Entry)
-    : {};
-const identity = (value: unknown): string =>
-  text(
-    record(value).town_id ||
-      record(value).townId ||
-      record(value).being_id ||
-      record(value).beingId ||
-      record(value).id ||
-      record(value).name ||
-      value,
-  ).trim();
-const displayName = (value: unknown): string => {
-  const item = record(value);
-  return (
-    text(item.display || item.display_name || item.displayName || item.name || value) ||
-    (item.being !== undefined ? displayName(item.being) : "") ||
-    (item.identity !== undefined ? displayName(item.identity) : "") ||
-    ""
-  );
-};
-const firstText = (...values: unknown[]) => {
-  for (const value of values) {
-    const name = displayName(value);
-    if (name) return name;
-  }
-  return "";
-};
 
-export function feedMessages(
-  entries: Entry[],
-  options: { me: string; mail?: "all" | "inbox" | "sent" },
-) {
+export const newFeedFilters = (): FeedFilters => ({
+  relation: 'all',
+  order: 'newest',
+  days: 'all',
+  author: '',
+});
+
+export interface FeedMessage {
+  /** Stable key. Town's sequence for a feed, its message id for a direct message. */
+  id: string;
+  /** The numeric parent a reply would address. 0 when this feed has none. */
+  seq: number;
+  index: number;
+  authorId: string;
+  author: string;
+  recipient: string;
+  recipientId: string;
+  content: string;
+  mentioned: boolean;
+  mine: boolean;
+  received: boolean;
+  related: boolean;
+  rawDate: string;
+  time: number;
+  revised: boolean;
+  via: string;
+  replyTo?: TownDesktopReplyPreview;
+}
+
+const time = (value: string) => Date.parse(value);
+
+/** Bonfire and fireside. `me` is the paired profile's Town id, empty when unpaired. */
+export function feedMessages(messages: readonly TownDesktopMessage[], options: { me: string }): FeedMessage[] {
   const me = normalizeTownIdentity(options.me);
-  return entries.map((entry, index) => {
-    const authorId = identity(
-      options.mail
-        ? entry.sender_town_id ||
-          entry.sender_being_id ||
-          entry.sender_beingId ||
-          entry.sender_id ||
-          entry.from_id ||
-          entry.author_id ||
-          entry.sender ||
-          entry.from ||
-          entry.author
-        : entry.town_id || entry.being_id || entry.being,
-    );
-    const author =
-      firstText(
-        entry.sender_display,
-        entry.sender_name,
-        entry.sender_display_name,
-        entry.speaker_name,
-        entry.display_name,
-        entry.display,
-        entry.sender,
-        entry.sender_being,
-        entry.from,
-        entry.author,
-        entry.being,
-        entry.sender_id,
-        entry.sender_town_id,
-        entry.from_id,
-        entry.author_id,
-        entry.being_id,
-      ) ||
-      authorId ||
-      "未知";
-    const recipientId = identity(
-      entry.recipient_town_id ||
-        entry.recipient_being_id ||
-        entry.recipient_beingId ||
-        entry.recipient_id ||
-        entry.to_id ||
-        entry.recipient ||
-        entry.to,
-    );
-    const recipient =
-      firstText(
-        entry.recipient_display,
-        entry.recipient_name,
-        entry.recipient_display_name,
-        entry.recipient,
-        entry.recipient_being,
-        entry.to,
-        entry.recipient_id,
-        entry.recipient_town_id,
-        entry.to_id,
-      ) ||
-      recipientId;
-    const content = text(entry.message || entry.content);
-    const mentionedIds = Array.isArray(entry.mentions)
-      ? entry.mentions.map((value) => normalizeTownIdentity(identity(value)))
-      : [];
-    // Exact @identifier tokens avoid matching e.g. alice in @alice_work.
-    const textMentions = [...content.matchAll(/@([a-zA-Z0-9_-]+)/g)].map(
-      (match) => normalizeTownIdentity(match[1]),
-    );
-    const mentioned = Boolean(
-      me && (Array.isArray(entry.mentions) ? mentionedIds.includes(me) : textMentions.includes(me)),
-    );
+  return messages.map((message, index) => {
+    const authorId = (message.townId || message.beingId || '').trim();
+    // Town resolves the mention list server-side. When it sent one, that list is
+    // the answer; only a feed that carried none falls back to reading the text,
+    // and then only for exact `@id` tokens.
+    const mentioned = Boolean(me && (message.mentions?.length
+      ? message.mentions.some(id => normalizeTownIdentity(id) === me)
+      : [...message.content.matchAll(/@([a-zA-Z0-9_-]+)/g)].some(match => normalizeTownIdentity(match[1]) === me)));
     const mine = Boolean(me && normalizeTownIdentity(authorId) === me);
-    const received = Boolean(
-      options.mail === "inbox" || (me && normalizeTownIdentity(recipientId) === me),
-    );
-    const sent = Boolean(options.mail === "sent" || mine);
-    const rawDate = text(entry.at || entry.created_at);
-    const time = Date.parse(rawDate);
     return {
-      entry,
+      id: message.id,
+      seq: Number.isSafeInteger(Number(message.id)) ? Number(message.id) : 0,
       index,
       authorId,
-      author,
-      recipient,
-      recipientId,
-      content,
-      mentioned,
-      mine: sent,
-      received,
-      related: mentioned || sent || received,
-      rawDate,
-      time,
+      author: message.beingName || authorId || '未知',
+      recipient: '', recipientId: '',
+      content: message.content,
+      mentioned, mine, received: false, related: mentioned || mine,
+      rawDate: message.createdAt,
+      time: time(message.createdAt),
+      revised: Boolean(message.revisedAt),
+      via: message.via || '',
+      ...(message.replyTo ? { replyTo: message.replyTo } : {}),
     };
   });
 }
-export type FeedMessage = ReturnType<typeof feedMessages>[number];
-export function feedReplyAuthor(entry: Entry): string {
-  const name = firstText(entry.reply_to_display, entry.reply_to_sender_display, entry.reply_to_being, entry.reply_to_sender);
-  return name && !name.startsWith('t_') ? name : '原消息';
+
+/** The inbox. Town's `/api/messages` returns both directions; `senderId` is the
+ * only address either way, so a message not from me is one to me. */
+export function inboxMessages(messages: readonly TownDesktopDirectMessage[], options: { me: string }): FeedMessage[] {
+  const me = normalizeTownIdentity(options.me);
+  return messages.map((message, index) => {
+    const authorId = (message.senderId || '').trim();
+    const mine = Boolean(me && normalizeTownIdentity(authorId) === me);
+    return {
+      id: message.id,
+      seq: 0,
+      index,
+      authorId,
+      author: message.senderName || authorId || '未知',
+      recipient: mine ? '' : '我',
+      recipientId: mine ? '' : options.me,
+      content: message.content,
+      mentioned: false,
+      mine,
+      received: !mine,
+      related: true,
+      rawDate: message.createdAt,
+      time: time(message.createdAt),
+      revised: false,
+      via: message.via || '',
+      ...(message.replyTo ? { replyTo: message.replyTo } : {}),
+    };
+  });
 }
+
+/** The quoted parent's author, through the member directory. A Town id the
+ * directory does not know stays anonymous rather than being printed raw. */
+export function feedReplyAuthor(reply: TownDesktopReplyPreview | undefined, names: MentionNames): string {
+  const name = reply?.beingId ? names.get(reply.beingId)?.name : '';
+  return name || '原消息';
+}
+
 export const feedDisplayName = (name: string, id: string) =>
   !name || (name === id && id.startsWith('t_')) ? '未命名 Being' : name;
-function mailAddress(entry: Entry, sent: boolean): string {
-  const side = sent ? 'recipient' : 'sender';
-  const nested = [entry[side], ...(sent ? [entry.to, entry.recipient_being] : [entry.from, entry.author, entry.sender_being])].map(record);
-  // Old being_id and untyped sender/recipient strings can be internal IDs.
-  // Only explicit Town IDs or explicit name fields may become a reply address.
-  const townIds = [entry[`${side}_town_id`], ...nested.flatMap(value => [value.town_id, value.townId]), entry[`${side}_id`], entry[side]];
-  const townId = townIds.find(value => validTownIdentity(value) && value.startsWith('t_'));
-  if (typeof townId === 'string') return townId;
-  const names = [entry[`${side}_name`], entry[`${side}_display_name`], ...nested.flatMap(value => [value.display_name, value.displayName, value.name])];
-  const displays = [entry[`${side}_display`], ...nested.map(value => value.display)];
-  const name = firstText(...displays).replace(/\s+\(t_[a-zA-Z0-9_-]+\)$/, '') || firstText(...names);
-  return name.trim();
-}
+
+/** The reply a direct message can be answered with. Only a Town id is a usable
+ * address — a display name is not unique, and Town resolves the ambiguity by
+ * refusing (docs/town-sdk-integration.md「私信与回复」). */
 export function mailReply(message: FeedMessage): FeedReply | undefined {
-  const id = text(message.entry.id || message.entry.message_id);
-  const recipient = mailAddress(message.entry, message.mine);
-  if (!/^[a-zA-Z0-9_-]{1,160}$/.test(id) || !recipient || recipient === '未知' || recipient.length > 160 || /[\u0000-\u001f]/.test(recipient)) return;
+  const recipient = message.mine ? message.recipientId : message.authorId;
+  if (!/^[a-zA-Z0-9_-]{1,160}$/.test(message.id) || !recipient || !/^[a-zA-Z0-9_-]{1,160}$/.test(recipient)) return;
+  const author = feedDisplayName(message.author, message.authorId);
   return {
-    id, author: feedDisplayName(message.author, message.authorId),
-    preview: message.content.slice(0, 500), recipient,
-    recipientName: message.mine
-      ? feedDisplayName(message.recipient, message.recipientId)
-      : feedDisplayName(message.author, message.authorId),
+    id: message.id,
+    author,
+    preview: message.content.slice(0, 500),
+    recipient,
+    recipientName: message.mine ? feedDisplayName(message.recipient, message.recipientId) : author,
   };
 }
-export function filterMessages(
-  messages: FeedMessage[],
-  filters: FeedFilters,
-  search: string,
-) {
+
+export function filterMessages(messages: FeedMessage[], filters: FeedFilters, search: string) {
   const query = search.trim().toLowerCase();
-  const cutoff =
-    filters.days === "all"
-      ? -Infinity
-      : Date.now() - Number(filters.days) * 86400000;
+  const cutoff = filters.days === 'all' ? -Infinity : Date.now() - Number(filters.days) * 86400000;
   return messages
-    .filter(
-      (message) =>
-        (filters.relation === "all" ||
-          (filters.relation === "about" && message.related) ||
-          (filters.relation === "mentions" && message.mentioned) ||
-          (filters.relation === "mine" && message.mine)) &&
-        (!filters.author ||
-          (message.authorId || message.author) === filters.author) &&
-        (cutoff === -Infinity ||
-          (Number.isFinite(message.time) && message.time >= cutoff)) &&
-        (!query ||
-          [message.author, message.authorId, message.recipient, message.content]
-            .join(" ")
-            .toLowerCase()
-            .includes(query)),
-    )
+    .filter(message =>
+      (filters.relation === 'all'
+        || (filters.relation === 'about' && message.related)
+        || (filters.relation === 'mentions' && message.mentioned)
+        || (filters.relation === 'mine' && message.mine))
+      && (!filters.author || (message.authorId || message.author) === filters.author)
+      && (cutoff === -Infinity || (Number.isFinite(message.time) && message.time >= cutoff))
+      && (!query || [message.author, message.authorId, message.recipient, message.content].join(' ').toLowerCase().includes(query)))
     .sort((a, b) => {
-      const delta =
-        (Number.isFinite(a.time) ? a.time : 0) -
-        (Number.isFinite(b.time) ? b.time : 0);
-      const tie =
-        Number(a.entry.seq || 0) - Number(b.entry.seq || 0) ||
-        a.index - b.index;
-      return (delta || tie) * (filters.order === "newest" ? -1 : 1);
+      const delta = (Number.isFinite(a.time) ? a.time : 0) - (Number.isFinite(b.time) ? b.time : 0);
+      const tie = a.seq - b.seq || a.index - b.index;
+      return (delta || tie) * (filters.order === 'newest' ? -1 : 1);
     });
 }

@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
-import { TownModel, definitions, list, str } from "./models/town";
+import { TownModel, definitions, str } from "./models/town";
 import { useModel } from "../shared/hooks/use-model";
 import {
   TownHome,
@@ -11,11 +11,15 @@ import {
 } from "./components/catalog";
 import { TownFeed } from "./components/feed";
 import { SeedGarden, SeedDetail, SeedSearch } from "./components/seeds";
+
+/** Town, as one page: the public catalogue the shell browses without a
+ * credential, and the three feeds the paired client reads directly. Rewired
+ * 2026-09-16 — see ./models/town.ts for what moved and why. */
 export function Town({ model }: { model: TownModel }) {
   const town = useModel(model),
     definition = definitions[town.view],
-    channel = town.channel(),
-    social = Boolean(channel),
+    feed = town.feedKind(),
+    social = Boolean(feed),
     paginated =
       !town.directId &&
       (["embers", "scrolls", "seeds"].includes(town.view) ||
@@ -97,11 +101,10 @@ export function Town({ model }: { model: TownModel }) {
             <button
               id="town-write"
               className="secondary"
-              hidden={!channel}
+              hidden={!feed}
               disabled={
-                town.live?.phase !== "connected" ||
-                (town.view === "firesides" &&
-                  !(town.directId || town.selectedRing))
+                !town.connected ||
+                (feed === "fireside" && !(town.directId || town.selectedRing))
               }
               onClick={() => town.compose()}
             >
@@ -120,7 +123,8 @@ export function Town({ model }: { model: TownModel }) {
               className="icon-button"
               title="刷新内容"
               aria-label="刷新内容"
-              onClick={() => void town.load()}
+              disabled={town.reading}
+              onClick={() => void (feed ? town.refresh() : town.load())}
             >
               ↻
             </button>
@@ -130,26 +134,26 @@ export function Town({ model }: { model: TownModel }) {
           <span
             id="town-live-status"
             role="status"
-            data-phase={town.live?.phase || "connecting"}
+            data-phase={town.townApp?.client.status || "connecting"}
           >
-            {town.view === "seeds" ? "Seed Garden · 公开经验" : town.live?.message || "正在读取 Town 连接状态"}
+            {town.view === "seeds" ? "Seed Garden · 公开经验" : liveMessage(town)}
           </span>
           <button
             id="town-live-retry"
             className="text-button"
             hidden={
-              town.view === "seeds" || !town.live ||
-              !["reconnecting", "auth-error"].includes(town.live.phase)
+              town.view === "seeds" || !town.townApp ||
+              !["reconnecting", "auth_required", "identity_mismatch", "pair_storage_error"].includes(town.townApp.client.status)
             }
-            onClick={() => void town.run(() => town.api.reconnectTown())}
+            onClick={() => void town.auth()}
           >
             重新连接
           </button>
           <button
             id="town-updates"
             className="text-button"
-            hidden={!channel || !town.unread(channel)}
-            onClick={() => void town.load()}
+            hidden={!feed || !town.unread(feed)}
+            onClick={() => void town.refresh()}
           >
             有新内容 · 更新
           </button>
@@ -172,7 +176,24 @@ export function Town({ model }: { model: TownModel }) {
     </section>
   );
 }
+
+/** The one sentence that says where the feed stands. The paired client reports
+ * its own status and the background reader reports the feed's, and they are
+ * different facts: a stale feed on a live connection is not a disconnection. */
+function liveMessage(town: TownModel): string {
+  const client = town.townApp?.client;
+  if (!client) return "正在读取 Town 连接状态";
+  if (client.pairingPending) return "配对已完成但未能写入本机密钥库，请在连接面板重试保存。";
+  if (!client.paired) return "尚未配对 Town。点右侧按钮，用 Being 提供的六位配对码连接。";
+  if (client.status === "connected") return town.timelineStatus?.stale ? "已连接 Town · 当前内容可能不是最新" : "已连接 Town";
+  if (client.status === "auth_required") return "Town 拒绝了本机凭据，请重新配对。";
+  if (client.status === "identity_mismatch") return "Town 返回的身份与已保存的配对不一致，读取已停止。";
+  if (client.status === "paused") return "Town 连接已暂停（离线或休眠）。";
+  return "正在连接 Town…";
+}
+
 function TownBody({ town }: { town: TownModel }) {
+  const feed = town.feedKind();
   if (town.error)
     return (
       <div className="empty-state">
@@ -199,33 +220,32 @@ function TownBody({ town }: { town: TownModel }) {
       </div>
     );
   if (town.loading) return <div className="loading-block">正在读取…</div>;
-  if (town.directId)
-    return town.view === "firesides" ? (
-      <div className="direct-reading">
-        <FiresideThread town={town} />
-      </div>
-    ) : town.view === "seeds" ? <SeedDetail town={town} direct /> : (
-      <CatalogDetail town={town} direct />
+  if (town.directId && feed !== "fireside")
+    return town.view === "seeds" ? <SeedDetail town={town} direct /> : <CatalogDetail town={town} direct />;
+  if (feed === "fireside") return town.directId ? (
+    <div className="direct-reading">
+      <FiresideThread town={town} />
+    </div>
+  ) : <Firesides town={town} />;
+  if (feed)
+    return (
+      <TownFeed
+        key={`${town.view}:${town.tab}:${town.connectionRevision}`}
+        town={town}
+        messages={town.messages()}
+        filterKey={town.view === "mail" ? town.tab : town.view}
+      />
     );
   if (town.library) return <LocalKits town={town} />;
   if (!town.data) return null;
   if (town.view === "town") return <TownHome town={town} data={town.data} />;
-  if (town.view === "bonfire" || town.view === "mail")
-    return (
-      <TownFeed
-        key={`${town.view}:${town.tab}:${town.live?.generation}`}
-        town={town}
-        data={town.data}
-        filterKey={town.view === "mail" ? town.tab : town.view}
-      />
-    );
-  if (town.view === "firesides") return <Firesides town={town} />;
   if (town.view === "seeds") return <SeedGarden town={town} data={town.data} />;
   return <Catalog town={town} data={town.data} />;
 }
+
 function Firesides({ town }: { town: TownModel }) {
   const entries = town.rooms(),
-    owned = new Set(list(town.data!, "owned").map((entry) => str(entry.id))),
+    owned = town.ownedRooms(),
     query = town.ringSearch.trim().toLowerCase();
   if (!entries.length)
     return (
@@ -234,7 +254,7 @@ function Firesides({ town }: { town: TownModel }) {
       </div>
     );
   const visible = entries.filter((entry) =>
-    `${str(entry.name, `围炉 #${str(entry.id)}`)} ${str(entry.description)}`
+    str(entry.name, `围炉 #${str(entry.id)}`)
       .toLowerCase()
       .includes(query),
   );
@@ -253,7 +273,7 @@ function Firesides({ town }: { town: TownModel }) {
           }}
         />
         <div className="fireside-room-list">
-          {entries
+          {[...entries]
             .sort((a, b) => str(a.name).localeCompare(str(b.name), "zh-CN"))
             .map((entry) => {
               const id = str(entry.id),
@@ -283,18 +303,19 @@ function Firesides({ town }: { town: TownModel }) {
     </div>
   );
 }
+
 function FiresideThread({ town }: { town: TownModel }) {
   if (town.detailLoading)
     return <p className="empty-inline">正在读取围炉消息…</p>;
   if (town.detailError) return <DetailError town={town} />;
-  const data = town.ringData?.data;
-  if (!data) return null;
+  if (!town.timeline) return null;
   return (
     <>
       <div className="fireside-thread-heading">
         <h2>{town.ringTitle}</h2>
         <button
           className="secondary"
+          disabled={town.reading}
           onClick={() =>
             void town.loadFireside(
               town.directId || town.selectedRing,
@@ -307,9 +328,9 @@ function FiresideThread({ town }: { town: TownModel }) {
         </button>
       </div>
       <TownFeed
-        key={`${town.ringData?.id}:${town.live?.generation}`}
+        key={`${town.selectedRing}:${town.connectionRevision}`}
         town={town}
-        data={data}
+        messages={town.messages()}
         filterKey="firesides"
       />
     </>

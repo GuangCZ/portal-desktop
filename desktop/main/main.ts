@@ -26,9 +26,6 @@ import { KitInstaller } from './kits/install';
 import { verifyBeingConnection } from './chat/ready';
 import { redact } from './chat/connection';
 import type { SaveSettings } from '../shared/types';
-import { TownLive } from './town/live';
-import { TownClient, TownCredentials, TOWN_ORIGIN } from './town/client';
-import { registerTownIpc } from './town/ipc';
 import { registerKitsIpc } from './kits/ipc';
 import { installDesktopExtensions, type DesktopExtensions } from './extensions';
 
@@ -40,7 +37,7 @@ const startedAt = new Date().toISOString();
 // The display name, and — since Electron derives the profile directory and the
 // encrypted-storage identity from it — the application name as well. The
 // lower-case slug this client reports to Being, Town and GitHub is
-// `being-desktop`, spelled at each of its call sites (town/pairing.ts,
+// `being-desktop`, spelled at each of its call sites (town/channel/pairing-probe.ts,
 // updates/checker.ts) as in BeingDesktop 0.8.26.
 const CLIENT_NAME = 'Being Desktop';
 
@@ -70,8 +67,6 @@ let portal: PortalSupervisor;
 let store: SettingsStore;
 let background: BackgroundPortal;
 let kitInstaller: KitInstaller;
-let townLive: TownLive;
-let cancelTownPairing: (() => void) | undefined;
 let extensions: DesktopExtensions | undefined;
 let updatePoll: ReturnType<typeof setInterval> | undefined;
 let backgroundPoll: ReturnType<typeof setInterval> | undefined;
@@ -163,12 +158,6 @@ async function ready() {
     if (!store.connection && !profileOverride()) configCandidates.push(path.join(os.homedir(), '.heart-portal/portal.toml'), path.join(os.homedir(), '.heart-portal/runtime/portal.toml'));
     await reusePreviousConfig();
   } catch (error) { startupNotice = errorLog.report('portal-config-import', error, '已有 Portal 配置读取失败，请检查后重试。'); }
-  const townCredentials = new TownCredentials(directory, secretStorage);
-  let townWarning: string | undefined;
-  try { await townCredentials.load(); } catch (error) { townWarning = errorLog.report('town-credentials', error, 'Town 凭据读取失败，请重新连接。'); }
-  townLive = new TownLive(() => townCredentials.token, () => townCredentials.beingId, state => { if (window && !window.webContents.isDestroyed()) window.webContents.send('beings:town-live', state); }, net.fetch.bind(net) as typeof fetch, TOWN_ORIGIN, () => townCredentials.display);
-  const town = new TownClient(() => townCredentials.token, net.fetch.bind(net) as typeof fetch, TOWN_ORIGIN, () => townLive.state.beingId || '');
-  townLive.restart();
   kitInstaller = new KitInstaller(directory, net.fetch.bind(net) as typeof fetch);
   portal = new PortalSupervisor(directory);
   background = new BackgroundPortal(directory);
@@ -238,7 +227,6 @@ async function ready() {
     catch (error) { checks.push({ name: 'Being', status: 'warning', detail: errorLog.report('being-diagnostics', error, 'Being 连接检查失败，请稍后重试。') }); }
     if (connection !== store.connection) throw new Error('连接已切换，请重新检查。');
     checks.push({ name: 'Portal', status: portal.state.phase === 'connected' ? 'ok' : portal.state.phase === 'error' ? 'error' : 'warning', detail: portal.state.message });
-    checks.push({ name: 'Town', status: townLive.state.phase === 'connected' ? 'ok' : 'warning', detail: townLive.state.message });
     return { version: app.getVersion(), build: PORTAL_DESKTOP_BUILD, platform: `${process.platform}/${process.arch}`, pid: process.pid, startedAt, checkedAt: new Date().toISOString(), checks,
       logs: portal.state.logs.slice(-60).map(line => redact(line, [connection?.token || '', connection?.relaySecret || '']).replaceAll(os.homedir(), '~')) };
   };
@@ -417,13 +405,6 @@ async function ready() {
     if (process.platform !== 'darwin' && !(process.platform === 'win32' && Number(os.release().split('.')[2]) >= 22621)) window?.setBackgroundColor(theme === 'dark' ? '#212121' : '#ffffff');
     return appearance;
   }));
-  cancelTownPairing = registerTownIpc({
-    handle, exclusive, town, townLive, townCredentials, store, secretStorage,
-    fetcher: net.fetch.bind(net) as typeof fetch,
-    getWarning: () => townWarning,
-    clearWarning: () => { townWarning = undefined; },
-    open: url => browser?.open(url),
-  });
   registerKitsIpc({ handle, exclusive, window: () => window, store, kitInstaller });
   // The one hook for every Being Desktop subsystem. A new subsystem appends two
   // lines to desktop/main/extensions.ts and nothing here: this call is the whole
@@ -440,7 +421,6 @@ async function ready() {
     onError: (scope, error) => { errorLog.report(scope, error); },
   });
   handle('beings:save', (input: SaveSettings) => exclusive(async () => {
-    cancelTownPairing?.();
     const previous = { ...store.settings }; const previousConnection = store.connection;
     // Restore the saved address itself on rollback: a link reassembled from the
     // parsed parts would drop the parameters this client does not model (`api=`).
@@ -472,7 +452,6 @@ async function ready() {
     }
     // The conversation layer is rebound by `verifyConnection` above; nothing
     // else here holds a request against the Being that was just replaced.
-    townLive?.dispose();
     return snapshot();
   }));
   handle('beings:choose', async (kind: string) => {
@@ -653,11 +632,9 @@ else {
     event.preventDefault();
     if (quitting) return;
     quitting = true;
-    cancelTownPairing?.();
     lifecycleError = '';
     void exclusive(async () => { await extensions?.quitting(); await kitInstaller?.dispose(); await portal.stop(); browser?.close(); await errorLog.flush(); }).then(() => {
       clearInterval(backgroundPoll); clearInterval(updatePoll);
-      townLive?.dispose();
       quitCleanupDone = true; tray?.destroy(); app.quit();
     }).catch(error => {
       errorLog.report('client-quit', error);

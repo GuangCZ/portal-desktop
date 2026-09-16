@@ -71,15 +71,6 @@ export interface DesktopAPI {
   onUpdate(callback: (state: UpdateState) => void): () => void;
   appearance(theme?: 'light' | 'dark'): Promise<'light' | 'dark'>;
   town(query: TownQuery): Promise<TownResult>;
-  townLive(): Promise<TownLiveState>;
-  reconnectTown(): Promise<void>;
-  onTownLive(callback: (state: TownLiveState) => void): () => void;
-  sendTown(input: TownPost): Promise<TownResult>;
-  townAuth(): Promise<{ configured: boolean; beingId?: string; pairedBeingId?: string; display?: string; suggestedBeingId?: string; chatBeing?: string; warning?: string }>;
-  autoPairTown(input: { requestId: string; beingId: string }): Promise<void>;
-  cancelTownPair(requestId: string): Promise<boolean>;
-  pairTown(input: { beingId: string; code: string }): Promise<void>;
-  saveTownToken(token: string): Promise<void>;
   localKits(): Promise<KitLibrary>;
   deleteKit(name: string): Promise<{ deleted: boolean; name: string }>;
   importKit(): Promise<{ installed: boolean; name?: string }>;
@@ -115,23 +106,14 @@ export interface DesktopAPI {
 }
 declare global { interface Window { beings: DesktopAPI } }
 
-export type TownKind = 'home' | 'bonfire' | 'firesides' | 'fireside' | 'inbox' | 'sent' | 'embers' | 'scrolls' | 'my-scrolls' | 'grove' | 'kit' | 'ember' | 'scroll' | 'seeds' | 'seed' | 'seed-lineage' | 'seed-absorbs';
+/** The PUBLIC Town catalogue only. The private feeds — bonfire, firesides,
+ * fireside, inbox, sent, my-scrolls — left this table on 2026-09-16 with the
+ * anonymous client that served them (desktop/main/town/catalog.ts): they are
+ * read through the paired client now, over `beings:town-*`. */
+export type TownKind = 'home' | 'embers' | 'scrolls' | 'grove' | 'kit' | 'ember' | 'scroll' | 'seeds' | 'seed' | 'seed-lineage' | 'seed-absorbs';
 export interface SeedFilters { q: string; domain: string; tag: string; kit: string; lifecycle: string }
 export interface TownQuery { kind: TownKind; offset?: number; id?: string; scrollKind?: string; q?: string; domain?: string; tag?: string; kit?: string; lifecycle?: string }
 export type TownResult = { ok: true; data: Record<string, unknown>; fetchedAt: string; warnings?: string[] } | { ok: false; code: 'auth' | 'forbidden' | 'not-found' | 'http' | 'network'; message: string };
-export type TownChannel = 'bonfire' | 'mail' | 'firesides';
-export interface TownLiveState {
-  phase: 'unpaired' | 'connecting' | 'connected' | 'reconnecting' | 'auth-error';
-  generation: number;
-  revision: number;
-  sync: number;
-  // Canonical town_id on current servers; legacy being_id on older servers.
-  beingId?: string;
-  display?: string;
-  message: string;
-  versions: Record<TownChannel, number>;
-}
-export type TownPost = { kind: 'bonfire'; content: string; replyTo?: number } | { kind: 'dm'; recipient: string; content: string; replyTo?: string } | { kind: 'fireside'; firesideId: string; content: string; replyTo?: number };
 export interface KitTool { name: string; description: string; params?: unknown }
 export interface LocalKit { name: string; version: string; description: string; directory: string; command: string[]; tools: KitTool[]; compatible: boolean; eager: boolean; problem?: string }
 export interface KitLibrary { directory: string; enabled: boolean; kits: LocalKit[]; configPath?: string }

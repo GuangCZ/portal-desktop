@@ -1,19 +1,58 @@
 import { Store, errorText } from "../../shared/models/store";
 import { type SceneStore, type SceneResource } from "../../shared/models/scene";
-import type { FeedFilters, FeedReply } from "./feed";
-import { collectMentionNames, type MentionNames } from './mentions';
+import { feedMessages, inboxMessages, type FeedFilters, type FeedMessage, type FeedReply } from "./feed";
+import { mentionNames, withSelf, type MentionNames } from './mentions';
 import type {
   DesktopAPI,
   KitLibrary,
   LocalKit,
-  TownChannel,
-  TownLiveState,
-  TownPost,
-  TownKind,
-  TownQuery,
   KitInstallPlan,
   SeedFilters,
+  TownKind,
+  TownQuery,
 } from "../../../shared/types";
+import type {
+  TownDesktopAppState,
+  TownDesktopEnvelope,
+  TownDesktopFeed,
+  TownDesktopMember,
+  TownDesktopPush,
+  TownDesktopRefreshStatus,
+  TownDesktopRoom,
+  TownDesktopRoomDirectory,
+  TownDesktopRoomMember,
+  TownDesktopTimeline,
+} from "../../../shared/desktop-types";
+
+// The Town page's model.
+//
+// REWIRED 2026-09-16 (integration unit I1, decision §5.1). The three private
+// feeds — bonfire, fireside, the inbox — used to go through `beings:town`, a
+// single channel that fetched a Town URL and handed the renderer the raw JSON
+// body. They now go through Being Desktop's direct client
+// (`window.beings.townDesktop`): validated DTOs, the error catalogue in
+// docs/interfaces.md §5, an accumulating timeline rather than a rolling window,
+// and a member directory that is a directory rather than a guess made from
+// message prose.
+//
+// The PUBLIC catalogue — the square, the bookshelf, the seed garden, public
+// scrolls, the Grove market, local Kits — is untouched and still reads
+// `beings:town`. It is a different surface: no credential, no timeline, no
+// identity (desktop/main/town/catalog.ts).
+//
+// The four rules the direct client's UI has to keep, all from BeingDesktop
+// test/town-conversation-ui.cjs:
+//
+//   1. The cached snapshot is painted BEFORE the Being is asked for anything.
+//      `open` reads `townDesktop.timeline(feed)` — which answers from the
+//      encrypted cache — renders it, and only then issues exactly one read.
+//   2. Messages render while the member directory is still pending. The names in
+//      them are a lazy projection (./mentions.ts), so a directory that arrives
+//      late re-renders labels and touches nothing else.
+//   3. Repeated opens of the same feed join the ONE in-flight read rather than
+//      starting another.
+//   4. `onMembersInvalidated` re-reads the directory and nothing else: a rename
+//      must not cost a message read.
 
 export type Data = Record<string, unknown>;
 export const record = (value: unknown): Data =>
@@ -113,13 +152,21 @@ export const definitions: Record<
     ],
   },
 };
+
+/** The three feeds the paired client owns. Everything else on the page is the
+ * public catalogue. */
+export type TownFeedKind = "bonfire" | "fireside" | "dm";
+export const FEED_VIEWS: Record<string, TownFeedKind> = { bonfire: "bonfire", firesides: "fireside", mail: "dm" };
+
 type SendTarget = {
-  kind: TownPost["kind"];
+  kind: TownFeedKind;
   firesideId?: string;
-  generation: number;
+  /** The epoch the composer was opened under. A send is refused when it moved. */
+  connectionRevision: number;
   beingId: string;
   reply?: FeedReply;
 };
+
 export class TownModel extends Store {
   view = "";
   tab = "";
@@ -129,7 +176,6 @@ export class TownModel extends Store {
   scrollKind = "";
   seedFilters: SeedFilters = { q: "", domain: "", tag: "", kit: "", lifecycle: "" };
   data: Data | null = null;
-  mentionNames: MentionNames = new Map();
   library: KitLibrary | null = null;
   installedLibrary: KitLibrary | null = null;
   installedLoading = false;
@@ -140,29 +186,38 @@ export class TownModel extends Store {
   me = "";
   authLabel = "Town 连接";
   feedFilters: Record<string, FeedFilters> = {};
+
+  // ── the direct client's state ──────────────────────────────────────────────
+  /** The `townApp` snapshot. Replaces the old `live` (`beings:town-live`). */
+  townApp?: TownDesktopAppState;
+  /** The accumulating timeline of the feed on screen, bonfire or fireside. */
+  timeline: TownDesktopTimeline | null = null;
+  timelineStatus: TownDesktopRefreshStatus | null = null;
+  /** The inbox, read on demand: entering the page, refreshing, and on a `dm` hint. */
+  inbox: FeedMessage[] = [];
+  members: TownDesktopMember[] = [];
+  mentionNames: MentionNames = new Map();
+  roomDirectory: TownDesktopRoomDirectory = { owned: [], joined: [], cached: false };
+  roomMembers: TownDesktopRoomMember[] = [];
   selectedRing = "";
   ringSearch = "";
   ringTitle = "";
-  ringData: { id: string; data: Data } | null = null;
+  detailLoading = false;
+  detailError?: { message: string; auth?: boolean; retry: () => void };
+  /** Set while the one read for the current feed is in flight (rule 3). */
+  reading = false;
+  olderBusy = false;
+
   directId?: string;
   selectedId = "";
   localKit?: LocalKit;
   detail?: { query: TownQuery; fragments: Data[] };
-  detailLoading = false;
-  detailError?: { message: string; auth?: boolean; retry: () => void };
-  live?: TownLiveState;
   authOpen = false;
   authBusy = false;
   authLoading = false;
-  authManual = false;
-  authChatBeing = '';
-  autoPairId?: string;
-  authConfigured = false;
-  authBeing = "";
-  pairCode = "";
-  token = "";
   authState = "";
   authError = "";
+  pairCode = "";
   sendOpen = false;
   sendBusy = false;
   sendTarget?: SendTarget;
@@ -170,6 +225,7 @@ export class TownModel extends Store {
   recipient = "";
   sendError = "";
   sendNotice = "";
+  sendCandidates: { town_id: string; display_name: string }[] = [];
   plan?: KitInstallPlan;
   prepareBusy = false;
   installBusy = false;
@@ -180,11 +236,11 @@ export class TownModel extends Store {
   private detailRequest = 0;
   private installedRequest = 0;
   private authRequest = 0;
+  private memberRequest = 0;
   private lifecycleRevision = 0;
-  private seen = { bonfire: 0, mail: 0, firesides: 0 };
-  private changedChannels = new Set<TownChannel>();
-  private reconcileTimer?: ReturnType<typeof setTimeout>;
-  private reconciling = false;
+  /** The in-flight read per feed key, so repeated opens join it (rule 3). */
+  private reads = new Map<string, Promise<unknown>>();
+  private changedFeeds = new Set<string>();
   private drafts = new Map<string, { content: string; recipient: string }>();
   constructor(
     readonly api: DesktopAPI,
@@ -196,77 +252,95 @@ export class TownModel extends Store {
   ) {
     super();
   }
+  private get town() { return this.api.townDesktop; }
+
   start() {
     let active = true;
-    const stop = this.api.onTownLive((state) => this.receiveLive(state));
-    void this.api
-      .townLive()
-      .then((state) => {
-        if (active) this.receiveLive(state);
-      })
-      .catch(() => {});
+    const stops = [
+      this.town.onState(state => { if (active) this.receiveState(state); }),
+      this.town.onMessages(value => { if (active) this.receivePush(value); }),
+      this.town.onMembersInvalidated(() => { if (active) void this.loadMembers(true); }),
+    ];
+    void this.town.appState()
+      .then(state => { if (active) this.receiveState(state); })
+      .catch(() => { /* The page still opens; the panel says it is not paired. */ });
     return () => {
       active = false;
-      if (this.autoPairId) void this.api.cancelTownPair(this.autoPairId).catch(() => {});
-      this.autoPairId = undefined;
       this.authBusy = false;
       ++this.lifecycleRevision;
-      stop();
-      clearTimeout(this.reconcileTimer);
+      for (const stop of stops) stop();
       this.request++;
       this.detailRequest++;
       this.installedRequest++;
       this.authRequest++;
+      this.memberRequest++;
+      this.reads.clear();
       this.drafts.clear();
       this.content = "";
-      this.token = "";
       this.pairCode = "";
       if (this.plan && !this.installBusy)
         void this.api.discardKit(this.plan.ticket).catch(() => {});
     };
   }
-  channel(): TownChannel | undefined {
-    return ["bonfire", "mail", "firesides"].includes(this.view)
-      ? (this.view as TownChannel)
-      : undefined;
+
+  /** Which feed the current view reads, if any. */
+  feedKind(): TownFeedKind | undefined { return FEED_VIEWS[this.view]; }
+
+  /** The bonfire/fireside selector the timeline channels take. */
+  private feed(): TownDesktopFeed | undefined {
+    const kind = this.feedKind();
+    if (kind === "bonfire") return { kind: "bonfire" };
+    if (kind !== "fireside") return undefined;
+    const firesideId = this.directId || this.selectedRing;
+    return firesideId ? { kind: "fireside", firesideId } : undefined;
   }
-  unread(name: TownChannel) {
-    return (
-      this.changedChannels.has(name) ||
-      (this.live?.versions[name] || 0) > this.seen[name]
-    );
+
+  private feedKey(feed: TownDesktopFeed | { kind: "dm" }): string {
+    return feed.kind === "fireside" ? `fireside:${feed.firesideId}` : feed.kind;
   }
+
+  unread(name: TownFeedKind) {
+    if (name !== "fireside") return this.changedFeeds.has(name);
+    return [...this.changedFeeds].some(key => key.startsWith("fireside:"));
+  }
+
+  /** Tell the shell which feeds have something new, for the sidebar markers. */
   updateLive() {
     this.post({
       type: "beings:town-activity",
-      channels: (["bonfire", "mail", "firesides"] as TownChannel[]).filter(
-        (name) => this.unread(name),
-      ),
+      channels: (["bonfire", "dm", "fireside"] as TownFeedKind[]).filter(name => this.unread(name)),
     });
     this.changed();
   }
+
+  /** The connection epoch every read and send is fenced against. */
+  get connectionRevision() { return this.townApp?.identity.connectionRevision ?? 0; }
+  get paired() { return this.townApp?.client.paired === true; }
+  get connected() { return this.townApp?.client.status === "connected"; }
+
   private resetIdentity() {
     this.mentionNames = new Map();
-    clearTimeout(this.reconcileTimer);
-    this.seen = { bonfire: 0, mail: 0, firesides: 0 };
-    this.changedChannels.clear();
+    this.members = [];
+    this.changedFeeds.clear();
+    this.reads.clear();
     this.request++;
     this.detailRequest++;
     ++this.installedRequest;
+    ++this.memberRequest;
     this.data = null;
+    this.timeline = null;
+    this.timelineStatus = null;
+    this.inbox = [];
+    this.roomDirectory = { owned: [], joined: [], cached: false };
+    this.roomMembers = [];
     this.installedLibrary = null;
     this.installedLoading = false;
     this.installedError = "";
     this.library = null;
-    ++this.installedRequest;
-    this.installedLibrary = null;
-    this.installedLoading = false;
-    this.installedError = "";
     this.detail = undefined;
     this.detailLoading = false;
     this.detailError = undefined;
     this.localKit = undefined;
-    this.ringData = null;
     this.me = "";
     this.selectedRing = "";
     this.selectedId = "";
@@ -275,120 +349,90 @@ export class TownModel extends Store {
     this.drafts.clear();
     this.sendTarget = undefined;
     this.sendNotice = "";
+    this.sendCandidates = [];
     this.content = "";
     this.recipient = "";
     this.sendOpen = false;
     this.changed();
   }
-  receiveLive(state: TownLiveState) {
-    if (this.live && state.revision <= this.live.revision) return;
-    const previous = this.live;
-    this.live = state;
-    const identityChanged =
-      previous &&
-      state.phase !== "auth-error" &&
-      (previous.generation !== state.generation ||
-        (previous.beingId && previous.beingId !== state.beingId));
-    const rejected =
-      state.phase === "auth-error" && previous?.phase !== "auth-error";
-    if (identityChanged) {
+
+  receiveState(state: TownDesktopAppState) {
+    const previous = this.townApp;
+    this.townApp = state;
+    const identity = state.identity.townId || state.identity.loomBeingId || "";
+    const switched = Boolean(previous) && (previous!.identity.connectionRevision !== state.identity.connectionRevision
+      || (previous!.identity.townId && previous!.identity.townId !== state.identity.townId));
+    if (switched) {
       this.resetIdentity();
-      if (definitions[this.view]) {
-        void this.load();
-      }
-    }
-    if (rejected) {
-      // A stream may lose authorization while the last REST response is still
-      // perfectly readable. Keep that snapshot visible and only gate writes.
-      const hasReadableData = Boolean(this.data || this.ringData || this.detail);
-      this.error = hasReadableData ? undefined : { message: state.message, auth: true };
-      this.status = hasReadableData
-        ? `${state.message} · 已加载内容仍可阅读`
-        : "需要 Town 授权";
-      this.scenes.update({
-        status: hasReadableData ? "ready" : "error",
-        scope: hasReadableData ? "连接未确认；当前内容来自最近一次读取" : "尚未获得 Town 授权",
-      });
-      this.changed();
-    }
-    if (state.phase === "connected") {
-      if (this.me !== state.beingId) {
-        this.me = state.beingId || "";
-        if (definitions[this.view]) void this.load();
-      } else if (
-        state.sync !== previous?.sync ||
-        (this.channel() &&
-          state.versions[this.channel()!] !==
-            previous?.versions[this.channel()!])
-      )
-        this.scheduleReconcile();
-    }
-    this.updateLive();
-  }
-  private scheduleReconcile() {
-    clearTimeout(this.reconcileTimer);
-    if (this.channel())
-      this.reconcileTimer = setTimeout(() => void this.reconcile(), 700);
-  }
-  private async reconcile() {
-    if (this.reconciling) {
-      this.scheduleReconcile();
-      return;
-    }
-    const channel = this.channel(),
-      generation = this.request,
-      identity = this.live?.generation;
-    if (!channel || this.live?.phase !== "connected") return;
-    this.reconciling = true;
-    try {
-      const id = this.directId || this.selectedRing;
-      const query: TownQuery =
-        channel === "firesides" && id
-          ? { kind: "fireside", id }
-          : this.view === "mail" && this.tab === "all"
-            ? { kind: "inbox" }
-            : this.query();
-      const before =
-        query.kind === "fireside" ? this.ringData?.data : this.data;
-      if (!before) return;
-      const result =
-        this.view === "mail" && this.tab === "all"
-          ? await this.queryMail("all")
-          : await this.api.town(query);
-      if (
-        generation !== this.request ||
-        identity !== this.live?.generation ||
-        !result.ok
-      )
-        return;
-      if (
-        JSON.stringify(result.data.messages) !== JSON.stringify(before.messages)
-      )
-        this.changedChannels.add(channel);
+      this.me = identity;
+      this.authLabel = identity ? "@" + identity : "配对 Being";
+      if (definitions[this.view]) void this.load();
       this.updateLive();
-    } catch {
-      /* Keep the content being read until the next reconciliation. */
-    } finally {
-      this.reconciling = false;
-    }
-  }
-  private acknowledge(
-    channel: TownChannel | undefined,
-    start: TownLiveState | undefined,
-  ) {
-    if (!channel || !start || start.generation !== this.live?.generation)
       return;
-    this.seen[channel] = start.versions[channel];
-    this.changedChannels.delete(channel);
+    }
+    if (this.me !== identity) {
+      this.me = identity;
+      this.authLabel = identity ? "@" + identity : state.client.paired ? "Town 连接" : "配对 Being";
+      this.scenes.update({ identity: this.me });
+      if (definitions[this.view]) void this.load();
+    }
     this.updateLive();
   }
+
+  /** A timeline the main process pushed, or the payload-free inbox hint. The
+   * inbox body never arrives this way: only the hint does, and the page re-reads
+   * (docs/town-sdk-integration.md「私信与回复」). */
+  receivePush(value: TownDesktopPush) {
+    if (value.kind === "dm" && !("snapshot" in value)) {
+      if (this.view === "mail") void this.loadInbox();
+      else this.changedFeeds.add("dm");
+      this.updateLive();
+      return;
+    }
+    const envelope = value as TownDesktopEnvelope;
+    const current = this.feed();
+    if (current && this.feedKey(current) === this.feedKey({ kind: envelope.kind, firesideId: envelope.firesideId } as TownDesktopFeed)) {
+      this.applyTimeline(envelope);
+      this.changed();
+      return;
+    }
+    this.changedFeeds.add(this.feedKey({ kind: envelope.kind, firesideId: envelope.firesideId } as TownDesktopFeed));
+    this.updateLive();
+  }
+
+  private applyTimeline(envelope: TownDesktopEnvelope) {
+    // A snapshot read under a different connection must never land in this one's
+    // list. The main process fences too; this is the renderer's own check, and it
+    // is what makes a late answer harmless rather than merely unlikely.
+    const identity = envelope.snapshot.identity;
+    if (identity && this.townApp && identity.connectionRevision !== undefined
+      && identity.connectionRevision !== this.townApp.identity.connectionRevision) return;
+    this.timeline = envelope.snapshot;
+    this.timelineStatus = envelope.status;
+    this.changedFeeds.delete(this.feedKey({ kind: envelope.kind, firesideId: envelope.firesideId } as TownDesktopFeed));
+  }
+
+  /** The feed on screen, as display rows. */
+  messages(): FeedMessage[] {
+    if (this.feedKind() === "dm") {
+      const tab = this.tab;
+      return this.inbox.filter(message => tab === "all" || (tab === "inbox" ? message.received : message.mine));
+    }
+    return feedMessages(this.timeline?.messages || [], { me: this.me });
+  }
+
+  rooms(): TownDesktopRoom[] {
+    return [...new Map([...this.roomDirectory.owned, ...this.roomDirectory.joined].map(room => [String(room.id), room])).values()];
+  }
+
+  ownedRooms(): Set<string> { return new Set(this.roomDirectory.owned.map(room => String(room.id))); }
+
   show(view: string, id?: string) {
     this.view = view;
     this.request++;
     this.detailRequest++;
     this.installedRequest++;
     this.directId = id;
-    clearTimeout(this.reconcileTimer);
     this.updateLive();
     if (!definitions[view]) return;
     this.tab = this.tabs[view] || definitions[view].tabs[0]?.[0] || view;
@@ -446,42 +490,134 @@ export class TownModel extends Store {
       ...(this.view === "seeds" ? this.seedFilters : {}),
     };
   }
-  private async queryMail(tab: "all" | "inbox" | "sent") {
-    if (tab !== "all") return this.api.town({ kind: tab });
-    const [inbox, sent] = await Promise.all([
-      this.api.town({ kind: "inbox" }),
-      this.api.town({ kind: "sent" }),
-    ]);
-    if (!inbox.ok) return inbox;
-    if (!sent.ok) return sent;
-    const messages = [
-      ...list(inbox.data, "messages"),
-      ...list(sent.data, "messages"),
-    ];
-    const seen = new Set<string>();
-    const unique = messages.filter((message) => {
-      const key = str(
-        message.id ||
-          message.message_id ||
-          message.seq ||
-          `${message.sender}:${message.recipient}:${message.created_at || message.at}:${message.content || message.message}`,
-      );
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    return {
-      ok: true as const,
-      data: { ...inbox.data, messages: unique },
-      fetchedAt: sent.fetchedAt > inbox.fetchedAt ? sent.fetchedAt : inbox.fetchedAt,
-    };
+
+  // ── the member directory ───────────────────────────────────────────────────
+  /** Rule 2 and rule 4. The cached directory paints the first mentions; the live
+   * read replaces it when it lands, and an invalidation re-runs only this. */
+  private async loadMembers(force = false) {
+    const generation = ++this.memberRequest;
+    if (!force) {
+      try {
+        const cached = await this.town.cached({ method: "getBeingMembers" });
+        if (generation !== this.memberRequest) return;
+        if (cached.cached) this.applyMembers((cached.data as { members?: TownDesktopMember[] })?.members || []);
+      } catch { /* A cache miss is not a failure; the live read follows. */ }
+    }
+    try {
+      const directory = await this.town.members(force ? { force: true } : undefined);
+      if (generation !== this.memberRequest) return;
+      this.applyMembers(directory.members);
+    } catch { /* Names stay as they are; the messages are already readable. */ }
   }
+
+  private applyMembers(members: TownDesktopMember[]) {
+    this.members = members;
+    const named = mentionNames(members);
+    this.mentionNames = this.townApp?.identity.townId
+      ? withSelf(named, this.townApp.identity.townId, this.townApp.identity.displayName)
+      : named;
+    this.changed();
+  }
+
+  // ── opening a feed ─────────────────────────────────────────────────────────
+  /** Rules 1 and 3: the cached snapshot, then exactly one read, shared. */
+  private async openFeed(feed: TownDesktopFeed, generation: number) {
+    const key = this.feedKey(feed);
+    try {
+      const cached = await this.town.timeline(feed);
+      if (generation !== this.request) return;
+      this.applyTimeline(cached);
+      this.loading = false;
+      this.status = "已恢复本机缓存，正在向 Town 核对…";
+      this.changed();
+    } catch (error) {
+      if (generation !== this.request) return;
+      // No cache yet is the normal first run; a real failure still shows the read.
+      if (this.codeOf(error) === "SESSION_CHANGED") return;
+    }
+    const pending = this.reads.get(key);
+    if (pending) { await pending; return; }
+    this.reading = true;
+    this.changed();
+    const started = (async () => {
+      try {
+        const result = await this.town.read({
+          kind: feed.kind,
+          ...(feed.kind === "fireside" ? { firesideId: feed.firesideId, selectionRevision: this.connectionRevision } : {}),
+        });
+        if (generation !== this.request) return;
+        if (result.envelope) this.applyTimeline(result.envelope);
+        if (result.rooms) this.roomDirectory = result.rooms;
+        if (result.members) this.roomMembers = result.members.members;
+        this.status = this.timelineStatus?.lastSuccessAt
+          ? `来自 beings.town · ${date(new Date(this.timelineStatus.lastSuccessAt).toISOString())} 已刷新`
+          : "来自 beings.town";
+        this.error = undefined;
+      } catch (error) {
+        if (generation !== this.request) return;
+        // A readable cached timeline stays on screen; only an empty feed becomes
+        // an error page.
+        if (this.timeline?.messages.length) this.status = errorText(error);
+        else this.fail(errorText(error), this.codeOf(error) === "AUTH_REQUIRED");
+      }
+    })();
+    this.reads.set(key, started);
+    try { await started; }
+    finally {
+      // Only the read that is still the registered one clears the slot; a later
+      // open that started its own must not have this one's completion free it.
+      if (this.reads.get(key) === started) this.reads.delete(key);
+      if (generation === this.request) { this.reading = false; this.changed(); }
+    }
+  }
+
+  private codeOf(error: unknown): string {
+    const code = (error as { code?: unknown } | null | undefined)?.code;
+    return typeof code === "string" ? code : "";
+  }
+
+  private async loadInbox() {
+    const generation = this.request;
+    try {
+      const { messages } = await this.town.inbox();
+      if (generation !== this.request) return;
+      this.inbox = inboxMessages(messages, { me: this.me });
+      this.changedFeeds.delete("dm");
+      this.status = `来自 beings.town · 最近 ${this.inbox.length} 封`;
+      this.error = undefined;
+    } catch (error) {
+      if (generation !== this.request) return;
+      if (!this.inbox.length) this.fail(errorText(error), this.codeOf(error) === "AUTH_REQUIRED");
+      else this.status = errorText(error);
+    } finally {
+      if (generation === this.request) { this.loading = false; this.changed(); }
+    }
+  }
+
+  /** The fireside directory, cache first, then the read that comes with the feed. */
+  private async loadRooms(generation: number) {
+    try {
+      const cached = await this.town.cached({ method: "getFiresides" });
+      if (generation !== this.request) return;
+      if (cached.cached) this.roomDirectory = { ...(cached.data as TownDesktopRoomDirectory), cached: true };
+    } catch { /* A miss only means the first read has not happened yet. */ }
+    try {
+      const result = await this.town.read({ kind: "fireside", includeRooms: true, ...(this.selectedRing ? { firesideId: this.selectedRing, selectionRevision: this.connectionRevision } : {}) });
+      if (generation !== this.request) return;
+      if (result.rooms) this.roomDirectory = result.rooms;
+      if (result.removed) { this.selectedRing = ""; this.timeline = null; }
+      if (result.envelope) this.applyTimeline(result.envelope);
+      if (result.members) this.roomMembers = result.members.members;
+    } catch (error) {
+      if (generation !== this.request) return;
+      if (!this.roomDirectory.cached) this.fail(errorText(error), this.codeOf(error) === "AUTH_REQUIRED");
+    }
+  }
+
   async load() {
     if (!definitions[this.view]) return;
     const generation = ++this.request;
     ++this.detailRequest;
-    const liveAtStart = this.live,
-      channel = this.channel();
     this.scenes.update({
       sceneId: `town:https://beings.town:${this.view}:${this.tab}`,
       title: definitions[this.view].title,
@@ -491,9 +627,7 @@ export class TownModel extends Store {
       scope: "正在读取当前页",
       filters: { tab: this.tab, offset: String(this.offset), ...(this.view === "seeds" ? this.seedFilters : {}) },
     });
-    this.data = null;
     this.library = null;
-    this.ringData = null;
     this.detail = undefined;
     this.localKit = undefined;
     this.selectedId = "";
@@ -506,28 +640,41 @@ export class TownModel extends Store {
       void this.refreshInstalledKits();
     this.changed();
     try {
+      const kind = this.feedKind();
+      if (kind) {
+        // The directory is read alongside, never before: messages must not wait
+        // for names (rule 2).
+        void this.loadMembers();
+        if (kind === "dm") { await this.loadInbox(); }
+        else if (kind === "bonfire") { this.timeline = null; await this.openFeed({ kind: "bonfire" }, generation); }
+        else {
+          this.timeline = null;
+          await this.loadRooms(generation);
+          if (generation !== this.request) return;
+          const rooms: TownDesktopRoom[] = this.rooms();
+          if (!rooms.some(room => String(room.id) === this.selectedRing)) this.selectedRing = str(rooms[0]?.id);
+          const chosen = this.directId || this.selectedRing;
+          if (chosen) {
+            const room = rooms.find(entry => String(entry.id) === chosen);
+            await this.loadFireside(chosen, str(room?.name, `围炉 #${chosen}`));
+          }
+        }
+        this.scenes.update({ identity: this.me, status: "ready", scope: "已加载当前页；不代表全部内容或已阅读" });
+        return;
+      }
+      this.data = null;
       if (this.directId) {
         const id = this.directId;
-        const auth = await this.api
-          .townAuth()
-          .catch(() => ({ configured: false, beingId: "" }));
-        if (generation !== this.request) return;
-        this.me = auth.configured ? auth.beingId || "" : "";
-        this.authLabel = this.me ? "@" + this.me : "配对 Being";
-        this.scenes.update({ identity: this.me });
         this.status = "来自对话中的内容链接";
-        if (this.view === "firesides")
-          await this.loadFireside(id, `围炉 #${id}`);
-        else
-          await this.loadDetail({
-            kind:
-              this.view === "kits"
-                ? "kit"
-                : this.view === "embers"
-                  ? "ember"
-                  : this.view === "seeds" ? "seed" : "scroll",
-            id,
-          });
+        await this.loadDetail({
+          kind:
+            this.view === "kits"
+              ? "kit"
+              : this.view === "embers"
+                ? "ember"
+                : this.view === "seeds" ? "seed" : "scroll",
+          id,
+        });
         return;
       }
       if (this.tab === "local") {
@@ -539,30 +686,23 @@ export class TownModel extends Store {
         this.installedLoading = false;
         this.installedError = "";
         this.status = `${library.kits.length} 个本机 Kit · ${library.enabled ? "Portal 已启用 Kits" : "Portal 尚未启用 Kits"} · 清单来自磁盘，加载情况请查看 Portal 日志`;
-      } else {
-        const [result, auth] = await Promise.all([
-          this.view === "mail"
-            ? this.queryMail(this.tab as "all" | "inbox" | "sent")
-            : this.api.town(this.query()),
-          this.api.townAuth().catch(() => ({ configured: false, beingId: "" })),
-        ]);
+      } else if (this.tab === "my-scrolls") {
+        // The private half of the scroll library belongs to the paired client:
+        // the public catalogue has no identity to scope it by.
+        const result = await this.town.scrolls({ visibility: "private" });
         if (generation !== this.request) return;
-        this.me = auth.configured ? auth.beingId || "" : "";
-        this.authLabel = this.me
-          ? "@" + this.me
-          : auth.configured
-            ? "Town 连接"
-            : "配对 Being";
+        this.data = { scrolls: result.scrolls, total: result.total };
+        this.status = `来自 beings.town · ${result.total} 份卷轴`;
+      } else {
+        const result = await this.api.town(this.query());
+        if (generation !== this.request) return;
         if (!result.ok) {
           this.fail(result.message, result.code === "auth");
           return;
         }
         this.data = result.data;
         this.validateData();
-        if (Array.isArray(result.data.messages)) this.mentionNames = collectMentionNames(list(result.data, 'messages'), this.mentionNames);
-        if (channel !== "firesides" && this.tab !== "sent")
-          this.acknowledge(channel, liveAtStart);
-        this.status = `来自 beings.town · ${date(result.fetchedAt)} 已刷新${this.view === "bonfire" ? " · 最近 100 条" : this.view === "mail" ? " · 最近 100 封" : ""}`;
+        this.status = `来自 beings.town · ${date(result.fetchedAt)} 已刷新`;
       }
       this.scenes.update({
         identity: this.library ? this.scenes.being : this.me,
@@ -571,21 +711,8 @@ export class TownModel extends Store {
           ? "本机 Kit 清单；不代表工具已可调用"
           : "已加载当前页；不代表全部内容或已阅读",
       });
-      if (this.view === "firesides" && this.data) {
-        const entries = this.rooms();
-        if (!entries.some((entry) => str(entry.id) === this.selectedRing))
-          this.selectedRing = str(entries[0]?.id);
-        const entry = entries.find(
-          (entry) => str(entry.id) === this.selectedRing,
-        );
-        if (entry)
-          void this.loadFireside(
-            this.selectedRing,
-            str(entry.name, `围炉 #${this.selectedRing}`),
-          );
-      }
     } catch (error) {
-      if (generation === this.request) this.fail(errorText(error));
+      if (generation === this.request) this.fail(errorText(error), this.codeOf(error) === "AUTH_REQUIRED");
     } finally {
       if (generation === this.request) {
         this.loading = false;
@@ -597,25 +724,11 @@ export class TownModel extends Store {
     if (!this.data) return;
     if (this.view === "town") {
       if (this.tab === "updates") list(this.data, "whats_new");
-    } else if (this.channel() === "firesides") {
-      list(this.data, "owned");
-      list(this.data, "joined");
     } else
       list(
         this.data,
-        this.channel() ? "messages" : this.tab === "grove" ? "kits" : this.view === "seeds" ? "seeds" : "scrolls",
+        this.tab === "grove" ? "kits" : this.view === "seeds" ? "seeds" : "scrolls",
       );
-  }
-  rooms() {
-    return this.data
-      ? [
-          ...new Map(
-            [...list(this.data, "owned"), ...list(this.data, "joined")].map(
-              (entry) => [str(entry.id), entry],
-            ),
-          ).values(),
-        ]
-      : [];
   }
   fail(message: string, auth = false) {
     this.error = { message, auth };
@@ -646,9 +759,9 @@ export class TownModel extends Store {
     });
     this.changed();
   }
+
   async loadFireside(id: string, title: string, refresh = false) {
-    const generation = ++this.detailRequest,
-      liveAtStart = this.live;
+    const generation = this.request;
     this.selectedRing = id;
     this.ringTitle = title;
     this.detailLoading = true;
@@ -664,39 +777,68 @@ export class TownModel extends Store {
     });
     this.updateLive();
     try {
-      if (refresh || this.ringData?.id !== id) {
-        const result = await this.api.town({ kind: "fireside", id });
-        if (generation !== this.detailRequest) return;
-        if (!result.ok) {
-          this.detailError = {
-            message: result.message,
-            auth: result.code === "auth",
-            retry: () => void this.loadFireside(id, title, true),
-          };
-          this.scenes.update({ status: "error", scope: "围炉消息读取失败" });
-          return;
-        }
-        list(result.data, "messages");
-        this.mentionNames = collectMentionNames(list(result.data, 'messages'), this.mentionNames);
-        this.ringData = { id, data: result.data };
-        this.acknowledge("firesides", liveAtStart);
-      }
+      if (refresh) await this.refresh();
+      else await this.openFeed({ kind: "fireside", firesideId: id }, generation);
+      if (generation !== this.request) return;
       this.scenes.update({ status: "ready" });
-    } catch {
-      if (generation === this.detailRequest) {
+    } catch (error) {
+      if (generation === this.request) {
         this.detailError = {
-          message: "未能读取围炉消息。",
+          message: errorText(error),
+          auth: this.codeOf(error) === "AUTH_REQUIRED",
           retry: () => void this.loadFireside(id, title, true),
         };
         this.scenes.update({ status: "error", scope: "围炉消息读取失败" });
       }
     } finally {
-      if (generation === this.detailRequest) {
+      if (generation === this.request) {
         this.detailLoading = false;
         this.changed();
       }
     }
   }
+
+  /** One explicit refresh of the feed on screen (`limit=50`). */
+  async refresh() {
+    const kind = this.feedKind();
+    if (kind === "dm") { await this.loadInbox(); return; }
+    const feed = this.feed();
+    if (!feed || this.reading) return;
+    const generation = this.request;
+    this.reading = true;
+    this.changed();
+    try {
+      const envelope = await this.town.refreshTimeline(feed);
+      if (generation !== this.request) return;
+      this.applyTimeline(envelope);
+      this.error = undefined;
+    } catch (error) {
+      if (generation === this.request) this.status = errorText(error);
+    } finally {
+      if (generation === this.request) { this.reading = false; this.changed(); }
+    }
+  }
+
+  /** One bounded walk backwards. Town has `since` and no `before`, so the client
+   * probes; a feed that came through a relay cannot page at all
+   * (docs/town-sdk-integration.md「时间线累积」). */
+  async loadOlder() {
+    const feed = this.feed();
+    if (!feed || this.olderBusy || !this.timeline?.hasOlder) return;
+    const generation = this.request;
+    this.olderBusy = true;
+    this.changed();
+    try {
+      const envelope = await this.town.loadOlder(feed);
+      if (generation !== this.request) return;
+      this.applyTimeline(envelope);
+    } catch (error) {
+      if (generation === this.request) this.status = errorText(error);
+    } finally {
+      if (generation === this.request) { this.olderBusy = false; this.changed(); }
+    }
+  }
+
   async loadDetail(query: TownQuery, append = false) {
     const generation = ++this.detailRequest;
     this.selectedId = query.id || "";
@@ -752,146 +894,110 @@ export class TownModel extends Store {
       }
     }
   }
+
+  // ── pairing ────────────────────────────────────────────────────────────────
+  // Six digits, from the Being's own Town identity, exchanged for a client token
+  // that never enters this process. There is no "paste an existing token" path:
+  // the direct client mints its own credential and binds it to this connection
+  // (docs/town-sdk-integration.md「配对与权限」).
   async auth() {
     if (this.authOpen) return;
     const revision = ++this.authRequest;
     this.authOpen = true;
     this.authLoading = true;
-    this.authChatBeing = '';
-    this.authManual = false;
-    this.token = "";
     this.pairCode = "";
     this.authError = "";
     this.authState = "";
-    this.authBeing = "";
     this.changed();
     try {
-      const state = await this.api.townAuth();
+      const state = await this.town.appState();
       if (revision !== this.authRequest) return;
-      this.authBeing = state.beingId || state.pairedBeingId || state.suggestedBeingId || "";
-      this.authChatBeing = state.chatBeing || '';
-      this.authManual = !this.authChatBeing;
-      this.authConfigured = state.configured;
-      this.authState =
-        state.warning ||
-        (state.configured
-          ? [state.display ? `已保存配对：${state.display}。` : '',
-              this.live?.phase === 'connected' ? 'Town 已连接。' : this.live?.message || "已保存 Town 凭据，等待身份确认。"].filter(Boolean).join(' ')
-          : "尚未配对。");
+      this.townApp = state;
+      this.authState = this.pairingSentence(state);
     } catch (error) {
-      if (revision === this.authRequest) { this.authError = errorText(error); this.authManual = true; }
+      if (revision === this.authRequest) this.authError = errorText(error);
     }
     if (revision !== this.authRequest) return;
     this.authLoading = false;
     this.changed();
   }
-  async cancelAutoPair() {
-    const id = this.autoPairId;
-    if (!id) return true;
-    try {
-      if (!await this.api.cancelTownPair(id)) return false;
-    } catch { this.authError = '未能取消配对，请等待当前请求结束。'; this.changed(); return false; }
-    if (this.autoPairId && this.autoPairId !== id) return false;
-    if (!this.authOpen) return true;
-    this.autoPairId = undefined;
-    ++this.authRequest;
-    this.authBusy = false;
-    this.authError = '';
-    this.authState = '已取消自动配对。已发出的请求可能仍会由 Being 处理。';
-    this.changed();
-    return true;
+
+  private pairingSentence(state: TownDesktopAppState): string {
+    if (state.client.pairingPending) return "配对已成功，但凭据没能写入本机密钥库。请点「重试保存配对」；不要再要一个新码。";
+    if (!state.client.paired) return "尚未配对。";
+    if (state.client.status === "connected") return `已连接 Town${state.identity.displayName ? `：${state.identity.displayName}` : ""}。`;
+    return "已保存 Town 配对，等待身份确认。";
   }
+
   async closeAuth() {
-    if (this.authBusy && (!this.autoPairId || !await this.cancelAutoPair())) return;
+    if (this.authBusy) return;
     ++this.authRequest;
     this.authLoading = false;
     this.authOpen = false;
-    this.token = "";
     this.pairCode = "";
     this.changed();
   }
-  async autoPair() {
+
+  /** One click: the Being is asked for a code in its own scene and it is
+   * exchanged without the code ever reaching the page. */
+  async autoPair() { await this.pairing(() => this.town.autoPair(), "正在请求 Being 生成配对码，最多等待 90 秒…"); }
+  /** Manual: the six digits the user read out of the conversation. */
+  async pair() {
+    const code = this.pairCode.trim().toUpperCase();
+    if (!/^[A-Z2-9]{6}$/.test(code)) { this.authError = "请输入 6 位配对码（大写字母或数字）。"; this.changed(); return; }
+    await this.pairing(() => this.town.pair({ code }), "正在兑换配对码…");
+  }
+  /** The token is already in memory; only the write failed. Never another code. */
+  async retryPairStorage() { await this.pairing(() => this.town.retryPairStorage(), "正在重试保存配对…"); }
+
+  async forget() {
+    await this.pairing(() => this.town.forget(), "正在删除本机配对…", false);
+  }
+
+  private async pairing(operation: () => Promise<unknown>, notice: string, reload = true) {
     if (this.authBusy || this.authLoading) return;
-    if (!this.authChatBeing) { this.authManual = true; this.changed(); return; }
     const revision = ++this.authRequest;
-    const id = crypto.randomUUID();
-    this.autoPairId = id;
     this.authBusy = true;
-    this.authError = '';
-    this.authState = `正在向 ${this.authChatBeing} 申请配对，等待回复，最多 90 秒…`;
+    this.authError = "";
+    this.authState = notice;
     this.changed();
     try {
-      await this.api.autoPairTown({ requestId: id, beingId: this.authChatBeing });
+      await operation();
       if (revision !== this.authRequest) return;
-      this.resetIdentity();
-      this.authLabel = 'Town 连接';
-      this.authOpen = false;
-      this.token = ''; this.pairCode = '';
-      if (definitions[this.view]) await this.load();
+      const state = await this.town.appState();
+      if (revision !== this.authRequest) return;
+      this.townApp = state;
+      this.authState = this.pairingSentence(state);
+      this.pairCode = "";
+      if (!state.client.pairingPending) {
+        this.authOpen = false;
+        this.resetIdentity();
+        this.me = state.identity.townId || state.identity.loomBeingId || "";
+        if (reload && definitions[this.view]) await this.load();
+      }
     } catch (error) {
       if (revision !== this.authRequest) return;
-      this.authManual = true;
-      this.authBeing = this.authChatBeing;
       this.authError = errorText(error);
-      this.authState = '可手动获取并输入配对码。';
+      this.authState = "";
     } finally {
-      if (this.autoPairId === id) {
-        this.autoPairId = undefined;
+      if (revision === this.authRequest) {
         this.authBusy = false;
         this.changed();
       }
     }
   }
-  async saveToken(clear: boolean, pair = false) {
-    if (this.authBusy || this.authLoading) return;
-    this.authBusy = true;
-    this.authError = "";
-    this.changed();
-    try {
-      if (pair)
-        await this.api.pairTown({
-          beingId: this.authBeing.trim(),
-          code: this.pairCode.trim(),
-        });
-      else {
-        if (!clear && !this.token.trim()) throw new Error("请输入 Town 凭据。");
-        await this.api.saveTownToken(clear ? "" : this.token.trim());
-      }
-      this.resetIdentity();
-      this.authLabel = clear ? "配对 Being" : "Town 连接";
-      this.token = "";
-      this.pairCode = "";
-      this.authOpen = false;
-      if (definitions[this.view]) await this.load();
-    } catch (error) {
-      this.authError = errorText(error);
-    } finally {
-      this.authBusy = false;
-      this.changed();
-    }
-  }
+
+  // ── sending ────────────────────────────────────────────────────────────────
   compose(reply?: FeedReply) {
-    const live = this.live;
-    if (
-      this.sendBusy ||
-      live?.phase !== "connected" ||
-      !live.beingId ||
-      !this.channel()
-    )
-      return;
-    const kind =
-      this.view === "mail"
-        ? "dm"
-        : this.view === "firesides"
-          ? "fireside"
-          : "bonfire";
+    const kind = this.feedKind();
+    if (this.sendBusy || !kind || !this.connected || !this.me) return;
     const firesideId = this.directId || this.selectedRing;
     if (kind === "fireside" && !firesideId) return;
     const next: SendTarget = {
       kind,
       firesideId: kind === "fireside" ? firesideId : undefined,
-      generation: live.generation,
-      beingId: live.beingId,
+      connectionRevision: this.connectionRevision,
+      beingId: this.me,
       ...(reply ? { reply } : {}),
     };
     if (this.sendTarget)
@@ -907,69 +1013,69 @@ export class TownModel extends Store {
     this.sendTarget = next;
     this.sendError = "";
     this.sendNotice = "";
+    this.sendCandidates = [];
     this.sendOpen = true;
     this.changed();
   }
+  /** Measured in code points, and refused here rather than truncated by Town:
+   * the bonfire truncates silently, the fireside answers 400. */
   get sendLimit() {
     return this.sendTarget?.kind === "bonfire" ? 4000 : 32000;
   }
   get canSend() {
     return (
       !this.sendBusy &&
-      this.live?.phase === "connected" &&
+      this.connected &&
       Boolean(this.content.trim()) &&
+      (this.sendTarget?.kind !== "dm" || Boolean(this.recipient.trim())) &&
       [...this.content].length <= this.sendLimit
     );
   }
   async send() {
     const target = this.sendTarget;
     if (!target || !this.canSend) return;
-    if (
-      target.generation !== this.live?.generation ||
-      target.beingId !== this.live.beingId
-    ) {
+    if (target.connectionRevision !== this.connectionRevision || target.beingId !== this.me) {
       this.sendError = "Town 身份已改变，请重新打开发送窗口。";
       this.changed();
       return;
     }
-    const input: TownPost =
-      target.kind === "dm"
-        ? { kind: "dm", content: this.content, recipient: this.recipient }
-        : target.kind === "fireside"
-          ? {
-              kind: "fireside",
-              content: this.content,
-              firesideId: target.firesideId!,
-            }
-          : { kind: "bonfire", content: this.content };
-    if (target.reply)
-      input.replyTo =
-        input.kind === "dm" ? String(target.reply.id) : Number(target.reply.id);
+    const replyTo = target.reply === undefined ? undefined : String(target.reply.id);
+    const request = target.kind === "dm"
+      ? { kind: "dm" as const, recipient: this.recipient.trim(), content: this.content, connectionRevision: target.connectionRevision, ...(replyTo ? { replyTo } : {}) }
+      : target.kind === "fireside"
+        ? { kind: "fireside" as const, firesideId: target.firesideId!, content: this.content, connectionRevision: target.connectionRevision, ...(replyTo ? { replyTo } : {}) }
+        : { kind: "bonfire" as const, content: this.content, connectionRevision: target.connectionRevision, mentions: [], ...(replyTo ? { replyTo } : {}) };
     this.sendBusy = true;
     this.sendError = "";
     this.sendNotice = "";
+    this.sendCandidates = [];
     this.changed();
     try {
-      const result = await this.api.sendTown(input);
+      const receipt = await this.town.speak(request);
       if (target !== this.sendTarget) return;
-      if (!result.ok) {
-        this.sendError = result.message;
-        return;
-      }
       this.drafts.delete(JSON.stringify(target));
       this.content = "";
-      this.sendNotice = result.warnings?.length
-        ? `消息已发送，但部分 @ 提及未解析成功：${result.warnings.join('；')}。请核对目标，无需重复发送原消息。`
+      const warnings = Array.isArray(receipt.mention_warnings) ? receipt.mention_warnings.length : 0;
+      this.sendNotice = warnings
+        ? "消息已发送，但部分 @ 提及未解析成功。请核对目标，无需重复发送原消息。"
         : "";
       this.sendOpen = Boolean(this.sendNotice);
-      await this.load();
+      await this.refresh();
     } catch (error) {
-      if (target === this.sendTarget) this.sendError = errorText(error);
+      if (target !== this.sendTarget) return;
+      this.sendError = errorText(error);
+      // `NOT_SENT` from an ambiguous recipient carries the choices Town offered.
+      // They are shown; none is selected automatically and nothing is resent.
+      const candidates = (error as { candidates?: { town_id: string; display_name: string }[] }).candidates;
+      this.sendCandidates = Array.isArray(candidates) ? candidates : [];
+      if (this.codeOf(error) === "RESULT_UNKNOWN")
+        this.sendNotice = "结果未确认：消息可能已经送达。请刷新核对，不要直接重发。";
     } finally {
       this.sendBusy = false;
       this.changed();
     }
   }
+
   installedKit(name: string) {
     // Installation targets use manifest.name, including imports and older Grove installs.
     return this.installedLibrary?.kits.find(kit => kit.name === name);

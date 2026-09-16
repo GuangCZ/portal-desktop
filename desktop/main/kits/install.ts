@@ -8,7 +8,7 @@ import { x as extract } from 'tar';
 import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import { createGunzip } from 'node:zlib';
-import { TOWN_ORIGIN, TownClient } from '../town/client';
+import { TOWN_ORIGIN, TownCatalog } from '../town/catalog';
 import { readKit, kitLocation } from './catalog';
 import { redact } from '../chat/connection';
 import type { Settings, KitInstallPlan, KitInstallInput } from '../../shared/types';
@@ -107,7 +107,7 @@ export class KitInstaller {
     if (this.pending.size >= 3) throw new Error('请先关闭其他 Kit 安装窗口。');
     const { directory, enabled } = await kitLocation(settings);
     if (!enabled) throw new Error('请先在本机设置或现有 Portal 配置中启用 Kits。');
-    const details = await new TownClient(() => '', this.fetcher).query({ kind: 'kit', id });
+    const details = await new TownCatalog(this.fetcher).query({ kind: 'kit', id });
     if (!details.ok) throw new Error(details.message);
     if (details.data.ambiguous) throw new Error('此名称对应多个 Kit，请通过市集中的具体条目安装。');
     const data = await downloadKit(id, this.fetcher);
