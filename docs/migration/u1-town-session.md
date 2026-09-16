@@ -700,3 +700,54 @@ function clientFixture(response, onEvent=()=>{}) {
 
 **不在本单元的用例**（BeingTownWriter / TownCachedReads / TownController / preload / renderer town-mentions 的 `isOwnMessage`·`resolve`）：
 `P1 relay accepts pinned town_id-only receipts…`、`P1 relay cannot accept an unbound or conflicting Town identity`、`P1 own-message classification uses only the verified Town ID…`、`P1 persisted member snapshots expire…`、`P1 manual names stay raw…`。
+
+### 测试 test/town-identity-migration.test.cjs（115 行，11 个用例，已读完）—— 全部针对本单元四模块
+
+夹具（原样照抄）：
+```js
+const token = 'a'.repeat(64), townId = 't_alice', otherId = 't_bob';
+const json = value => new Response(JSON.stringify(value), {headers: {'Content-Type': 'application/json'}});
+const tick = () => new Promise(resolve => setImmediate(resolve));
+function fixture({pinned = '', identity = {town_id: townId, mentions: []}, hello = {town_id: townId, anonymous: false, token_kind: 'client'}, respond} = {}) {
+  let context = {key: 'loom-alice', beingId: 'alice', revision: 1, connected: true};
+  const calls = [], pins = [], events = [];
+  const saved = {token, townId: pinned};
+  const store = {loadCredential: async () => ({...saved}), bindTownId: async (key, beingId, credential, id, current) => {
+    assert.equal(current(), true); assert.equal(key, context.key); assert.equal(beingId, context.beingId); assert.equal(credential === token, true);
+    pins.push(id); saved.townId = id;
+  }};
+  const client = new TownClient({getContext: () => context, store, onEvent: event => events.push(event), fetchImpl: async (url, options) => {
+    const route = new URL(url).pathname; calls.push({route, method: options.method || 'GET'});
+    assert.equal(options.headers.Authorization === `Bearer ${token}`, true); assert.equal(new URL(url).searchParams.has('token'), false);
+    if (route === '/api/bonfire/mentions') return json(typeof identity === 'function' ? await identity() : identity);
+    if (route === '/api/client/stream') return new Response(new ReadableStream({start(controller) {
+      controller.enqueue(new TextEncoder().encode(`event: hello\ndata: ${JSON.stringify(hello)}\n\nevent: bonfire\ndata: {"message":"not a trusted snapshot"}\n\n`));
+      options.signal.addEventListener('abort', () => {try {controller.close();} catch {}});
+    }}), {headers: {'Content-Type': 'text/event-stream'}});
+    return json(respond ? respond(route, options) : {ok: true, town_id: townId, global_latest_seq: 1, messages: []});
+  }});
+  const session = new TownSession({getContext: () => ({configured: true, connected: true, beingName: context.beingId, connectionId: context.revision}),
+    readImpl: (...args) => client.read(...args), fetchImpl: async () => json({community: [{town_id: otherId, display_name: 'Bob'}]})});
+  return {client, session, calls, pins, events, saved, store, switch() {context = {...context, key: 'loom-bob', beingId: 'bob', revision: 2}; client.reset();}};
+}
+```
+
+11 个用例：
+1. `existing paired credential resolves a different Town namespace only after REST and SSE agree` —— `read('/api/bonfire/hear')` → `pins === [townId]`，token 不变；调用顺序精确等于 `['/api/bonfire/mentions','/api/client/stream','/api/bonfire/hear']`（**首次迁移会额外开一次 `_probeHello`**）；`state().beingId === 'alice'`，state JSON 不含 token；`reset()` 后再读 → `pins.length === 1`，`/stream` 只调用过一次（第二次 `saved.townId` 已是 `townId`，不再探测）。
+2. `SSE migration waits for REST verification before delivering the following events` —— identity 是延迟 promise；`lifecycle({enabled:true})` 后 status `connecting`、events 空；resolve 后 status `connected`、events `[{type:'hello'},{type:'bonfire'}]`、`pins === [townId]`。
+3. `disagreeing REST and SSE identities never pin, read protected history, or send` —— hello 是 `otherId` → `speak` 抛 `IDENTITY_MISMATCH`；`pins === []`；没有 POST、没有 `/hear`。
+4. `a new SSE identity cannot be accepted against an unrelated legacy REST format` —— identity 是 `{being:'alice',mentions:[]}`（旧格式，无 town_id）→ `lifecycle` 后 status `identity_mismatch`、`pins === []`、events 空。
+5. `a persisted Town identity cannot be replaced by a later credential response` —— `pinned = townId`，identity/hello 都是 `otherId` → `read` 抛 `IDENTITY_MISMATCH`；`lifecycle` 后 status `identity_mismatch`、events 空、`pins === []`。
+6. `missing identity is a protocol error, while conflicting legacy identity still blocks migration` —— 三组：`[{mentions:[]}, 'INVALID_RESPONSE']`、`[{town_id:townId, being:'mallory', mentions:[]}, 'IDENTITY_MISMATCH']`、`[{town_id:null, being:'alice', mentions:[]}, 'INVALID_RESPONSE']`；每组 `pins === []`、`calls.length === 1`。
+7. `Being switch during migration cannot bind or publish an old response` —— 飞行中 `switch()` → `SESSION_CHANGED`、`pins === []`、events 空。
+8. `storage failure preserves pairing and blocks migration without fetching history` —— `store.bindTownId` 抛普通 Error → `STORAGE_ERROR`；`saved.townId === ''`、token 不变、没有 `/hear` 调用。
+9. `Town message, reply, member, and inbox identities survive the full DTO pipeline` —— `pinned = townId` + `respond`：
+   - `/api/fireside/members` → `[{town_id: otherId, display_name:'Bob', key:'hidden'}]`
+   - `/api/messages` → `{messages:[{id:'dm1', sender_town_id: otherId, sender_display:'Bob', recipient_town_id: townId, content:'private fixture', reply_to:'dm0', reply_to_sender: townId, reply_to_preview:'earlier'}]}`
+   - 其他 → `{ok:true, town_id: townId, messages:[{seq:1, town_id: otherId, speaker_name:'Bob', message:'fixture', reply_to:0, reply_to_town_id: townId, reply_to_preview:'original'}], global_latest_seq:1, latest_seq:1}`
+   断言：篝火与围炉的 `messages[0].beingId === otherId`、`beingName === 'Bob'`、`replyTo.beingId === townId`（**`reply_to: 0` 也算合法父消息，因为 `sequence(0)` 为真**）；成员 `being_id === otherId` 且不含 `'hidden'`；收件箱 `senderId === otherId`、`senderName === 'Bob'`；`getMembers().members[0].id === otherId`；`listBeings().beings[0].id === otherId`。
+10. `modern read envelopes cannot normalize away an authenticated identity mismatch` —— respond 恒返回 `town_id: otherId` → `getBonfireMessages()` 抛 `IDENTITY_MISMATCH`。
+11. `modern send receipts keep unknown results distinct and never repeat a POST` —— 首次 `speak` 回执 `town_id: townId` → `ok`；改成 `otherId` 后第二次 → `RESULT_UNKNOWN`；POST 计数 2；`sendDirectMessage({recipient: townId, …})`（发给自己的 Town ID）→ `NOT_SENT`，POST 仍为 2。
+12. `public directories and scrolls use Town identities without leaking private fields` —— `beingsDto([{town_id: otherId, display_name:'Bob'}])[0].id === otherId`；`beingsDto([{town_id: null, being_id:'bob', display_name:'Bob'}])` 抛 `INVALID_RESPONSE`（**`hasOwn town_id` 为真但值是 null → memberId 返回 null**）；`scrollListDto({scrolls:[{id:'note1', title:'Fixture', town_id: otherId, display_name:'Bob', visibility:'private', revision:1, share_token:'private'}], total:1, offset:0, limit:1}, {limit:1})` → `scrolls[0].beingId === otherId`，不含 `share_token`。
+
+（实际 `test(...)` 调用 **12** 次。）
