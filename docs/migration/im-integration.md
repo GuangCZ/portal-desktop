@@ -116,7 +116,7 @@
 ### 1.8 docs/migration/i6-shell-state.md
 
 - 4.1：`beings:snapshot` 不加 `sidebar`，改用自己的 `beings:sidebar-state` 读通道 + `beings:sidebar` 推送。
-- 4.3 / 9.5：**没有 `beings:sidebar-project-select`**，理由是「本壳层没有文件浏览页，唯一能切换的 `settings.workspace` 是 Portal 工作目录」；
+- 4.3 / 9.5：**没有 `beings:select-saved-project`**，理由是「本壳层没有文件浏览页，唯一能切换的 `settings.workspace` 是 Portal 工作目录」；
   9.5 明确说「I2/I3 的 `DesktopTools({getWorkspace})` / `DesktopConsole({getWorkspace})` 若要按项目切换工作目录，就需要补回这条通道，
   实现落在 `main/shell/ipc.ts`，`updateSidebar` 不用动」→ **本单元第 13 条**。
 - 4.7：重申 `main.ts` 从来没调用过 `extensions.connectionCleared()` → **本单元第 11 条**。
@@ -325,7 +325,7 @@ I1 的 worktree 里没有工具桥，退而用了 `ctx.electron.shell.openExtern
 (b) 允许名单在两条路径上都原样（六个坏 route 都抛「不支持的 Town 链接。」，且没有开出任何标签页）；
 (c) 只装 town 子系统时退回 `shell.openExternal`。
 
-### 2.13 项目切换 `beings:sidebar-project-select`（i6 记录 §4.3 / §9.5 与 i3 未做 5）——已补
+### 2.13 项目切换 `beings:select-saved-project`（i6 记录 §4.3 / §9.5 与 i3 未做 5）——已补
 
 i6 当时的理由是「本外壳没有文件浏览页，唯一能切换的 `settings.workspace` 是 Portal 工作目录」；
 但 I2/I3 落地之后，`DesktopTools({getWorkspace})`、`DesktopConsole({getWorkspace})` 与终端**都**读 `Settings.projectWorkspace`，
@@ -339,7 +339,7 @@ BD `src/main.cjs:574` `selectSavedProject`：校验目录在 `sidebarState(...).
 | 层 | 改动 |
 | --- | --- |
 | `main/shell/sidebar-state.ts` | 新增 `assertSavedProject(saved, scope, workspace, project)`——只有 BD 的那条校验，不写盘（切工作目录不是账本变更）。 |
-| `main/shell/ipc.ts` | 新增 `beings:sidebar-project-select`（进 `ctx.exclusive`，BD 把它和 `sidebarAction` 一起列进串行表 `src/main.cjs:141`），字符串 + 4096 上限，其余交给 reducer 拒绝。 |
+| `main/shell/ipc.ts` | 新增 `beings:select-saved-project`（进 `ctx.exclusive`，BD 把它和 `sidebarAction` 一起列进串行表 `src/main.cjs:141`），字符串 + 4096 上限，其余交给 reducer 拒绝。 |
 | `main/subsystems/shell-state.ts` | `selectProject`：校验 → `saveExtra({ workspace })`（**BD 的同一个磁盘键**，`app/settings.ts:68` 就是从这个键读进 `projectWorkspace` 的，所以 0.8.x 档案互通）→ `ctx.store.settings.projectWorkspace = chosen` → 推 `beings:sidebar` → `ctx.registry.get('tools')?.tools?.changed()`（BD 的 `desktopTools?.changed()`）。 |
 | `shared/shell-state-types.ts` / `preload/channels/shell-state.ts` | `selectProject(project)` 各一行。 |
 | `renderer/app/components/sidebar.tsx` | 项目菜单加「设为工作目录」（BD 的「浏览文件」，本外壳没有文件浏览页，所以切换本身就是全部动作）。 |
@@ -592,7 +592,7 @@ Error: 浏览器已经关闭。
 
 | 通道 | 方向 | payload | 守卫 | 来源 |
 | --- | --- | --- | --- | --- |
-| `beings:sidebar-project-select` | invoke → `SidebarState` | `project: string`（≤4096，非字符串/超长/不在已保存项目里都拒） | `ctx.exclusive`（BD `src/main.cjs:141` 把它与 `sidebarAction` 一起列进串行表） | BD `selectSavedProject`（`src/main.cjs:574`）/ `being:sidebarProjectSelect` |
+| `beings:select-saved-project` | invoke → `SidebarState` | `project: string`（≤4096，非字符串/超长/不在已保存项目里都拒） | `ctx.exclusive`（BD `src/main.cjs:141` 把它与 `sidebarAction` 一起列进串行表） | BD `selectSavedProject`（`src/main.cjs:574`）/ `being:sidebarProjectSelect` |
 
 **行为改变、名字没动的 3 条**：
 
@@ -628,7 +628,7 @@ Error: 浏览器已经关闭。
 | `package.json` | **本单元的例外**：`scripts` 段 append 三行（`test:tools` / `test:terminal` / `test:sidebar`），**依赖一个没动** |
 | `scripts/test-all.mjs` | **本单元的例外**：内联的 tools-e2e 改成 npm 脚本，另加 terminal-e2e、sidebar-e2e 两步 |
 | `MIGRATION.md` | **本单元的例外**：两个「集成阶段」小节合成一个 + 补表头，五行原文逐字保留，末尾 append IM 一行；I0 小节的 `connectionCleared()` 那条补上本单元的核实结论 |
-| `desktop/preload/channels/shell-state.ts` | **append 一行**：`selectProject: project => ipcRenderer.invoke('beings:sidebar-project-select', project),` |
+| `desktop/preload/channels/shell-state.ts` | **append 一行**：`selectProject: project => ipcRenderer.invoke('beings:select-saved-project', project),` |
 | `desktop/shared/shell-state-types.ts` | **append**：`selectProject(project: string): Promise<SidebarState>;` 一行（带注释） |
 | `desktop/main/main.ts` | **一行都没改**（第 11、12 条都不需要动它：11 的结论是没有可接的时刻，12 落在 `subsystems/town.ts`） |
 

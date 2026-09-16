@@ -28,7 +28,7 @@ const TOKEN_B = "b".repeat(64);
 const ADDRESS_A = `https://echo.beings.town/cz_being/?token=${TOKEN_A}`;
 const ADDRESS_B = `https://echo.beings.town/other_being/?token=${TOKEN_B}`;
 const SHELL = "beings://desktop/";
-const CHANNELS = ["beings:sidebar-state", "beings:sidebar-action", "beings:sidebar-project-add", "beings:sidebar-project-select"];
+const CHANNELS = ["beings:sidebar-state", "beings:sidebar-action", "beings:sidebar-project-add", "beings:select-saved-project"];
 const json = (value: unknown, status = 200) =>
   new Response(value === null ? null : JSON.stringify(value), { status, headers: value === null ? {} : { "Content-Type": "application/json" } });
 const settle = async () => { for (let index = 0; index < 25; index++) await new Promise(resolve => setImmediate(resolve)); };
@@ -227,7 +227,7 @@ test("selecting a project moves the working directory the tools and the terminal
     await f.call("beings:sidebar-project-add", project);
     await f.call("beings:sidebar-project-add", other);
 
-    const state: ShellSidebarState = await f.call("beings:sidebar-project-select", other);
+    const state: ShellSidebarState = await f.call("beings:select-saved-project", other);
     // THE DIRECTORY EVERY WORKSPACE CONSUMER READS.
     expect(f.store.settings.projectWorkspace).toBe(other);
     // 0.8.26's `disk.workspace`, the same key a 0.8.x profile uses.
@@ -242,7 +242,7 @@ test("selecting a project moves the working directory the tools and the terminal
     expect(reopened.settings.projectWorkspace).toBe(other);
 
     // Switching again moves it again.
-    await f.call("beings:sidebar-project-select", project);
+    await f.call("beings:select-saved-project", project);
     expect(f.store.settings.projectWorkspace).toBe(project);
     expect(f.errors).toEqual([]);
   } finally { await f.cleanup(); }
@@ -254,7 +254,7 @@ test("a folder that is not on the list is refused and nothing is written", async
     await f.connect();
     const before = await f.saved();
     for (const input of ["/never-added", "relative/path", 12, "", null, { path: "/Users/me/Work" }])
-      await expect(f.call("beings:sidebar-project-select", input)).rejects.toThrow(/项目不存在，请重新选择文件夹。/);
+      await expect(f.call("beings:select-saved-project", input)).rejects.toThrow(/项目不存在，请重新选择文件夹。/);
     expect(await f.saved()).toEqual(before);
     expect(f.store.settings.projectWorkspace).toBeFalsy();
     expect(f.errors).toEqual([]);

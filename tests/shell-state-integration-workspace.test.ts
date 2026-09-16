@@ -5,7 +5,7 @@
 // against a real `SettingsStore`. What THIS file is about is the other half —
 // that the choice reaches the consumers — because that is the half
 // docs/migration/i6-shell-state.md §9.5 left open: I6 shipped without
-// `beings:sidebar-project-select` on the grounds that nothing could be switched,
+// `beings:select-saved-project` on the grounds that nothing could be switched,
 // and I2/I3 then landed `DesktopTools({getWorkspace})`,
 // `DesktopConsole({getWorkspace})` and the terminal, all three of which read
 // `Settings.projectWorkspace`.
@@ -111,7 +111,7 @@ describe("choosing a project folder", () => {
     expect(((await f.call("beings:tools")) as DesktopToolsState).workspace).toBe("/portal/workspace");
 
     await f.call("beings:sidebar-project-add", PROJECT);
-    await f.call("beings:sidebar-project-select", PROJECT);
+    await f.call("beings:select-saved-project", PROJECT);
 
     // THE POINT OF THE WHOLE CHANNEL.
     expect(f.settings.projectWorkspace).toBe(PROJECT);
@@ -130,11 +130,11 @@ describe("choosing a project folder", () => {
     const f = await fixture();
     await f.call("beings:sidebar-project-add", PROJECT);
     await f.call("beings:sidebar-project-add", OTHER);
-    await f.call("beings:sidebar-project-select", PROJECT);
-    await f.call("beings:sidebar-project-select", OTHER);
+    await f.call("beings:select-saved-project", PROJECT);
+    await f.call("beings:select-saved-project", OTHER);
     expect(((await f.call("beings:tools")) as DesktopToolsState).workspace).toBe(OTHER);
 
-    await expect(f.call("beings:sidebar-project-select", "/never-added")).rejects.toThrow("项目不存在，请重新选择文件夹。");
+    await expect(f.call("beings:select-saved-project", "/never-added")).rejects.toThrow("项目不存在，请重新选择文件夹。");
     // The refusal changes nothing: the previous choice still stands.
     expect(f.settings.projectWorkspace).toBe(OTHER);
     expect(((await f.call("beings:tools")) as DesktopToolsState).workspace).toBe(OTHER);

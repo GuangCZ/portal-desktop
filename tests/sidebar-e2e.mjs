@@ -135,7 +135,7 @@ handle('beings:sidebar-project-add', project => {
 // BeingDesktop's selectSavedProject (src/main.cjs:574). The production subsystem
 // writes Settings.projectWorkspace and pushes the tool bridge; this fixture
 // records the directory, which is the part the sidebar itself can be held to.
-handle('beings:sidebar-project-select', project => {
+handle('beings:select-saved-project', project => {
   if (!assertSavedProject) throw new Error('fixture missing reducer');
   workspace = assertSavedProject(saved(), scope, '', project);
   const next = ledger();
