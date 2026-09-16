@@ -67,3 +67,45 @@
   I0 已把 `ws` 提到 dependencies 并写了 `packagerConfig.ignore`。**唯一有效验证是打包后冒烟。**
 - `tests/tools-portal-loopback.ts`（非 `.test.ts`）已有 `LoopbackRelay` / `frame` / `until`，
   是 I2 的 e2e 假 relay 的现成底座。
+
+### tools/{types,browser-links,network,security}.ts + browser/{browser,host,types}.ts + common/loom-connection.ts
+
+- `DesktopBrowser` 的真实构造是 `DesktopBrowserOptions`（`browser/types.ts`）：`WebContentsView: BrowserViewConstructor`、
+  `session: BrowserSessionFactory`、`getWindow: () => BrowserHostWindow | null | undefined`、`onChange?`。
+  **不是** `desktop-tools.ts` 里声明的三个 `unknown`。→ §3.2 的类型收敛要做。
+- `DesktopBrowser.newTab()` 返回的是 `BrowserSnapshot`（不是 `NewTabResult`），`activateTab/closeTab/navigate/
+  goBack/goForward/reload/stop/setViewport` 同样返回 `BrowserSnapshot`。
+- **`setViewport(options)` 的入参是 `{visible: boolean, bounds: {x,y,width,height}}`**，
+  不是 interfaces.md §1.2 写的 `{x,y,width,height}`。BD renderer `desktop-tools.js` 的 `layout()` 实测传
+  `{visible, bounds}`。→ 记为文档偏差，IPC 按真实形状。
+- `DesktopBrowser` 分区 `persist:being-desktop-browser-v1`（§5.6 要求的独立分区，已满足）。
+- `normalizeBrowserUrl` 从 `tools/browser/browser.ts` 导出（给 `createBrowserLinks` / `WorkerPresentation` 注入）。
+- `ToolLinkCapabilities = {status, place, hostname, platform, tools}`（I4/I5 要用）。
+- `parseConnection(input: unknown)` 接受**地址字符串**，产出 `{url, apiBase, token, secret, displayUrl, beingName}`。
+  `secret` 取 `relay_secret` → `secret` → `token`。`DesktopToolLink.connect(connection)` 要的正是这个形状。
+- `tools/security.ts` 现在只剩 `protocolFile`（I0 已收敛），**本单元不删**（`tests/tools-security.test.ts` 在测它）。
+
+### BeingDesktop src/main.cjs（boot 装配 1696-1709、IPC 1104/1117/1135-1137、browserLinks 599-608）+ renderer/desktop-tools.js
+
+- 装配：`getConnection:()=>connection`（BD 的 `connection` 就是 `parseConnection` 的产物，见下）、
+  `getWorkspace:()=>state.workspace.path`、`showTerminal` 会先 `activate` 再推 `being:terminal-state` 再让渲染层 reveal。
+- `onChange`：`void orchestrationPolicy.syncBridge()` → 推 `being:tools-state` → 若有 worker 带 presentation 则 `orchestration.notify()`。
+- `browserLinks(isCurrent)`：`showBrowser` 先推一次 `being:tools-state` 再 `sendShellCommand('open-browser')`；
+  `isCurrent` = `!exitStarted && win 活着 && desktopTools 存在 && isCurrent()`；`onError` 进 activity 日志。
+- IPC：`readNativeText` = `clipboard.readText().slice(0,65536)`；`copyDesktopText` 校验 `typeof value==='string' && length<=1MB`
+  否则 `复制内容无效。`；`desktopAction` 先判 `exitStarted` → `桌面端正在退出。`；`setBrowserView` 直接转 `browser.setViewport`。
+- renderer 规则（`renderer/desktop-tools.js` 126 行）：
+  - 两个模式 `browser` / `console`；`show(mode)` 打开面板，`hide()` 关闭；`tools-full` 展开；分栏可拖拽（380..total-285）。
+  - `show('browser')` 且没有标签时自动 `browser.new`。
+  - link 文案：`connected` → `Being 工具已连接`；`connecting` → `正在连接 Being…`；`error` → `Being 工具连接失败`；
+    `disconnected` → `Being 工具未连接`。按钮 `断开` / `连接 Being 工具`。
+  - hint 优先级：`link.reconnect` → `调度工具已断线，${Math.ceil(delayMs/1000)} 秒后自动重连。`；否则 `link.error`；
+    否则按 connected/活动命令数分四句。
+  - `requestResult` 变化且 `status==='failed'` → 顶出错误条 `上一次 Being 调用：<message>`。
+  - 待确认卡片：标题 `Being 请求：<中文工具名>`；`desktop_console_run` 的 summary 是
+    `新建独立命令会话 · 非交互命令\n<cwd|未选择目录>\n\n<command>`；`console_status/stop` 列 `reviewJobs`；
+    其余是 `target\n[targetSummary\n]JSON.stringify(args,null,2)`。两个按钮 `拒绝` / `允许本次`（running 时 `正在执行…`），
+    非 pending 时 disabled。
+  - `layout()` 用 rAF 合并，payload `{visible, bounds}`，visible 要求：面板开着 + browser 模式 + 未拖拽 +
+    文档可见 + 无搜索对话框 + 当前标签有 url 且无 error；同 payload 不重发。
+  - 错误文案脱敏：`String(error?.message).replace(/^Error invoking remote method '[^']+': Error: /,'')`。
