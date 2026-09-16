@@ -202,8 +202,8 @@ rename-session,forget-session,composer-data}`。它不持有 token，也不自�
 | `tests/{chat-runtime,chat-scopes,chat-scene,chat-reference}.test.ts`、`tests/{chat-react,chat-history}.mjs` | 主进程侧由 `tests/{being-chat,being-recovery,chat-store,chat-cache,chat-sessions,chat-details,chat-ipc,session-recovery,session-titles}.test.ts` 覆盖；渲染层侧由 `tests/{conversation-model,composer}.test.ts` 覆盖 |
 
 门槛：`npm run typecheck` 通过；`npx vitest run` 为
-`Test Files 55 passed | 7 skipped (62)` / `Tests 463 passed | 16 skipped (479)`；
-`npm run prepare:desktop` 通过。
+`Test Files 55 passed | 7 skipped (62)` / `Tests 473 passed | 16 skipped (489)`
+（复审修复后；修复前是 463 / 479）；`npm run prepare:desktop` 通过。
 
 ### 2. 未完成
 

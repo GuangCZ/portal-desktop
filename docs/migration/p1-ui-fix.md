@@ -114,3 +114,21 @@
 | `tests/architecture.test.ts` | 已加规则 / 通过 |
 | `scripts/test-all.mjs` | 已修改 |
 | `MIGRATION.md` / `README.md` / `README_CN.md` / `desktop/TESTING.md` | 已更新 |
+
+## 门槛（2026-09-16 收尾实跑）
+
+- `npm run typecheck` 通过。
+- `npx vitest run`：`Test Files 55 passed | 7 skipped (62)` /
+  `Tests 473 passed | 16 skipped (489)`（修复前 463 / 479，本块新增 10 条用例）。
+- `npm run prepare:desktop` 通过。
+
+新增用例：`tests/markdown.test.ts` 3 条（惰性链接、站内链接仍可点、非对话场景不变）、
+`tests/composer.test.ts` 2 条（输入法窗口内拒发与窗口过后放行、空输入时不出声）、
+`tests/conversation-model.test.ts` 4 条（读取失败留在状态行、失败无文案时的兜底、
+弹窗随页面消失后仍 settle、连接关闭时 settle）、`tests/architecture.test.ts` 1 条
+（渲染层不得出现 fetch / XMLHttpRequest / WebSocket / EventSource / sendBeacon；
+已用一次临时注入 `fetch(...)` 验证它确实会红）。
+
+没有测试覆盖的改动：`scripts/test-all.mjs` 的 skip 识别（`test:all` 需要完整打包，
+本次没跑；已单独确认五个脚本都在行首打印 `SKIPPED:` 并 exit 0，正则对这五份真实输出
+匹配为 true）。

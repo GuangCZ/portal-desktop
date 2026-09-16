@@ -1,5 +1,8 @@
 # P1 收尾：删除 iframe 聊天路径与聊天代理
 
+> 本块的复审结论（跳过的 E2E 在报告里记成 passed、architecture 测试守护范围的文案）
+> 已在 `docs/migration/p1-ui-fix.md` 处理。
+
 本块只做删除与改写，不移植新模块。目标：`beings://chat` 这条路径（主进程代理、场景标识、
 renderer/chat 整个目录、loom.html、构建脚本、相关测试）从仓库里消失，文档与 MIGRATION.md
 更新到"对话核心在主进程，会话 = scene"。

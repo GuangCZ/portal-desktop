@@ -1,5 +1,8 @@
 # P1 · 第四块：React 对话页与会话侧栏（替换 iframe 聊天页）
 
+> 本块的复审结论（对话正文链接、连接时的重复对账、输入法 Enter、停止确认、读取失败提示）
+> 已在 `docs/migration/p1-ui-fix.md` 处理，界面行为以那份记录为准。
+
 移植日期 2026-09-16。来源：BeingDesktop 0.8.26 工作树
 `/Users/d5c/Documents/ChatGPT/BeingDesktop`（只读）。
 
