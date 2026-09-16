@@ -251,3 +251,24 @@
 - 渲染层：`desktop-tools.js`（`beingTools`）负责内置浏览器面板、控制台与待确认工具调用；`terminal-panel.js`（`beingTerminal`）是 xterm 终端面板。两者都属于后续集成阶段的 renderer 工作，不在本单元范围。
 
 结论：本单元只移植 `DesktopTerminal` 与 `DesktopBrowser` 两个主进程类本身；确认队列、工具目录、terminal scope 绑定、renderer 面板都在别的单元或后续集成阶段。
+
+### docs/interfaces.md 与本单元相关的条目
+
+**1.2 IPC 方法目录（桌面工具、控制台与终端）**
+- `getDesktopTools()` → `{browser:{tabs:[{id,url,title,revision,isLoading,error,…}], activeTabId, visible, …}, console:{…}, link:{…}, workspace, requestResult, requests:[…]}`
+- `desktopAction(action, value)` — `browser.new|activate|close|navigate|back|forward|reload|stop`、`console.*`、`link.*`、`request.allow|deny`
+- `setBrowserView(bounds)` — `{x,y,width,height}`
+- `getTerminalState()` → `{sessions:[{id,title,cwd,status,pid,cols,rows,exitCode}], activeSessionId}`
+- `readTerminal(id)` → `{id, sequence, data, truncated}`（回放缓冲 ≤ 1MB）
+- `terminalAction(action, value)` — `create {cwd?, cols?, rows?}`、`write {id, data ≤64KiB}`、`resize {id, cols, rows}`、`activate id`、`close id`；最多 8 个会话
+
+**1.3 主进程 → 渲染层推送**
+- `being:terminal-state` / `onTerminalState` ← `DesktopTerminal.snapshot()`（终端创建、状态、尺寸变化）
+- `being:terminal-data` / `onTerminalData` ← `{id, sequence, data}`（PTY 输出；`sequence` 与 `readTerminal` 共用，读后丢弃 ≤ 回放序号的事件）
+- `being:tools-state` / `onToolsState` ← `DesktopTools.snapshot()`（含浏览器快照）
+
+**3.6 桌面工具桥（本单元的两行）**
+- `DesktopBrowser` | 构造注入 `{WebContentsView, session, getWindow, onChange}` | 公开 `newTab`、`activateTab`、`closeTab`、`navigate`、`goBack`、`goForward`、`reload`、`stop`、`setViewport`、`readPage(id, revision)`、`prepareAction`、`click`、`fill`、`screenshot`、`snapshot()`、`destroy()`；另导出 `BROWSER_PARTITION`、`MAX_BROWSER_TABS=16`、`normalizeBrowserUrl`
+- `DesktopTerminal` | 构造注入 `{getWorkspace, onChange, onData, pty, environment, platform, shellPath}` | 公开 `create({cwd, cols, rows})`、`write({id, data})`、`resize`、`activate`、`close(id)`、`read(id)`、`readSince(id, afterSequence)`、`snapshot()`、`dispose()`
+
+（与源码一致；移植后的 TS 导出面必须逐项对齐这两行。）
