@@ -469,9 +469,11 @@ export class TownModel extends Store {
       // runs `feedMessages(..., { me })` on every render. The inbox does not: it
       // is materialised once, at read time, with the identity baked into every
       // row (models/feed.ts `inboxMessages`). An inbox read while `me` was still
-      // empty therefore marks every letter `mine: false` and leaves the sent tab
-      // permanently empty — so it is re-projected here, from the rows already in
-      // hand.
+      // empty therefore marks every letter `mine: false` — my own letters read as
+      // ones that came in, the sent tab is empty, and nothing has an address to
+      // answer, so `mailReply` declines. (Touching a tab re-reads, so it is not
+      // beyond repair; the letters on screen right now are simply wrong.) So it is
+      // re-projected here, from the rows already in hand.
       if (arrived) { this.projectInbox(); this.applyMembers(this.members); }
       else if (definitions[this.view]) void this.load();
     }
