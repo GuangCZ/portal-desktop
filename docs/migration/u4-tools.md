@@ -274,7 +274,7 @@ ToolLink=DesktopToolLink}`。
 | --- | --- | --- | --- |
 | security | test/security.test.cjs | tests/tools-security.test.ts | 测试通过（7/7） |
 | browser-links | test/browser-links.test.cjs | tests/tools-browser-links.test.ts | 测试通过（5/5） |
-| network | test/desktop-network.test.cjs | tests/tools-network.test.ts | 未开始 |
+| network | test/desktop-network.test.cjs | tests/tools-network.test.ts | 测试通过（13/13） |
 | console | test/desktop-console.test.cjs | tests/tools-console.test.ts | 未开始 |
 | tool-link | test/desktop-tool-link.test.cjs | tests/tools-tool-link.test.ts | 未开始 |
 | desktop-tools | test/desktop-tools.test.cjs | tests/tools-desktop-tools.test.ts | 测试通过（16/16） |
