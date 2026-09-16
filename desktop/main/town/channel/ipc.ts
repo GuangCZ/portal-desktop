@@ -103,14 +103,30 @@ type ChannelInput = unknown;
  * whitelist, so an unknown field is refused rather than ignored. */
 function draftRequest(value: unknown): ChannelDraftRequest {
   if (!plain(value)) throw invalid('请选择有效的草稿类型。');
-  const keys = Reflect.ownKeys(value);
-  if (keys.some(key => typeof key !== 'string' || !['kind', 'id', 'draft', 'connectionRevision'].includes(key))) throw invalid('请选择有效的草稿类型。');
-  const { kind, id, draft, connectionRevision } = value as unknown as ChannelDraftRequest;
-  if (!['feature', 'assistance', 'fireside', 'pairing'].includes(kind as string)) throw invalid('请选择有效的草稿类型。');
+  // Descriptors, not property reads: BeingDesktop checks the same way
+  // (src/town.cjs `prepareTownAssistance`), and the reason is that a getter on
+  // the request object would otherwise RUN — once here and again wherever the
+  // value is read, returning something different each time. A symbol key is a key
+  // too, and an unknown field is refused rather than dropped: it means the
+  // renderer and this contract disagree.
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const allowed = ['kind', 'id', 'draft', 'connectionRevision'];
+  if (Reflect.ownKeys(descriptors).some(key => typeof key !== 'string' || !allowed.includes(key))) throw invalid('请选择有效的草稿类型。');
+  if (allowed.some(key => Object.hasOwn(descriptors, key) && !Object.hasOwn(descriptors[key], 'value'))) throw invalid('请选择有效的草稿类型。');
+  const kind = descriptors.kind?.value as unknown;
+  const id = descriptors.id?.value as unknown;
+  const draft = descriptors.draft?.value as unknown;
+  const connectionRevision = descriptors.connectionRevision?.value as unknown;
+  if (typeof kind !== 'string' || !['feature', 'assistance', 'fireside', 'pairing'].includes(kind)) throw invalid('请选择有效的草稿类型。');
   if (id !== undefined && (typeof id !== 'string' || !id || id.length > MAX_ID)) throw invalid('请选择有效的草稿类型。');
   if (draft !== undefined && (typeof draft !== 'string' || draft.length > MAX_DRAFT)) throw invalid('请填写有效的围炉协助草稿。');
-  if (connectionRevision !== undefined && (!Number.isSafeInteger(connectionRevision) || connectionRevision < 0)) throw invalid('请填写有效的围炉协助草稿。');
-  return { kind: kind as ChannelDraftRequest['kind'], ...(id === undefined ? {} : { id }), ...(draft === undefined ? {} : { draft }), ...(connectionRevision === undefined ? {} : { connectionRevision }) };
+  if (connectionRevision !== undefined && (!Number.isSafeInteger(connectionRevision) || (connectionRevision as number) < 0)) throw invalid('请填写有效的围炉协助草稿。');
+  return {
+    kind: kind as ChannelDraftRequest['kind'],
+    ...(id === undefined ? {} : { id: id as string }),
+    ...(draft === undefined ? {} : { draft: draft as string }),
+    ...(connectionRevision === undefined ? {} : { connectionRevision: connectionRevision as number }),
+  };
 }
 
 /** The fixed prompt BeingDesktop sends for a pairing code (src/main.cjs line

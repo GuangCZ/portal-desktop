@@ -33,11 +33,19 @@
 // run and before the client opens.
 import { ChannelBeing } from '../town/channel/channel-being';
 import { createDraftAcks, createNativeDraft, type NativeDraftContext } from '../town/channel/draft';
-import { registerChannelIpc, type ChannelFeatureMethods } from '../town/channel/ipc';
+import { registerChannelIpc } from '../town/channel/ipc';
 import { parseConnection, type LoomConnection } from '../common/loom-connection';
 import type { ChannelSession } from '../town/channel/types';
+
+/** The part of P1's `ChatSessions` this unit uses: one stable scene per channel,
+ * and the read-back that follows a channel request. */
+interface ChannelSessions {
+  readonly open: boolean;
+  ensureChannel(channel: string): ChannelSession;
+  syncChannel(): Promise<unknown>;
+}
 import type { ChannelWorkerState } from '../../shared/channel-types';
-import type { FeatureTaskContext, PrepareFeatureTaskDraft } from '../features/types';
+import type { PrepareFeatureTaskDraft } from '../features/types';
 import type { DesktopSubsystem, SubsystemContext } from './types';
 
 export interface ChannelSubsystem extends DesktopSubsystem {
@@ -56,17 +64,6 @@ export interface ChannelSubsystem extends DesktopSubsystem {
 }
 
 declare module './types' { interface SubsystemMap { 'channel': ChannelSubsystem } }
-
-/** What this subsystem needs of the tool bridge and of orchestration, declared
- * structurally: both are other units' types and both may be absent. */
-interface ToolsPeer { links?: { open(url: unknown): { opened: true; tabId: string | null } } | null }
-interface OrchestrationPeer {
-  methods?: ChannelFeatureMethods;
-  register?(record: unknown): void;
-  setDraftPreparer?(prepare: PrepareFeatureTaskDraft | null): void;
-}
-/** The chat layer's channel-session minting (P1's `ChatSessions`). */
-interface ChatPeer { sessions?: { readonly open: boolean; ensureChannel(channel: string): ChannelSession; syncChannel(): Promise<unknown> } | null }
 
 const notConnected = (message: string): Error => Object.assign(new Error(message), { code: 'NOT_CONNECTED' });
 
@@ -91,14 +88,15 @@ export function installChannelSubsystem(ctx: SubsystemContext): ChannelSubsystem
   let connected = false;
   let exiting = false;
 
-  const registry = ctx.registry as unknown as { get(key: string): unknown };
-  const peer = <T>(key: string): T | null => {
-    try { return (registry.get(key) as T | null) ?? null; }
-    catch (error) { report(`channel-registry:${key}`, error); return null; }
-  };
-  const sessions = () => peer<ChatPeer>('chat')?.sessions ?? null;
-  const orchestration = () => peer<OrchestrationPeer>('orchestration');
-  const links = () => peer<ToolsPeer>('tools')?.links ?? null;
+  // Every peer through the registry, every lookup inside a closure. All four keys
+  // are declared by their own subsystem files, so these are typed rather than
+  // cast: if a peer's exported surface moves, this file fails to compile instead
+  // of silently optional-chaining to null at runtime. Three of them may legally
+  // be ABSENT, which is a different thing from having moved — the tool bridge and
+  // orchestration land in their own units, and a test installs only what it needs.
+  const sessions = (): ChannelSessions | null => ctx.registry.get('chat')?.sessions ?? null;
+  const orchestration = () => ctx.registry.get('orchestration');
+  const links = () => ctx.registry.get('tools')?.links ?? null;
 
   const draftContext = (): NativeDraftContext => ({
     connection,
@@ -121,8 +119,8 @@ export function installChannelSubsystem(ctx: SubsystemContext): ChannelSubsystem
     // The read-only service snapshot. Town's own session owns the request, its
     // identity check and its DTO; this subsystem only says which one to use.
     readStatus: options => {
-      const town = peer<{ session?: { getChannelStatus(options: { signal?: AbortSignal }): Promise<unknown> } }>('town');
-      if (!town?.session) throw Object.assign(new Error('暂时无法读取渠道状态。'), { code: 'SERVICE_ERROR' });
+      const town = ctx.registry.get('town');
+      if (!town) throw Object.assign(new Error('暂时无法读取渠道状态。'), { code: 'SERVICE_ERROR' });
       return town.session.getChannelStatus(options);
     },
     // BeingDesktop src/main.cjs line 420: a channel scene is minted from the
@@ -247,6 +245,3 @@ export function installChannelSubsystem(ctx: SubsystemContext): ChannelSubsystem
   };
 }
 
-/** Exported for the subsystem's own tests: the context shape the ledger hands to
- * the draft preparer, so a test can build one without a whole orchestration. */
-export type ChannelDraftFeatureContext = FeatureTaskContext;

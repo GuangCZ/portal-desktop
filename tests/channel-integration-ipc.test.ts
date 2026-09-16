@@ -206,11 +206,20 @@ it('one draft channel carries four kinds and refuses anything else', async () =>
   expect((await place({ kind: 'fireside', draft: '晚上好', connectionRevision: revision })).text).toMatch(/尚未发送[\s\S]*晚上好$/);
   const before = f.drafts().length;
   // The outer shape is checked here; each kind's own argument is checked in
-  // town-catalog.ts, where BeingDesktop checked it.
+  // town-catalog.ts, where BeingDesktop checked it. This is where its
+  //「rejects extra keys and accessor objects before page evaluation」assertion
+  // lives now: the four `prepare*` channels became one, so the key whitelist
+  // moved up to the channel.
+  let getters = 0;
+  const accessor = Object.defineProperty({ kind: 'pairing' }, 'draft', { enumerable: true, get() { getters++; return 'x'; } });
+  const symbol = Symbol('extra');
   for (const request of [null, 'feature', [], {}, { kind: 'other' }, { kind: 'feature', id: 'scroll', extra: 1 },
     { kind: 'feature', id: '' }, { kind: 'feature', id: 'x'.repeat(65) }, { kind: 'fireside', draft: 42 },
-    { kind: 'fireside', draft: 'x', connectionRevision: 1.5 }, Object.assign(Object.create(null), { kind: 'pairing' })])
+    { kind: 'fireside', draft: 'x', connectionRevision: 1.5 }, { kind: 'fireside', draft: 'x', connectionRevision: -1 },
+    { kind: 'pairing', [symbol]: true }, accessor,
+    Object.assign(Object.create(null), { kind: 'pairing' }), Object.create({ kind: 'pairing' })])
     await expect(f.call('beings:town-draft', request)).rejects.toThrow();
+  expect(getters).toBe(0);
   // A fireside draft written under another epoch is never handed over.
   await expect(f.call('beings:town-draft', { kind: 'fireside', draft: '晚上好', connectionRevision: revision + 1 }))
     .rejects.toThrow(/连接身份已变化，草稿未转交/);
