@@ -107,7 +107,8 @@
 - [x] 第 2 条：`/api` 同一 in-flight 读合并；找到并消掉渲染层「身份到达就重读」那一次
 - [x] 第 4 条：`/api/messages` 路由核对（结论：与 BD 0.8.26 逐字一致，不改）
 - [x] 第 3 条：围炉竞态族 / 草稿族 / SBS 状态行族搬运
-- [ ] 打包冒烟逐条
+- [x] 打包冒烟逐条
+- [x] 复审回合（2026-09-17）：medium 两条 + low 三条逐条处理（§4.3 / §4.3.1 / §4.5 / §4.6 / §8）
 
 ---
 
@@ -121,6 +122,8 @@
 | 新增 `cachedMembers()` | 未过期就返回现有目录，否则空数组。没有任何请求。 |
 | `getMembers` 同一 in-flight 读合并 | 新增 `_membersRead`：并发调用者 join 同一条 `/api`；共享请求**不带任何调用方的 AbortSignal**（一个调用方放弃不能取消别人的目录），但仍由 `reset()` 取消，因为 `_request` 把 controller 注册进 `_requests`。新增 `_join(shared, signal)` 让放弃的调用方自己拿到 `ABORTED`。 |
 | `reset()` / `invalidateMembers()` 清 `_membersRead` | 失效之后到达的调用方必须重开一条，而不是 join 一条注定 `SESSION_CHANGED` 的读。 |
+| **（复审）共享读带 `AbortSignal.timeout(membersReadTimeoutMs)`，默认 20 s** | 合并槽一旦被一条永不落地的请求占住，之后每个 `getMembers()` 都会被一起挂住；`_request` 自己不设超时。见 §4.3.1。 |
+| **（复审）`getBonfireMessages` 在「这一页有 `authorUnknown` 且目录还在飞」时等最多 300 ms** | 只为老载荷的作者兜底，首次冷采集会落盘。见 §4.3。 |
 
 ### 3.2 `desktop/renderer/town/models/town.ts`
 
@@ -130,15 +133,17 @@
 | `applyTimeline`：新增 feed key 围栏 | BD「late previous-room events and read completion cannot overwrite the selected room」。换围炉不换 `request` 代（不是新页面），所以代号分不出两个围炉的答复。`receivePush` 一直有这条，读路径缺。 |
 | `openFeed`：结果与 `reading` 都改用 `onFeed(key, generation)` | 同上，外加「the selected room completion updates its content and unlocks read controls」——被离开的那个围炉的迟到答复不得解锁读控件。 |
 | `send()`：回执先删自己 target 的草稿，再判断 target 是否还在屏幕上 | BD「late successful receipt clears only its original room draft」/「returning to confirmed room shows a cleared draft without resending」。 |
+| **（复审）`inboxRead` + `projectInbox()`：身份到达时就地重投收件箱** | 私信是物化投影，`applyMembers` 补不回来。见 §4.6。 |
 | 新增 `sideBySide` 与 `receiveModelSettings()`，`start()` 订阅 `beings:model-settings-state` 并读一次 | I6b openIssue 2：Town 页要显示 SBS 就订阅这条，**不得自己再开 `/api/llm/config` 读**。 |
 
 ### 3.3 `desktop/renderer/town/page.tsx`
 
 新增 `refreshLabel(town)` 与 `#town-refresh-status` 一行。逐句移植 BD `renderer/town-app.js` 的
 `refreshLabel`（:163-175）与 `backgroundNotConfigured`（:161），顺序与文案照抄：
-`prefix · 最近检查 · 最近采集 · 显示上次同步内容`。**唯一一处增量**：0.8.26 只能从一次已经失败的
-`SBS_NOT_CONFIGURED` 读里知道后台采集没设置，本外壳被直接告知（`beings:model-settings-state`），
-所以同一句话在事实已知时就说；`configured: true` **不会**用来反驳「读不到」。
+`prefix · 最近检查 · 最近采集 · 显示上次同步内容`。
+**复审后（2026-09-17）：零增量** —— 每一句的触发条件都与 0.8.26 相同，
+「后台采集尚未设置」只在读取器自己报 `SBS_NOT_CONFIGURED` / `sbs_not_configured` 时出现。
+原先那处「本外壳被直接告知所以提前说」的增量已撤销，理由见 §4.5。
 
 ### 3.4 测试
 
@@ -197,11 +202,38 @@ BD 的 `acceptTownState` 在身份变化时只 `clearPrivate()`，不重读，�
 本外壳的 Town 页可能正开着，清空之后就是一张白页，所以 I1 选择重读。本单元**只**改掉「到达」那一半，
 「变化」那一半保持不动，并加了 `an identity that actually changed re-reads the feed on screen` 钉住它。
 
-### 4.3 `getBonfireMessages` 里仍然会起飞一次目录读
+### 4.3 `getBonfireMessages` 里仍然会起飞一次目录读，并且在「只有它能补上作者」时短暂等它
 
-只在手上没有未过期目录时起飞，且**不等**。留着它的理由：`messagesDto` 的目录兜底
-（`town_id` / `being_id` 都没有的老载荷）在 BD 里是有的，而后台采集在 Town 页没打开时也会走这条路——
-真砍掉，关着页面采集到的老载荷会永久带上 `authorUnknown`。起飞之后若赶在消息之前回来，行为与改动前完全一致。
+只在手上没有未过期目录时起飞。**默认不等**：消息回来时取一次 `cachedMembers()`，赶上了就用，没赶上就算。
+
+**复审第 5 条（2026-09-17）指出的后果，以及现在的做法。**
+`messagesDto` 的目录兜底只服务一种载荷：`town_id` 与 `being_id` 都没有、作者名也不是 `t_` 开头的**老载荷**。
+这种载荷兜不到就写 `authorUnknown: true`，而这个 DTO 会经 TownRefresh 进累积时间线并由 `bonfireCache.save` 落盘
+（`town/channel/town-background.ts` 的 `onSuccess`）。**Town 页关着的时候没有任何渲染层去调 `beings:town-members`**，
+冷启动后的第一次后台采集因此很可能拿到空目录；还在读取窗口内的消息会被下一次采集整条替换纠正
+（`timeline/refresh.ts:420-421` 同 seq 内容不同整条替换），**滚出窗口的老载荷则会永久带着空作者落盘**。
+
+现在的做法是**只在这一种情况下**短暂等：消息已经回来、目录还在飞、并且**这一页真的有 `authorUnknown`**，
+才 `await within(directory, 300)` 然后用到手的目录重投一次。带 `town_id` 的现代载荷一毫秒都不等；
+目录永远不回也最多多花 300 ms（`MEMBERS_GRACE_MS`），比改动前的「一直等到 20 s 或永远」小两个数量级，
+也比「完全不等」多救回一类会落盘的错误。三条用例钉住这三种情形
+（`a directory that lands inside the grace still names an author the payload only spells` /
+`a directory that never lands costs the page the grace and no more…` /
+`a payload that names its own author waits for no directory even on a cold cache`），
+既有的 `a pending member directory does not hold up the bonfire messages` 补了一条「耗时有上界」的断言
+（它的夹具正属于老载荷那一类，所以它现在会花掉这 300 ms，名字里的「不拖住」指的是**不无限期拖住**）。
+
+### 4.3.1 共享目录读的 20 秒时限（复审第 4 条）
+
+`_membersRead` 这个合并槽起飞的 `/api` **不带调用方 signal**（一个调用方放弃不能取消别人的目录），
+而 `_request` 自己不设超时——它只认调用方传进来的 signal，`session/client.ts:256/308` 的 20 秒属于
+TownClient 的带 token 读，公共目录读走不到那条链路。合并之前一条卡死的请求只坑它自己的调用方；
+合并之后它会占着槽位，之后每一个 `getMembers()` 都 await 同一条永不落地的 promise，直到 `reset()` / `invalidateMembers()`。
+**已给共享读一个自己的时限**：`AbortSignal.timeout(this.membersReadTimeoutMs)`，默认 `MEMBERS_READ_TIMEOUT_MS = 20000`，
+与 `session/client.ts` 的那条同值；`reset()` 仍然能提前取消（`_request` 把 controller 注册进 `_requests`）。
+`membersReadTimeoutMs` 是构造选项，只为让用例把 20 s 缩成 40 ms
+（`a directory read that never lands frees the shared slot instead of stranding every later caller`：
+超时后槽位释放、下一个调用者重新起飞）。
 
 ### 4.4 `/api/messages`：不改，并标注「未实测」
 
@@ -209,10 +241,43 @@ BD 的 `acceptTownState` 在身份变化时只 `clearPrivate()`，不重读，�
 「GET 是否返回已发送的私信」本机无真 Town 可连，**未实测**；`docs/town-sdk-integration.md:93` 的原话是
 「Being 提醒公开帮助未明确 GET 私信是否改变已读/投递状态」。按任务书以 BD 源码为准。
 
-### 4.5 SBS 状态行只订阅，不自己读
+### 4.5 SBS 状态行只订阅，不自己读；而且 SBS 不替读取器说话（复审第 2 条，2026-09-17）
 
 按 I6b openIssue 2：`TownModel.start()` 订阅 `beings:model-settings-state` 并读一次 `beings:model-settings`，
 `api.modelSettings?.` 带可选链（夹具可以不装模型设置桥）。**没有**新增任何 `/api/llm/config` 读者。
+
+**但「本外壳被直接告知，所以同一句话提前说」这一处增量是错的，已撤销。**
+本外壳的 `TownBackground` 是 `direct: true`（`desktop/main/subsystems/town.ts:166-168`），
+全仓没有任何地方接 `readCachedSnapshot`（`grep` 只命中 `town-background.ts` 自己与它的用例），
+所以后台采集走的是 direct SDK 路径，**与 Being 的 SBS 环无关**，读取器也不可能报 `SBS_NOT_CONFIGURED`。
+而 `(town.sideBySide === false && !collected)` 在 `prefix` 三元链里排在
+`REQUEST_ACCEPTED` / `being_busy` / `refreshing` / `error` **之前**，于是「SBS 从没配过（绝大多数默认状态）
+且还没成功采集过一次」的用户看到的是「后台采集尚未设置，可立即同步」，而真相是「正在同步 Town 消息」
+或「结果检查失败 · 可刷新显示」。**现在这句话只在读取器自己报 `SBS_NOT_CONFIGURED` / `sbs_not_configured` 时出现**，
+与 BD 0.8.26 的触发条件逐字一致（在本外壳里那是一条死分支，与同一条链里 `REQUEST_ACCEPTED` / `being_busy`
+一样属于「逐行保真地留着」）。
+
+`TownModel.sideBySide` 与那条订阅**保留**（仍然不开第二个 `/api/llm/config` 读者），但它不再参与任何文案；
+新用例 `never lets an unconfigured loop talk over a reader that is working or failing` 钉住
+`configured:false` + `refreshing` / `error` / `REQUEST_ACCEPTED` 三种组合，以及「读取器自己报时这句话照说」。
+副作用见 §7 openIssue 9。
+
+### 4.6 收件箱在身份到达时就地重投（复审第 1 条）
+
+`arrived` 分支原来只做 `applyMembers(this.members)`。篝火/围炉没问题——`messages()` 每次渲染都用当前 `me`
+重投影 `feedMessages`；**私信不是**：`inboxMessages`（`models/feed.ts:108`）在 `loadInbox` 时就把身份烤进每一条
+（`mine` / `received` / 回信地址 `recipientId`），而 `messages()` 对 mail 视图只是按 `tab` 过滤这份物化结果。
+身份是在页面打开、首读完成**之后**才到的（本单元实测），所以只要私信页是被先加载的那一个
+（场景恢复、`beings:town-open` 深链、或 `town.inbox()` 比 `town.appState()` 先回），每一条都会 `mine=false`、
+收到的信 `recipientId` 落到 `''`、`mailReply` 拒绝回信。
+
+修法**不是**重新读一次，而是把 Town 返回的原始 `TownDesktopDirectMessage[]` 留在模型里（`inboxRead`），
+身份到达时 `projectInbox()` 就地重跑 `inboxMessages` —— 与 `applyMembers` 同一性质的「重投影已经在手的东西」，
+**零请求**。`resetIdentity()` 一并清空 `inboxRead`。
+用例 `an inbox read before the identity arrived is re-projected when it does, without asking Town again`
+断言 `inbox()` 调用次数不变、`mine`/`received`/`recipientId` 三项在身份到达后全部正确。
+（注：`selectTab` 本来就会重新 `load()`，所以「已发送」标签页并非**永久**为空；但默认的「全部」标签页在身份到达前
+把我自己寄出的信也显示成收到的、且没有任何回信地址，这一条与标签页无关。）
 
 ### 4.6 `tests/town-ui.mjs` 的滚动容器是找出来的，不是写死的
 
@@ -287,3 +352,32 @@ BD 的 `acceptTownState` 在身份变化时只 `clearPrivate()`，不重读，�
 7. **`npm run test:all` 没有整条跑过** —— 它是 fail-fast 的，`town-sdk` 的四条红（openIssue 1）会让它停在那一步，
    与 IM 记录的现状一致。本单元验证方式是逐个脚本单独跑（§6）。
 8. **没有连过真 Being / 真 Town** —— 本机引擎是 stub，全部 E2E 都是 `protocol.handle` 夹具。
+9. **（复审后新增）`TownModel.sideBySide` 与 `beings:model-settings-state` 订阅保留，但页面上没有任何地方再用它** ——
+   §4.5 撤销了那句文案之后，这个字段只剩下被用例读。保留而不是删掉，是因为
+   （a）I6b openIssue 2 要求的是「要显示就订阅这条、不要另开 `/api/llm/config` 读者」，订阅本身没有错，
+   （b）删掉它要动 `start()` 与三条用例，超出本轮复审的范围。
+   **如果合并者认为它该走，连同 `receiveModelSettings` 与 `start()` 里那两行一起删即可，没有其它调用点。**
+10. **`MEMBERS_GRACE_MS = 300` 与 `MEMBERS_READ_TIMEOUT_MS = 20000` 都是本外壳自己定的数**，
+   不是 BD 的常数（BD 两处都没有）。300 是复审给的建议值，20000 取自 `session/client.ts` 的同名时限；
+   两者都没有在真 Town 上量过。
+
+---
+
+## 8. 复审回合（2026-09-17）
+
+| 复审条目 | 处理 | 位置 |
+| --- | --- | --- |
+| medium · 身份到达时私信不重投 | **已修**：`inboxRead` + `projectInbox()`，零请求就地重投；`resetIdentity()` 一并清空 | §4.6；`town.ts`；用例 `an inbox read before the identity arrived is re-projected when it does, without asking Town again` |
+| medium · `refreshLabel` 用 SBS 盖住真实状态 | **已修**：删掉 `(town.sideBySide === false && !collected)`，回到 BD 的触发条件 | §4.5；`page.tsx`；用例 `never lets an unconfigured loop talk over a reader that is working or failing`，并改写了 `takes the side-by-side fact…` 的断言 |
+| low · `readsWhilePending >= 1` 近乎恒真 | **已修**：改成 `>= 1 && <= 2` 并在注释里写明那个 +1 的来源 | `tests/town-ui.mjs` |
+| low · 共享目录读没有超时 | **已修**：`AbortSignal.timeout(membersReadTimeoutMs)`，默认 20 s | §4.3.1；用例 `a directory read that never lands frees the shared slot instead of stranding every later caller` |
+| low · 冷采集把 `authorUnknown` 落盘 | **已修**：只在「这一页真的有 `authorUnknown` 且目录还在飞」时等最多 300 ms；并写进 §4.3 | §4.3；三条新用例 |
+
+**反向证据（逐条改回原样后重跑）**
+
+| 修复 | 改回后 |
+| --- | --- |
+| `arrived` 重投收件箱 | `tests/town-conversation-rules.test.ts` 那条变红 |
+| 去掉 SBS 那段条件 | 同文件两条变红（新增的那条，以及改写后的 `takes the side-by-side fact…`） |
+| 共享读时限 | `tests/town-session-session.test.ts` 那条 **5004 ms 超时变红** |
+| 目录宽限 | `a directory that lands inside the grace…` 变红（`beingId` 为空） |

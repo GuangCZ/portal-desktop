@@ -228,7 +228,12 @@ try {
     rendered
     && beforeDirectory.length === 2
     && beforeDirectory.some(text => text.includes('篝火消息') && text.includes('@t_River')));
-  check('the pending directory did not stop the feed read', readsWhilePending >= 1);
+  // An UPPER bound as well as a lower one, or the line proves nothing the check
+  // above it has not already proved by rendering messages at all. Two is what
+  // this window can legitimately hold: the page's own read, plus — if the render
+  // above happened to take longer than 250 ms — the live reader reconciling the
+  // SSE `hello`, whose coalescing window is explained at length further down.
+  check('the pending directory did not stop the feed read', readsWhilePending >= 1 && readsWhilePending <= 2);
   // Let the live reader's 250 ms reconcile window pass, so the next check
   // measures the DIRECTORY's effect and nothing else. See the note below.
   await page.waitForTimeout(800);
