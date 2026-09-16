@@ -583,3 +583,57 @@ Error: 浏览器已经关闭。
 
 **连上真实 Being 发消息没有做**：本机没有可用的 Being/Portal（引擎是 stub），
 所以对话核心只在夹具层面跑过；方案 §6.3 里「连接夹具 Being 发消息」这一条记进 openIssues。
+
+---
+
+## 5. IPC 通道清单（本单元的全部改动）
+
+**新增 1 条**：
+
+| 通道 | 方向 | payload | 守卫 | 来源 |
+| --- | --- | --- | --- | --- |
+| `beings:sidebar-project-select` | invoke → `SidebarState` | `project: string`（≤4096，非字符串/超长/不在已保存项目里都拒） | `ctx.exclusive`（BD `src/main.cjs:141` 把它与 `sidebarAction` 一起列进串行表） | BD `selectSavedProject`（`src/main.cjs:574`）/ `being:sidebarProjectSelect` |
+
+**行为改变、名字没动的 3 条**：
+
+| 通道 | 之前 | 现在 |
+| --- | --- | --- |
+| `beings:town-open` | `ctx.electron.shell.openExternal(url)`（I1 的偏差） | `ctx.registry.get('tools')?.links.open(url)` → 工具浏览器标签页；**拿不到工具桥**才退回 `openExternal`。允许名单一字未动；`open()` 自身失败照 BD 抛出，不退回系统浏览器 |
+| `beings:tool-browser-viewport` | 退出期被恒拒 | 进 `QUIT_ALLOWED`；浏览器已 `destroy()` 时**安静返回 idle**（参数仍先校验；没有浏览器仍然拒绝） |
+| `beings:tools-browser-view` | 退出期被恒拒，渲染层用 `VIEWPORT_RETRIES=3` 封顶 | 进 `QUIT_ALLOWED`，封顶删除（恢复 0.8.26 的无条件重试）；浏览器已 `destroy()` 时返回 `IDLE_TOOLS_STATE.browser` |
+
+`QUIT_ALLOWED` 现在是 `['beings:browser-bounds','beings:tools-browser-view','beings:tool-browser-viewport','beings:diagnostics']`。
+**没有删除、没有改名任何通道。**
+
+## 6. 装配点
+
+| 位置 | 接了什么 |
+| --- | --- |
+| `subsystems/tools.ts` | `getBrowser: () => ctx.registry.get('tool-browser')?.browser ?? null`（惰性，每次访问解析）；Electron 门面检查上移到子系统；`linked()` 里 `orchestration.presentation` 直接赋值，无 cast |
+| `subsystems/tool-browser.ts` | onChange 里 `push.state(snapshot)` 之后 `ctx.registry.get('tools')?.tools?.changed()`——浏览器一变，`beings:tools-state` 也重算（BD `DesktopTools` 自建浏览器时的 `onChange` 语义） |
+| `subsystems/town.ts` | `openExternal` 改为先取 `ctx.registry.get('tools')?.links` |
+| `subsystems/shell-state.ts` | `selectProject`：校验 → `saveExtra({workspace})`（BD 同一个磁盘键）→ 写 `ctx.store.settings.projectWorkspace` → 推 `beings:sidebar` → `ctx.registry.get('tools')?.tools?.changed()` |
+| `renderer/app/components/sidebar.tsx` | 会话灯改调 `session-activity.ts` 的纯函数，数据取 `app.features.orchestration?.hasActiveWorkers(id)`；项目菜单加「设为工作目录」 |
+
+**全部经 `ctx.registry` 惰性 getter，构造期一次都没有取过实例。**
+
+## 7. 共享文件触碰行
+
+| 文件 | 本单元做了什么 |
+| --- | --- |
+| `desktop/main/app/ipc.ts` | **本单元的例外**：`QUIT_ALLOWED` 由 2 项改为 4 项 + 常量上方的理由注释 |
+| `desktop/renderer/app/styles.css` | **本单元的例外**：`#browser-panel` 一行 `flex:0 0 49%;min-width:0` → `flex:0 1 49%;min-width:240px` |
+| `desktop/renderer/app/components/sidebar.tsx` | **本单元的例外**：会话灯改调纯函数、项目菜单加一项 |
+| `desktop/renderer/README.md` | **本单元的例外**：目录树补七个模块 |
+| `package.json` | **本单元的例外**：`scripts` 段 append 三行（`test:tools` / `test:terminal` / `test:sidebar`），**依赖一个没动** |
+| `scripts/test-all.mjs` | **本单元的例外**：内联的 tools-e2e 改成 npm 脚本，另加 terminal-e2e、sidebar-e2e 两步 |
+| `MIGRATION.md` | **本单元的例外**：两个「集成阶段」小节合成一个 + 补表头，五行原文逐字保留，末尾 append IM 一行；I0 小节的 `connectionCleared()` 那条补上本单元的核实结论 |
+| `desktop/preload/channels/shell-state.ts` | **append 一行**：`selectProject: project => ipcRenderer.invoke('beings:sidebar-project-select', project),` |
+| `desktop/shared/shell-state-types.ts` | **append**：`selectProject(project: string): Promise<SidebarState>;` 一行（带注释） |
+| `desktop/main/main.ts` | **一行都没改**（第 11、12 条都不需要动它：11 的结论是没有可接的时刻，12 落在 `subsystems/town.ts`） |
+
+`desktop/main/extensions.ts`、`preload/channels/index.ts`、`shared/desktop-types.ts`、`shared/types.ts`、
+`renderer/app/slots.tsx`、`app/models/registry.ts`、`subsystems/types.ts`、`app/page.tsx`、
+`forge.config.ts`、`vite.*.config.ts`、`tsconfig.json`、`vitest.config.ts`、`use-conversation-bridge.ts`
+——**一个字都没动**。`subsystems/chat.ts`、`main/chat`、`renderer/conversation`、`renderer/settings`、
+`renderer/channel`、`main/features` 的导航接线（I5 / I6b / I7 的地盘）同样没碰。
