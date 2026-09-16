@@ -367,3 +367,47 @@ IM 留的四条 `pending`（读 `error.code` 的）全部转绿，退出码 0：
 `desktop/renderer/app/slots.tsx`、`desktop/renderer/app/models/registry.ts`、`desktop/renderer/main.tsx`、
 `desktop/main/town/**`、`desktop/main/subsystems/town.ts`、`desktop/renderer/town/**`、`desktop/shared/town-types.ts`、
 `tests/town-sdk.mjs`、`tests/town-ui.mjs`（两个脚本**一字未改**，红转绿全部来自产品代码）。
+
+**重打包复验**：改完 `\uXXXX` 转义（那是错误路径上的**运行时代码**）之后重新 package + 重签 + 重跑，
+`town-sdk` 仍 **17 全过**、`town-ui` 仍 **14 过 1 红（IT 的那条）**——结果逐条相同。
+vitest 里 `townErrorPayload` 把一个带 NUL 的显示名清成 `"NeoA"` 那条也在守同一件事。
+
+---
+
+## 6. 未做事项 / 存疑（openIssues）
+
+1. **Channel 族（4 条 `beings:channel-*`）没有并进这条路。** I7 让它们**以数据形式 resolve** 包络，
+   由 `renderer/channel/models/channel.ts` 的 `unwrap()` 在渲染层重建（`ChannelAnswer<T>` / `ChannelErrorResult`）。
+   那是**同一个思路的另一条实现**，而且已经是绿的，所以本单元没动它——主世界解码器**只碰拒绝路径**，
+   Channel 的已解析包络原样穿过，行为零变化。要真正收敛成一条路：
+   `preload/channels/channel.ts` 的 `state/begin/check/inspect` 改走 `townEnveloped`，
+   `desktop/shared/channel-types.ts` 的三个返回类型由 `Promise<ChannelAnswer<T>>` 回到 `Promise<T>`（`feishu` 保持恒 resolve），
+   `renderer/channel/models/channel.ts` 删 `unwrap()`。**代价**：`tests/channel-integration-renderer.test.ts`
+   有一条「以数据形式到达的失败仍然能分出两句读取拒绝文案」是专门钉这个机制的，收敛就得重写它——
+   本单元不愿意在一个已经绿的机制上重写别人的用例（IM 的复审为「把夹具改成另一个场景」抓过一次）。留给合并者决定。
+2. **退出瞬间仍有一次被拒的 `beings:snapshot`（一行日志，已无 toast）。** 清零要么让主进程在 `quitting` 时不推
+   （`main.ts:498` 加 `&& !quitting`），要么开一条退出推送。前者**必须连补发一起做**：
+   `main.ts:642` 在退出失败时把 `quitting` 置回 false 并重新显示窗口，被跳过的推送没有补发点，面板会停在过期相位。
+   本单元的 `main.ts` 授权是「只加 portalState 注入一行」，没有替合并者决定。详见 §3.5。
+3. **两套连接纪元没有收敛**（第 7 条）。设计、为什么「一行」不够、以及收敛要付的代价，逐条写在 §3.7。
+   不变量仍由 I5 的 `tests/chat-integration-composer.test.ts` 钉着。
+4. **`desktop/main/town/channel/ipc.ts:117` 的 `TASK_LIMIT` 常量现在是冗余的**（`TOWN_ERROR_CODES` 已收录该码，
+   `feature-tasks.ts` 的抛出点已是中文，两条路径给出同一个字符串）。**没删，因为那是 IT 的独占目录**。
+   顺带：`tests/channel-integration-ipc.test.ts:247` 的夹具仍用英文 `'Too many active feature tasks'` 造那个 error，
+   现在与真实抛出点不一致了（它造自己的 error，所以仍然通过，只是夹具过时）。两处都建议在 IT 合回后一并清理。
+5. **`tests/town-ui.mjs` 仍有一条红**：`messages render while the member directory is still pending`
+   （`main/town/session/session.ts` 的 `Promise.all`，IM openIssue 10）。**IT 的活**，本单元按分工保持红，脚本一字未改。
+   因此 `npm run test:all` 仍会停在 `town-ui` 这一步。
+6. **`contextBridge.executeInMainWorld` 在 electron.d.ts 里标着 `@experimental`。** 本仓库自带 Electron 44.2.0，
+   实测可用；退路（`exposeInMainWorld` + preload 内重建，即 0.8.26 的形状）写好了但**在本机不可达，因而没有真机跑过**——
+   它只有 `tests/preload-envelope-bridge.test.ts` 的一条单测覆盖「句子还在、码丢失」。
+7. **主世界解码器的自足性有两道守卫、但没有第三道**：vitest 里 `toString()` + `new Function` 重跑守源码形态，
+   §4.1 手工核对守本次产物形态。**没有**把「产物里那个函数体不含外部引用」做成自动化检查
+   （要在 `.vite/build/preload.js` 里按 `func:<名>` 定位再做标识符分析）。改 `main-world.ts` 的人请重做 §4.1 那一步。
+8. **没有连真实 Being 发过消息**（本机引擎是 stub，同 IM openIssue 5）。第 2 条的 Portal 运行态是用
+   `installSubsystems` + 真 `beings:chat-send` + 夹具网络验证的，**没有**在真机上看过一条带真实 `runtime.portal` 的帧。
+9. **`desktop/shared/town-desktop-errors.ts` 与基线之间仍是二进制 diff**：本单元把它改成了纯文本，
+   但**基线那一版含裸控制字节**，所以 `git diff 5be8565..HEAD` 仍显示 `Bin`，三方合并的 base 也仍是二进制。
+   本轮只有本单元动这个文件，所以合并是直接取本单元这一版；下一轮开始它就是可读 diff 了。
+10. **没跑 `npm run test:all` 全量**：它串行占用四个 worktree 共用的 E2E 锁，且包含别的单元的脚本。
+    本单元的做法是**逐条单独跑**（§4.2–4.4，13 个脚本，只有 IT 的那一条红）。
