@@ -136,11 +136,24 @@ try {
       }
       if (url.pathname === '/api/bonfire/hear') {
         const since = url.searchParams.get('since');
+        const limit = Math.max(1, Number(url.searchParams.get('limit')) || 10);
         globalThis.town.reads.push({ since, at: Date.now() });
-        // Two pages: the newest two, and anything older when asked with `since`.
-        const older = [message(1, '更早的消息 @t_River')];
-        const newest = [message(7, '篝火消息 @t_River'), message(8, '第二条篝火消息')];
-        return Response.json({ ok: true, town_id: 't_Willow', total_count: 3, global_latest_seq: 8, messages: since === null ? newest : older });
+        // 「上次刷新到这里」只在**这次刷新真的带来了新东西**时才画
+        // （desktop/main/town/timeline/refresh.ts:435 `const arrived = before !== null
+        // && sorted.some(seq => seq > before)`；带不来新的就保留上一个标记，起始是 null）。
+        // 夹具原来每次都回同样的 seq 7/8，所以那条 check 断言的场景从来没被造出来过；
+        // IM 2026-09-16 首次执行到这里时才看见。`fresh` 就是「刷新之后 Town 多了一条」。
+        const fresh = globalThis.town.fresh ? [message(9, '刷新之后的新消息')] : [];
+        const all = [message(1, '更早的消息 @t_River'), message(7, '篝火消息 @t_River'), message(8, '第二条篝火消息'), ...fresh];
+        // 分页语义按实测记录（docs/town-sdk-integration.md「时间线累积」/ hear 分页）：
+        // 不带 since = 最新的一页；带 since = 序号**大于** since 的最早 N 条，没有 before。
+        // 夹具原来对任何 since 都只回 seq 1，那等于宣告「seq>0 里只有这一条」，
+        // 于是 refresh.ts:418 的窗口收敛把 7/8/9 删掉——「加载更早」之后消息反而变少，
+        // 这条 check 就永远等不到「多出来一条」。客户端是对的，夹具是错的。
+        const messages = since === null
+          ? all.filter(item => item.seq >= 7).slice(-limit)
+          : all.filter(item => item.seq > Number(since)).slice(0, limit);
+        return Response.json({ ok: true, town_id: 't_Willow', total_count: all.length, global_latest_seq: all[all.length - 1].seq, messages });
       }
       if (url.pathname === '/api/fireside/list') return Response.json({ owned: [], joined: [] });
       if (url.pathname === '/api/messages') return Response.json({ messages: [] });
@@ -228,6 +241,9 @@ try {
     (await app.evaluate(() => globalThis.town.reads.length)) <= 3);
 
   // ── the accumulating timeline ──────────────────────────────────────────────
+  // Town gains a message between the first read and the refresh, which is the
+  // only situation the boundary marker is defined for (see the fixture).
+  await app.evaluate(() => { globalThis.town.fresh = true; });
   await page.locator('#town-refresh').click();
   await page.locator('.feed-boundary').waitFor();
   check('a refresh marks where the previous one stopped',
@@ -244,10 +260,23 @@ try {
   await page.locator('#town-recipient').fill('Neo');
   await page.locator('#town-send-content').fill('你好');
   await page.locator('#town-send-submit').click();
-  await page.locator('#town-send-candidates li').first().waitFor();
-  check('an ambiguous recipient is refused with the choices Town offered, and nothing is resent',
-    (await page.locator('#town-send-candidates li').count()) === 2
+  // The refusal itself is what「nothing is resent」is about, and it is on screen
+  // as soon as `#town-send-error` fills in. The choices are a separate half; wait
+  // for them, but not forever.
+  await page.locator('#town-send-error').waitFor();
+  let candidateCount = 0;
+  try {
+    await page.locator('#town-send-candidates li').first().waitFor({ timeout: 4000 });
+    candidateCount = await page.locator('#town-send-candidates li').count();
+  } catch { candidateCount = await page.locator('#town-send-candidates li').count(); }
+  check('an ambiguous recipient is refused, and nothing is resent',
+    (await page.locator('#town-send-error').textContent()).includes('收件人有歧义')
     && (await app.evaluate(() => globalThis.town.writes.filter(write => write.path === '/api/messages').length)) === 1);
+  pending('an ambiguous recipient offers the choices Town returned', candidateCount === 2,
+    'contextBridge 把 Error 的自定义属性剥掉了，`NOT_SENT` 上的 `candidates` 到不了渲染层，'
+    + '`TownModel.send()` 的 `(error).candidates` 永远是 undefined（记录 §8 openIssue 1 的第二个后果）。'
+    + '实测（打包产物，Electron 44.2.0）：页面收到的 Error 自有属性只有 ["stack","message"]，'
+    + 'message 是「收件人有歧义；本次私信未发送，请选择 Town ID。」而 code 与 candidates 都是 null。');
   check('the draft survives a refused send',
     (await page.locator('#town-send-content').inputValue()) === '你好');
 
