@@ -155,3 +155,84 @@
 | `getBonfireMessages` 不等目录 | `tests/town-ui.mjs`「messages render while the member directory is still pending」——IM 在同一夹具、同一打包流程下实测为红（记录 §9.2），本单元实测为绿；`tests/town-session-session.test.ts`「a pending member directory does not hold up the bonfire messages」同一条规则的单元级复现。 |
 | `getMembers` in-flight 合并 | `tests/town-ui.mjs`「five directory reads at once are one request on the wire」；单元级 `concurrent directory reads share one request`。 |
 | 渲染层四条 | 把 `applyTimeline` 的 feed 围栏、`openFeed` 的 `onFeed`、`receiveState` 的 `arrived`、`send()` 的草稿删除逐条改回原样后重跑 `tests/town-conversation-rules.test.ts`：**17 条里 4 条变红**（围炉迟到答复、围炉往返、回执清草稿、身份到达不重读），改回来后 17 条全绿。 |
+
+---
+
+## 4. 决定与偏差
+
+### 4.1 第 2 条任务的实测结论：250 ms 那一次不是重复读，另有一次才是
+
+任务书按 IM 第一轮的观测写「打开一次篝火发两次 feed 读（首绘 reads=1，250 ms 后变 2）」。
+按 MEMORY「协议行为必须实测」在打包产物上逐条量过之后，真实情况是：
+
+| 观测 | 手段 |
+| --- | --- |
+| 一次打开的 `/api/bonfire/hear` 时间序列是 `dt=0`、`dt=245–251`（有时中间还有一条 `dt=2`） | 夹具记 `Date.now()`，探针脚本打印 |
+| SSE `hello` 帧落在 `dt=-2 ~ -7`，**早于**第一次读 | 夹具在 `/api/client/stream` 的 `start(controller)` 里记 `helloAt` |
+
+所以 250 ms 那一条的来源是 `desktop/main/town/channel/town-background.ts` 的 `notifyEvent`：
+配对完成就是开 SSE，`hello` 到达 → 把篝火标脏 → **250 ms 合并窗口**之后 `reader.refresh()`。
+这段（连同那个 250）是 BD `src/town-background.cjs:60-82` 的逐字节移植，**是 Town 说「有变化」，不是页面问了两次**，
+压掉它等于丢掉服务端宣告过的更新。**不改。**
+
+IM 当初量到 1，是因为那时 feed 读卡在成员目录上、flight 一直不落地，
+250 ms 的那次 `refresh()` 于是命中 `timeline/refresh.ts:543` 的 `if (this._flight) return this._flight.promise` 直接并进去、根本没上线；
+把目录挪开之后它才露出来。也就是说 `=== 1` 量的是它旁边那个缺陷，不是一条规则。
+
+**真正的重复读在渲染层**，而且与 250 ms 无关：`receiveState` 里 `this.me !== identity` 就 `void this.load()`，
+而身份是在页面打开之后一次状态推送才到的，`this.me` 从 `''` 变成 `t_Willow` 被当成「换了身份」。
+BD `acceptTownState`（`renderer/town-app.js:1701`）明写 `Boolean(previousId && nextId && nextId !== previousId)`
+——空的旧身份不算变化——而且 BD **从不因为状态更新去读 feed**。已按 BD 改（§3.2），单元用例
+`an identity arriving after the page opened does not start a second read` 钉住，去掉修复即红。
+
+三条读计数断言因此改成**对各自基线**计数而不是对 1 计数，理由与实测逐句写在 `tests/town-ui.mjs` 里。
+这不是放宽：原来的 `=== 1` 里混着「一次打开一次读」和「这段时间里不许有别的读」两件事，
+现在前者由 `repeated openings never start more than one read per opening`（打开两次 → 至多 +2）单独断言，
+后者由 `a directory arrival costs no second message read`（目录到达前后计数不变）单独断言，
+而且后者先 `waitForTimeout(800)` 让 250 ms 窗口过去，**量的就只是目录的影响**。
+
+### 4.2 身份**真的**变了仍然重读（保留本外壳既有行为）
+
+BD 的 `acceptTownState` 在身份变化时只 `clearPrivate()`，不重读，等下一次 `open()`。
+本外壳的 Town 页可能正开着，清空之后就是一张白页，所以 I1 选择重读。本单元**只**改掉「到达」那一半，
+「变化」那一半保持不动，并加了 `an identity that actually changed re-reads the feed on screen` 钉住它。
+
+### 4.3 `getBonfireMessages` 里仍然会起飞一次目录读
+
+只在手上没有未过期目录时起飞，且**不等**。留着它的理由：`messagesDto` 的目录兜底
+（`town_id` / `being_id` 都没有的老载荷）在 BD 里是有的，而后台采集在 Town 页没打开时也会走这条路——
+真砍掉，关着页面采集到的老载荷会永久带上 `authorUnknown`。起飞之后若赶在消息之前回来，行为与改动前完全一致。
+
+### 4.4 `/api/messages`：不改，并标注「未实测」
+
+见 §1.5 的对照表。路由表、查询参数、读法都与 BD 0.8.26 逐字一致。
+「GET 是否返回已发送的私信」本机无真 Town 可连，**未实测**；`docs/town-sdk-integration.md:93` 的原话是
+「Being 提醒公开帮助未明确 GET 私信是否改变已读/投递状态」。按任务书以 BD 源码为准。
+
+### 4.5 SBS 状态行只订阅，不自己读
+
+按 I6b openIssue 2：`TownModel.start()` 订阅 `beings:model-settings-state` 并读一次 `beings:model-settings`，
+`api.modelSettings?.` 带可选链（夹具可以不装模型设置桥）。**没有**新增任何 `/api/llm/config` 读者。
+
+### 4.6 `tests/town-ui.mjs` 的滚动容器是找出来的，不是写死的
+
+`#town-view` 有 `overflow:auto`，但实测 63 条消息时它的 `scrollHeight === clientHeight`（637/637）——
+真正滚动的是别的祖先。所以那条 check 从 `.social-messages` 往上找第一个 `scrollHeight - clientHeight > 40` 的元素；
+一次「没有任何东西可滚」的运行会在 `scrolled > 0` 上**响亮地红**，而不是悄悄通过。
+
+---
+
+## 5. 共享文件触碰行
+
+| 文件 | 触碰 | 是否符合「只 append 一行」 |
+| --- | --- | --- |
+| `MIGRATION.md` | 「集成阶段：各单元记录」表**末尾追加一行**（`IT · Town 读取行为`） | 是 |
+
+**没有**改动 `desktop/main/extensions.ts`、`desktop/preload/channels/index.ts`、`desktop/shared/desktop-types.ts`、
+`desktop/shared/types.ts`、`desktop/renderer/app/slots.tsx`、`desktop/renderer/app/models/registry.ts`
+——本单元不新增子系统、不新增通道、不新增插槽，全部改动落在自己的独占目录里。
+`package.json` / `package-lock.json` / `forge.config.ts` / `vite.*.config.ts` / `tsconfig.json` / `vitest.config.ts` /
+`scripts/test-all.mjs` 一个字没动。IN 的独占目录（`desktop/preload/**`、`desktop/main/main.ts`、
+`desktop/renderer/app/**`、`tests/support/**` 等）一个文件没碰。
+
+唯一落在独占目录之外的是 `tests/town-session-session.test.ts`，它是 `tests/town-*`，属本单元独占。
