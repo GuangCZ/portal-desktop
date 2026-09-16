@@ -29,8 +29,26 @@ export interface TrustedWindow {
 
 /** Channels that still answer while the client is quitting: the browser view's
  * bounds follow a window that is closing, and diagnostics are what a user
- * exports when a shutdown hangs. */
-export const QUIT_ALLOWED = ['beings:browser-bounds', 'beings:diagnostics'];
+ * exports when a shutdown hangs.
+ *
+ * ALL THREE GEOMETRY CHANNELS BELONG HERE, and for one reason: a `WebContentsView`
+ * lives in the main process, and the only way the renderer can release one is to
+ * say `visible:false`. A panel unmounting during a shutdown does exactly that, so
+ * refusing it leaves a page pinned over the window for the rest of the quit and
+ * makes the renderer re-measure and re-send against a channel that will never
+ * answer. BeingDesktop 0.8.26 guards none of them (`setBrowserView` has no
+ * `exitStarted` check at all); the shell's own `beings:browser-bounds` was already
+ * here, and I2 recorded the other two as a deviation to be closed by whoever owns
+ * this file (docs/migration/i2-tools.md「决定与偏差」8). This is that close.
+ * `beings:tools-browser-view` is the tool bridge's view of the browser and
+ * `beings:tool-browser-viewport` the panel's; both only move or hide a rectangle
+ * and neither can start work, so neither can prolong a shutdown. */
+export const QUIT_ALLOWED = [
+  'beings:browser-bounds',
+  'beings:tools-browser-view',
+  'beings:tool-browser-viewport',
+  'beings:diagnostics',
+];
 /** Channels refused until an interrupted Portal upgrade has been recovered. */
 export const RECOVERY_BLOCKED = ['beings:save', 'beings:portal-start', 'beings:portal-stop'];
 

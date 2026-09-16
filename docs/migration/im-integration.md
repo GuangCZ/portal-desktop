@@ -155,3 +155,26 @@
 新增 `tests/tools-integration-browser-ownership.test.ts`（6 例）：两种安装顺序 × {单实例 + `tools.browser === toolBrowser.browser` 身份、
 两条推送通道扇出} + 无 tool-browser 时的自建兜底 + 无 Electron 时的拒绝。
 
+### 2.2 QUIT_ALLOWED（i2 记录「决定与偏差」8）——已修
+
+核对 `desktop/main/tools/ipc.ts` 与 `desktop/main/tools/browser/ipc.ts` 的全部通道，「视口/几何」类只有两条：
+`beings:tools-browser-view`（工具桥看到的浏览器视口）与 `beings:tool-browser-viewport`（面板自己的视口）。
+终端没有几何通道（`beings:terminal-action` 是动作通道，放行会让退出期还能新建终端，不放）。
+
+`QUIT_ALLOWED` 从 `['beings:browser-bounds','beings:diagnostics']` 变成
+`['beings:browser-bounds','beings:tools-browser-view','beings:tool-browser-viewport','beings:diagnostics']`。
+理由写在常量的注释里：`WebContentsView` 活在主进程，渲染层**唯一**的释放手段就是发 `visible:false`；
+退出期面板 unmount 时发的正是这一条，拒绝它等于把页面钉在正在关闭的窗口上，还会让渲染层对着一条永远不答的通道反复测量重发。
+BD 0.8.26 对 `setBrowserView`（src/main.cjs:1137）**一个守卫都没有**。
+
+**`VIEWPORT_RETRIES` 只为这一条存在**（i2 在常量注释里写明：「Here the channel is refused for the WHOLE of a quit —
+it is not on QUIT_ALLOWED — … an unbounded retry is a live loop」），已删除：
+`ToolsModel.send()` 的失败分支恢复成 0.8.26 的 `lastViewport=''`（无条件重试）。
+**保留** `viewportFailures` 计数器与「一段失败只 `fail()` 一次」——那才是活循环的另一半
+（`fail()` → `changed()` → 重渲染 → 重新测量 → 再发），而且它与退出无关，是「同一个原因不要每帧报一次」。
+
+新增 `tests/app-ipc-quit-allowed.test.ts`（5 例）：`QUIT_ALLOWED` 的精确内容、退出期两条视口通道真的到达
+`setViewport`、退出期其余五条仍被拒、未退出时行为不变、发送者校验先于放行名单（放行不削弱来源校验）。
+`tests/tools-integration-model.test.ts` 那条「stops re-sending…」改写成「keeps re-sending a refused rectangle,
+and says why only once」：断言 12 次布局发 12 次（不再封顶）、`fail()` 只通知一次、一次成功后重新计数——断言更强，不是更弱。
+

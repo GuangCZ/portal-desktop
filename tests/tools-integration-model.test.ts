@@ -14,7 +14,7 @@
 // The components are not exercised here (there is no DOM in this suite); the
 // browser-side path is tests/tools-e2e.mjs's subject.
 import { describe, expect, it } from "vitest";
-import { ToolsModel, VIEWPORT_RETRIES } from "../desktop/renderer/tools/models/tools";
+import { ToolsModel } from "../desktop/renderer/tools/models/tools";
 import { IDLE_TOOLS_STATE } from "../desktop/shared/desktop-types";
 import type {
   DesktopToolsAction, DesktopToolsState, DesktopToolsViewport,
@@ -278,37 +278,43 @@ describe("the tool panel's model", () => {
     stop();
   });
 
-  it("stops re-sending a rectangle the main process keeps refusing", async () => {
-    // `beings:tools-browser-view` is refused for the whole of a quit, and a
-    // failure notifies the shell, which re-renders, which measures and sends
-    // again. Without the bound that is a live loop; with it, one rectangle costs
-    // at most VIEWPORT_RETRIES retries and the error is raised once.
+  it("keeps re-sending a refused rectangle, and says why only once", async () => {
+    // 0.8.26's `lastViewport=''` on failure: the rectangle the main process has
+    // is unknown, so the next layout sends again — for as long as layouts keep
+    // coming. IM removed the retry cap I2 had added, because the reason it
+    // existed (`beings:tools-browser-view` refused for the whole of a quit) is
+    // gone: the channel is on QUIT_ALLOWED now.
+    //
+    // What stays bounded is the NOISE. `fail()` notifies the shell, a
+    // notification re-renders, and a re-render measures and sends again, so
+    // raising every failure is a live loop on its own.
     const { bridge, model, stop } = started();
     bridge.push(state());
     await model.show("browser");
     bridge.viewports.length = 0;
-    bridge.viewportFailure = new Error("客户端正在退出，请稍候。");
+    bridge.viewportFailure = new Error("浏览器显示区域无效。");
+    let raised = 0;
+    const unsubscribe = model.subscribe(() => { raised += 1; });
     for (let attempt = 0; attempt < 12; attempt++) {
       model.browserView(RECT, false);
       await Promise.resolve();
     }
-    expect(bridge.viewports).toHaveLength(VIEWPORT_RETRIES + 1);
-    expect(model.error).toBe("客户端正在退出，请稍候。");
-    // A rectangle that actually changed still gets its own budget…
-    model.browserView({ ...RECT, x: 40 }, false);
-    await Promise.resolve();
-    expect(bridge.viewports.at(-1)).toMatchObject({ bounds: { ...RECT, x: 40 } });
-    // …and one success clears the streak.
+    expect(bridge.viewports).toHaveLength(12);
+    expect(model.error).toBe("浏览器显示区域无效。");
+    // One notification for the whole streak, not one per attempt.
+    expect(raised).toBe(1);
+    // A success clears the streak, so the next failure is raised again.
     bridge.viewportFailure = null;
     model.browserView({ ...RECT, x: 41 }, false);
     await Promise.resolve();
-    bridge.viewportFailure = new Error("客户端正在退出，请稍候。");
-    const before = bridge.viewports.length;
-    for (let attempt = 0; attempt < 12; attempt++) {
+    bridge.viewportFailure = new Error("浏览器显示区域无效。");
+    raised = 0;
+    for (let attempt = 0; attempt < 5; attempt++) {
       model.browserView({ ...RECT, x: 42 }, false);
       await Promise.resolve();
     }
-    expect(bridge.viewports.length - before).toBe(VIEWPORT_RETRIES + 1);
+    expect(raised).toBe(1);
+    unsubscribe();
     stop();
   });
 

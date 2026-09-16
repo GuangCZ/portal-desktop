@@ -18,9 +18,9 @@
 //  · Closing the panel RELEASES the view. 0.8.26 hides its panel and its
 //    `hide()` reaches `layout()`, which sends `visible: false`; this panel
 //    unmounts instead, so the release is explicit — see `detachView`.
-//  · A viewport the main process refuses is re-sent a bounded number of times,
-//    which is the one place this model deliberately does NOT match 0.8.26. See
-//    `VIEWPORT_RETRIES`.
+//  · A viewport the main process refuses is re-sent on the next layout, exactly
+//    as 0.8.26 does, and the reason is raised once per streak rather than once
+//    per frame — see `send`.
 import { IDLE_TOOLS_STATE } from "../../../shared/desktop-types";
 import type {
   DesktopToolsAction, DesktopToolsBrowserTab, DesktopToolsPane,
@@ -60,20 +60,6 @@ const LINK_LABELS: Record<string, string> = {
 
 const ACTIVE_JOB = ["starting", "running", "stopping"];
 
-/** How many times one rectangle may be re-sent after `beings:tools-browser-view`
- * refused it.
- *
- * 0.8.26 re-sends without a bound: its renderer clears the last-sent key on every
- * failure and the next rAF tries again, forever. That is survivable there because
- * the only failure it has is a transient one. Here the channel is refused for the
- * WHOLE of a quit — it is not on `QUIT_ALLOWED` (desktop/main/app/ipc.ts) — and
- * `fail()` notifies the shell, which re-renders, which measures and sends again:
- * an unbounded retry is a live loop that ends only when the window does. Three
- * tries per rectangle keeps the recovery (a rectangle the main process may have
- * missed is still re-sent) without the loop; a rectangle that actually changes
- * starts a fresh budget, and one success clears it. */
-export const VIEWPORT_RETRIES = 3;
-
 export class ToolsModel extends Store {
   state: DesktopToolsState = IDLE_TOOLS_STATE;
   open = false;
@@ -95,7 +81,8 @@ export class ToolsModel extends Store {
   detailsOpen = false;
   private lastRequestResult = "";
   private lastViewport = "";
-  /** Consecutive `browserView` refusals; see VIEWPORT_RETRIES. */
+  /** Consecutive `browserView` refusals. Only the first of a streak is raised;
+   * see `send`. */
   private viewportFailures = 0;
   private viewport: DesktopToolsViewport = { visible: false, bounds: { x: 0, y: 0, width: 0, height: 0 } };
   /** Suppresses the viewport while a pointer is dragging the divider: a native
@@ -331,12 +318,18 @@ export class ToolsModel extends Store {
       () => { this.viewportFailures = 0; },
       (error) => {
         this.viewportFailures += 1;
-        // Re-send next frame: the rectangle the main process has is now unknown.
-        // Bounded, unlike 0.8.26's — see VIEWPORT_RETRIES.
-        if (this.viewportFailures <= VIEWPORT_RETRIES) this.lastViewport = "";
-        // Raised once per streak. `fail()` notifies, a notification re-renders,
-        // and a re-render measures and sends again, so raising every failure is
-        // half of the loop the bound above exists to stop.
+        // Re-send on the next layout: the rectangle the main process has is now
+        // unknown. This is 0.8.26's `lastViewport=''`, unbounded as it is there.
+        // I2 capped it because `beings:tools-browser-view` was refused for the
+        // whole of a quit; it is on `QUIT_ALLOWED` now (desktop/main/app/ipc.ts),
+        // so the cap has nothing left to protect against and the recovery is no
+        // longer silently given up on.
+        this.lastViewport = "";
+        // RAISED ONCE PER STREAK, which is the half of the loop that matters:
+        // `fail()` notifies, a notification re-renders, and a re-render measures
+        // and sends again. Staying quiet after the first failure means a channel
+        // that keeps refusing stops driving re-renders — and the user reads the
+        // reason once instead of once per animation frame.
         if (this.viewportFailures === 1) this.fail(error);
       },
     );
