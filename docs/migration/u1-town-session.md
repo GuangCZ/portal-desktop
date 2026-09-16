@@ -24,15 +24,15 @@
 
 | 模块 | 状态 |
 | --- | --- |
-| types.ts | 已移植 |
-| wire.ts | 已移植 |
-| library-contract.ts | 已移植 |
-| result-source.ts | 已移植 |
-| result-contract.ts | 已移植 |
-| sanitize.ts | 已移植 |
-| candidates.ts | 已移植 |
-| client.ts | 已移植 |
-| session.ts | 已移植 |
+| types.ts | 测试通过 |
+| wire.ts | 测试通过 |
+| library-contract.ts | 测试通过 |
+| result-source.ts | 测试通过 |
+| result-contract.ts | 测试通过 |
+| sanitize.ts | 测试通过 |
+| candidates.ts | 测试通过 |
+| client.ts | 测试通过 |
+| session.ts | 测试通过 |
 
 ### BeingDesktop/docs/town-sdk-integration.md（111 行，已读完）
 
@@ -786,3 +786,66 @@ const townSession = new TownSession({
 - `TownClient.getContext` 返回 `{key, beingId, revision, connected}`；`TownSession.getContext` 返回 `{configured, connected, exiting, connectionId, identityRevision, beingName, townId}`。两者字段**不同**，不能合并。
 - `townSpeak` 是 main 里的函数：先 `townClient.speak`，只有 `AUTH_REQUIRED` 才回退 `townWriter.send`（中继，范围外）。
 - 另有 `OnboardingInspection` 会构造一次性的 `TownSession`（只给 `getContext`/`getIdentity`/`fetchImpl`），说明这三个之外的注入项都可选。
+
+---
+
+## 移植结果（2026-09-16 完成）
+
+### 产出文件
+
+源码（`desktop/main/town/session/`，全部新增，未改动 portal-desktop 任何既有文件）：
+
+| 文件 | 来源 | 导出面 |
+| --- | --- | --- |
+| `types.ts` | 新增（四个模块共用的契约类型） | `TownError`、`errorCode`、`errorMessage`、`isRecord`、`isPlainRecord`、`isSequence` + 全部接口类型 |
+| `wire.ts` | `src/town-wire.cjs` | `validId`、`memberId`、`normalizeTownResponse`、`matchesTownIdentity` |
+| `library-contract.ts` | `src/town-library-contract.cjs` | `scrollId`、`detailId`、`libraryRoute`、`libraryQuery`、`scrollListDto`、`scrollDto`、`beingsDto` |
+| `result-source.ts` | `src/town-result-source.cjs` | `markBeingRelay`、`relaySource` |
+| `result-contract.ts` | `src/being-town-reader.cjs` 的 `validTown` | `validateTownToolResult` |
+| `sanitize.ts` | `src/services.cjs` 的 `sanitizeText` | `sanitizeText`（TownClient 注入点的默认值） |
+| `candidates.ts` | `renderer/town-mentions.js` 的 `candidates` | `candidates`（TownClient 注入点的默认值） |
+| `client.ts` | `src/town-client.cjs` | `TownClient`、`consumeEvents`、`readQuery`（原为模块内私有，导出便于测试与集成） |
+| `session.ts` | `src/town-session.cjs` | `TownSession`、`TOWN_AUTH_DETAIL`、`messagesDto`、`firesideMessagesDto`、`directMessagesDto` |
+
+测试（`tests/`，全部新增）：
+
+| 文件 | 来源 | 用例数 |
+| --- | --- | --- |
+| `town-session-client.test.ts` | `test/town-client.test.cjs` | 24 / 24（全部） |
+| `town-session-session.test.ts` | `test/town-session.test.cjs` | 39 / 39（全部） |
+| `town-session-identity-migration.test.ts` | `test/town-identity-migration.test.cjs` | 12 / 12（全部） |
+| `town-session-name-rules.test.ts` | `test/p1-name-rules.test.cjs` | 10 / 15（只有针对本单元四模块的，其余 5 条属 BeingTownWriter / TownCachedReads / renderer town-mentions，已在文件头注明） |
+
+### 注入点一览（构造参数 → 对应的 BeingDesktop 模块）
+
+`TownClient({getContext, store, fetchImpl, onChange, onEvent, retryMs, sanitize, parseCandidates, validateResult})`
+- `getContext` → `src/main.cjs` boot() 的连接投影
+- `store` → `src/town-client-store.cjs`（`TownClientStore`，另一个单元）
+- `fetchImpl` → Electron `net.fetch`
+- `onChange` / `onEvent` → main 的 `broadcast()` / `townBackground.notifyEvent`
+- `sanitize` → `src/services.cjs` 的 `sanitizeText`（默认为本单元 `sanitize.ts` 的同源移植）
+- `parseCandidates` → `renderer/town-mentions.js` 的 `candidates`（默认为本单元 `candidates.ts` 的同源移植；main 不得 import renderer）
+- `validateResult` → `src/being-town-reader.cjs` 的 `validateTownToolResult`（默认为本单元 `result-contract.ts` 的同源移植）
+
+`TownSession({getContext, fetchImpl, readImpl, writeImpl, getIdentity, onChange, now, membersTtlMs})`
+- `readImpl` → `TownClient.read`
+- `writeImpl` → main 的 `townSpeak`（内含 `src/being-town-writer.cjs` 的 `AUTH_REQUIRED` 回退，另一个单元）
+- `getIdentity` → `TownClient.identity`
+- `fetchImpl` → `net.fetch` 外包一层 `{credentials:'omit', referrerPolicy:'no-referrer'}`（**`_request` 自身不设 referrerPolicy，集成时必须保留这层包装**）
+- `now` → `Date.now`（成员缓存 TTL 时钟）
+
+### 已知偏差与待办（openIssues）
+
+1. `validateTownToolResult` 原本来自 `src/being-town-reader.cjs`（中继模块，不在本单元）。由于该函数只依赖 library-contract，本单元原样移植了它作为 `validateResult` 注入点的默认值；集成阶段可以改注入 BeingDesktop 自己的实现。
+2. `sanitize.ts` 与 `candidates.ts` 是 `src/services.cjs` / `renderer/town-mentions.js` 的**同源副本**，属于其它单元的资产。集成阶段应改为注入共享实现并删除这两份副本。
+3. `_set(area, status, error.message)`：原实现直接取 `error.message`（非 Error 时为 `undefined`），移植版用 `errorMessage()` 返回 `''`。所有实际抛出路径都是 Error 实例，观察不到差异。
+4. `test/town-session.test.cjs` 的 `Session to Refresh preserves a complete 32000-character Fireside message…` 依赖 `src/town-refresh.cjs`。按任务要求用同形状的假 refresh 对象（`start/refresh/snapshot/status/stop`）移植，断言的 Session 契约（围炉全文不截断、篝火截到 4000、`latestSeq`）完全保留；真正的时间线累积由 P3 单元覆盖。
+5. `test/p1-name-rules.test.cjs` 中跨 `preload.cjs` / `TownController` 的断言未移植（那两个模块不在本单元），每处都在测试文件里写明了删掉的是哪一半。
+6. `TownSession._read` 会给 `'inbox'` 区新增一个 `_state` 键，而构造与 `reset()` 的初值只有五个区。这是 BeingDesktop 的原行为，原样保留。
+7. `/api/messages` 不在 `TownSession` 的 `ROUTES` 白名单内：私信只能经 `readImpl`（client token）读取，直连 `_request('/api/messages')` 会抛 `INVALID_REQUEST`。原行为，保留。
+8. 本单元只做移植，**没有做集成**：IPC、renderer、`main.ts` 挂钩、以及与 portal-desktop 既有 `desktop/main/town/client.ts` / `live.ts` / `ipc.ts` / `pairing.ts` 的二选一，都留给后续阶段。`client.ts` 顶部注释列出了两份实现的重叠与差异清单。
+
+### 门槛
+
+- `npm run typecheck`：通过。
+- `npx vitest run`：`Test Files  48 passed | 7 skipped (55)` / `Tests  394 passed | 16 skipped (410)`（基线 309 通过 16 跳过，本单元新增 85 条）。
