@@ -19,6 +19,7 @@
 // its own visibility, empty state and errors. The shell will not render a frame,
 // a title bar or a placeholder for it.
 import type { ComponentType, ReactNode } from 'react';
+import { toolsAction, toolsPanel } from "../tools/slot";
 import type { AppModel } from './models/app';
 
 /** A dockable panel in the workspace body, after the tool browser. */
@@ -59,12 +60,14 @@ export interface SheetSlot {
 }
 
 export const PANEL_SLOTS: PanelSlot[] = [
+  toolsPanel,
 ];
 
 export const SIDEBAR_SLOTS: SidebarSlot[] = [
 ];
 
 export const TOPBAR_SLOTS: TopbarSlot[] = [
+  toolsAction,
 ];
 
 export const SHEET_SLOTS: SheetSlot[] = [

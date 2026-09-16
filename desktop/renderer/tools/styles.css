@@ -1,0 +1,290 @@
+/* The tool panel. Layout, sizes and the two accent colours follow BeingDesktop
+   0.8.26's renderer/desktop-tools.css; the variables are this shell's
+   (desktop/renderer/app/styles.css), so both themes come for free.
+
+   0.8.26 lays the panel out with a CSS grid on `#content-grid` and a
+   `--tools-width` custom property. This shell's `.workspace-body` is a flexbox,
+   so the panel sets its own `flex-basis` from the model and「展开」becomes 100%
+   rather than a grid-template swap. Everything inside is 0.8.26's. */
+
+#desktop-tools {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  border-left: 1px solid var(--line);
+}
+#desktop-tools.tools-full { flex: 1 1 100%; }
+
+.tools-resizer {
+  flex: 0 0 7px;
+  position: relative;
+  cursor: col-resize;
+  touch-action: none;
+  -webkit-app-region: no-drag;
+  outline: none;
+}
+.tools-resizer[hidden] { display: none; }
+.tools-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 3px;
+  background: var(--line);
+  transition: background 0.12s;
+}
+.tools-resizer:hover::after,
+.tools-resizer:focus-visible::after { inset: 0 2px; background: var(--accent); }
+
+.tools-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: 44px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+.tools-modes { display: flex; flex: 1; gap: 16px; height: 100%; }
+.tools-modes button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tools-modes button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--text); }
+
+/* The two states worth a colour: a live link and a broken one. Everything else
+   reads as ordinary chrome, which is the point — a connected Being tool bridge
+   is not an alarm. */
+#tools-connection[data-state="connected"] { color: var(--green); }
+#tools-connection[data-state="error"] { color: #d07b72; }
+
+.tools-pending-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--button-text);
+  font-size: 10px;
+  line-height: 1;
+}
+#open-tools { position: relative; }
+#open-tools .tools-pending-count { position: absolute; top: 1px; right: 0; }
+
+.tools-link-details[hidden] { display: none; }
+.tools-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px 0;
+  font-size: 12px;
+}
+.tools-link-row > span { display: flex; align-items: center; gap: 6px; }
+.tools-link-row .text-button { margin-left: 0; }
+.tools-link-hint { margin: 5px 14px 9px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.status-dot[data-state="connected"] { background: var(--green); }
+.status-dot[data-state="error"] { background: #d07b72; }
+
+.tools-error {
+  margin: 0;
+  padding: 9px 14px;
+  background: color-mix(in srgb, #d07b72 16%, var(--surface));
+  color: var(--text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.tools-error[hidden] { display: none; }
+
+/* The approval queue keeps its own warm tint in both themes: it is the one place
+   in the window where nothing happens until the user decides. */
+.tools-requests { flex-shrink: 0; max-height: 230px; overflow: auto; }
+.tools-request {
+  padding: 12px 14px;
+  border-top: 1px solid color-mix(in srgb, #b39051 40%, var(--line));
+  background: color-mix(in srgb, #b39051 12%, var(--surface));
+  font-size: 12px;
+}
+.tools-request strong { font-weight: 600; }
+.tools-request pre {
+  margin: 7px 0;
+  max-height: 96px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.tools-request-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.small-button { padding: 6px 12px; font-size: 12px; }
+
+.tools-pane { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.tools-pane[hidden] { display: none; }
+
+.browser-tab-strip {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: 39px;
+  gap: 4px;
+  padding: 3px 8px;
+  border-block: 1px solid var(--line);
+}
+.browser-tabs { display: flex; flex: 1; min-width: 0; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.browser-tab { display: flex; flex: 0 0 155px; min-width: 0; align-items: center; border-radius: 7px; }
+.browser-tab.active { background: var(--hover); }
+.browser-tab > button:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 7px 9px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.browser-tab.active > button:first-child { color: var(--text); }
+.browser-tab-close { padding: 4px 8px; border: 0; background: none; color: var(--muted); font-size: 17px; cursor: pointer; }
+
+.browser-address-row {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.browser-address-row input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  margin: 0 4px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--control);
+  color: var(--text);
+  font-size: 12px;
+}
+.browser-address-row .icon-button { width: 28px; height: 28px; font-size: 15px; }
+
+/* The hole the native WebContentsView is pinned over. Nothing may paint on top
+   of it: the empty state below is what shows through while no page is loaded,
+   and it is hidden the moment one is. */
+.browser-surface { position: relative; flex: 1; min-height: 0; }
+.browser-empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  padding: 30px;
+  text-align: center;
+  color: var(--muted);
+}
+.browser-empty[hidden] { display: none; }
+.browser-empty h3 { margin: 0 0 9px; font-size: 17px; font-weight: 500; color: var(--text); }
+.browser-empty p { max-width: 270px; margin: 0; font-size: 12px; line-height: 1.7; }
+
+.browser-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  gap: 8px;
+  height: 26px;
+  padding: 0 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+}
+.browser-bottom span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.console-run {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 8px;
+  padding: 8px;
+  border-block: 1px solid var(--line);
+}
+.console-run input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--control);
+  color: var(--text);
+  font: 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.console-jobs { flex: 1; min-height: 0; overflow: auto; }
+.console-empty { margin: 0; padding: 28px 18px; color: var(--muted); font-size: 12px; line-height: 1.8; text-align: center; }
+.console-job { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.console-job > header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.console-job-origin {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--secondary);
+  font-size: 10px;
+  line-height: 1.6;
+}
+/* A job the Being started is the one the bridge may also read and stop. */
+.console-job-origin[data-origin="being"] { background: color-mix(in srgb, #b39051 22%, var(--surface)); color: var(--text); }
+.console-job-command {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 12px ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.console-job-status { flex-shrink: 0; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.console-job > header .text-button { margin-left: 0; }
+.console-job-cwd { margin: 6px 0 0; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.console-job-output {
+  margin: 7px 0 0;
+  max-height: 210px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 11px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: var(--secondary);
+  tab-size: 4;
+}
+.console-job-output:empty { display: none; }
+.console-job-note { margin: 6px 0 0; color: var(--muted); font-size: 10px; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

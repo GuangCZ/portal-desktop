@@ -27,8 +27,9 @@
 // window is closing is refused rather than applied. The panel's layout call
 // already swallows its own failures, and 0.8.26 had no guard on `setBrowserView`
 // at all — see docs/migration/i2-tools.md「决定与偏差」.
+import { IDLE_TOOLS_STATE } from '../../shared/tools-types';
 import type {
-  DesktopToolsBrowserState, DesktopToolsState,
+  DesktopToolsBrowserState, DesktopToolsPane, DesktopToolsState,
 } from '../../shared/tools-types';
 import type { DesktopTools } from './desktop-tools';
 
@@ -142,17 +143,6 @@ function actionValue(action: ToolsActionName, value: unknown): unknown {
   }
 }
 
-/** The snapshot shown before anything exists. Same shape as a live one, so the
- * panel never branches on "not ready yet". */
-export const IDLE_TOOLS_STATE: DesktopToolsState = {
-  browser: { tabs: [], activeTabId: null, visible: false },
-  console: { shell: '', limits: { maxConcurrent: 0, maxOutputBytes: 0, maxJobs: 0 }, jobs: [] },
-  link: { status: 'disconnected', error: '', lastCall: null, calls: 0, pending: [] },
-  workspace: '',
-  requestResult: null,
-  requests: [],
-};
-
 export function registerToolsIpc({ handle, tools, clipboard, blocked }: ToolsIpcOptions) {
   const require = (): DesktopTools => {
     const current = tools();
@@ -204,5 +194,9 @@ export interface ToolsPushTarget { send(channel: string, payload: unknown): void
 export function toolsPush(target: () => ToolsPushTarget | null) {
   return {
     state: (payload: DesktopToolsState) => { target()?.send('beings:tools-state', payload); },
+    /** BeingDesktop opens the panel by evaluating `window.beingTools.show(mode)`
+     * in the renderer (src/main.cjs lines 1701, 1708). There is no such back
+     * channel here, so the same intent is a push and the panel opens itself. */
+    reveal: (pane: DesktopToolsPane) => { target()?.send('beings:tools-reveal', pane); },
   };
 }

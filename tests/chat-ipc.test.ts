@@ -10,7 +10,8 @@ import { expect, test } from "vitest";
 import { createTrustedHandle } from "../desktop/main/app/ipc";
 import { sceneId } from "../desktop/main/chat/being-chat";
 import { beingIdentityKey } from "../desktop/main/chat/connection";
-import { installDesktopExtensions } from "../desktop/main/extensions";
+import { installSubsystems } from "../desktop/main/extensions";
+import { installChatSubsystem } from "../desktop/main/subsystems/chat";
 import { chatErrorEnvelope, chatErrorFromEnvelope, isChatErrorEnvelope } from "../desktop/shared/chat-errors";
 import { publicErrorMessage } from "../desktop/shared/errors";
 import type { Connection } from "../desktop/main/chat/connection";
@@ -73,11 +74,21 @@ async function fixture({ desktopId = DESKTOP, address = ADDRESS }: { desktopId?:
     quitting: () => quitting, recoveryBlocked: () => false,
     report: (_channel, error) => publicErrorMessage(error),
   });
-  const extensions = installDesktopExtensions({
+  // The real registry, with the real chat installer, and only that one.
+  //
+  // It used to be `installDesktopExtensions`, which runs the whole `INSTALLERS`
+  // list. That made this file's two exact assertions — the registered channel
+  // set, and the reported error scopes — grow a term every time another
+  // integration unit landed a subsystem, and neither of them is about the other
+  // subsystems: they are about what the conversation layer registers and what it
+  // reports. `installSubsystems` is exported for precisely this (see its comment
+  // in desktop/main/extensions.ts), so the machinery under test is still
+  // production's, with one installer in it. I2, 2026-09-16.
+  const extensions = installSubsystems({
     handle, exclusive: operation => operation(),
     window: () => window, store, secretStorage, userData: directory, desktopId,
     clientVersion: "0.9.0", fetchImpl, onError: (scope, error) => { errors.push({ scope, error }); },
-  });
+  }, [installChatSubsystem]);
   // The application only ever notifies after `verifyBeingConnection` resolved,
   // which is exactly when the address it verified is the one saved in the store.
   const connect = async (value = address) => {

@@ -148,6 +148,7 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
   const showBrowser = () => {
     if (!live()) throw new Error('桌面窗口已关闭。');
     push.state(tools!.snapshot());
+    push.reveal('browser');
   };
 
   try {
@@ -190,6 +191,9 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
         const peer = terminalPeer();
         if (!peer) throw new Error('本版本的交互终端尚未就绪。');
         if (!live()) throw new Error('桌面窗口已关闭。');
+        // 0.8.26 opens the console pane first, then asks the terminal panel to
+        // select the session (src/main.cjs line 1701).
+        push.reveal('console');
         await peer.reveal(terminalId);
       },
       desktopPortalName,

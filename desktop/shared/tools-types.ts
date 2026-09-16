@@ -134,6 +134,26 @@ export interface DesktopToolsViewport {
   bounds: { x: number; y: number; width: number; height: number };
 }
 
+/** The snapshot shown before anything exists — no Being bound, the bridge still
+ * installing, or its installation failed. Same shape as a live one, so neither
+ * the main process nor the panel ever branches on "not ready yet".
+ *
+ * It lives here rather than in either half because both need it and they must
+ * agree: `desktop/main/tools/ipc.ts` answers with it, and the renderer model
+ * starts from it. Frozen so a caller cannot hand a mutated copy on. */
+export const IDLE_TOOLS_STATE: DesktopToolsState = Object.freeze({
+  browser: Object.freeze({ tabs: Object.freeze([]) as unknown as DesktopToolsBrowserTab[], activeTabId: null, visible: false }),
+  console: Object.freeze({ shell: '', limits: Object.freeze({ maxConcurrent: 0, maxOutputBytes: 0, maxJobs: 0 }), jobs: Object.freeze([]) as unknown as DesktopConsoleJob[] }),
+  link: Object.freeze({ status: 'disconnected', error: '', lastCall: null, calls: 0, pending: Object.freeze([]) as unknown as DesktopToolLinkState['pending'] }),
+  workspace: '',
+  requestResult: null,
+  requests: Object.freeze([]) as unknown as DesktopToolsRequest[],
+});
+
+/** The panel's two halves. `console` is the local-command pane; the interactive
+ * terminal that shares it belongs to another subsystem. */
+export type DesktopToolsPane = 'browser' | 'console';
+
 export interface DesktopToolsAPI {
   /** The current snapshot. Safe before anything is connected: it answers with the
    * idle shape rather than refusing. */
@@ -145,4 +165,10 @@ export interface DesktopToolsAPI {
   /** The system clipboard's text, truncated to 65536 characters as 0.8.26 does. */
   readText(): Promise<string>;
   onState(callback: (state: DesktopToolsState) => void): () => void;
+  /** The main process asking for the panel. BeingDesktop drives this by running
+   * `window.beingTools.show(mode)` inside the renderer (src/main.cjs lines 1701
+   * and 1708); this shell has no such back channel, so the same intent arrives as
+   * a push. Sent when a Worker's result is about to appear in the tool browser,
+   * and when a Being's `desktop_terminal_show` asks for the console. */
+  onReveal(callback: (mode: DesktopToolsPane) => void): () => void;
 }

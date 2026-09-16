@@ -26,6 +26,24 @@ import type { DesktopAPI } from "../desktop/shared/types";
 const Nothing = () => null;
 const app = {} as AppModel;
 
+/** What this build's integration units registered at import time, captured before
+ * any case empties the arrays.
+ *
+ * The case below used to assert all four were empty —「ships empty, so the shell
+ * renders exactly what it did before any unit landed」— which was true only until
+ * the first unit landed one. What is worth pinning now is that the arrays are a
+ * REGISTRY and not a free-for-all: every key unique, every entry complete, and
+ * the set visible in one place so an accidental registration shows up here rather
+ * than as a second panel in the window. Each unit adds its own key to these
+ * lists. I2, 2026-09-16. */
+const REGISTERED = {
+  panels: PANEL_SLOTS.map(slot => slot.key),
+  sidebar: SIDEBAR_SLOTS.map(slot => slot.key),
+  topbar: TOPBAR_SLOTS.map(slot => slot.key),
+  sheets: SHEET_SLOTS.map(slot => slot.key),
+  models: FEATURE_MODELS.map(factory => factory.key),
+};
+
 afterEach(() => {
   PANEL_SLOTS.length = 0;
   SIDEBAR_SLOTS.length = 0;
@@ -42,8 +60,10 @@ const action = (key: string, order: number): TopbarSlot => ({ key, order, Action
 const sheet = (key: string, view: string): SheetSlot => ({ key, view, Sheet: Nothing });
 
 describe("the renderer slot registry", () => {
-  it("ships empty, so the shell renders exactly what it did before any unit landed", () => {
-    expect([PANEL_SLOTS, SIDEBAR_SLOTS, TOPBAR_SLOTS, SHEET_SLOTS].map(list => list.length)).toEqual([0, 0, 0, 0]);
+  it("registers exactly the surfaces this build's units landed, each key once", () => {
+    expect(REGISTERED).toEqual({ panels: ["tools"], sidebar: [], topbar: ["tools"], sheets: [], models: ["tools"] });
+    for (const list of [REGISTERED.panels, REGISTERED.sidebar, REGISTERED.topbar, REGISTERED.sheets, REGISTERED.models])
+      expect(new Set(list).size).toBe(list.length);
   });
 
   it("orders by `order` then `key`, whichever order the branches appended in", () => {
@@ -119,9 +139,12 @@ const register = <K extends keyof AppFeatureModels>(key: K, model: AppFeatureMod
 };
 
 describe("the renderer feature-model registry", () => {
-  it("ships empty, so the shell builds exactly the models it did before any unit landed", () => {
+  it("builds exactly the models this build's units registered, and nothing else", () => {
+    // `FEATURE_MODELS` is emptied by the afterEach above, so by this point it
+    // holds whatever the previous case pushed — nothing. What the registry
+    // landed at import is `REGISTERED.models`, asserted in the first case.
     expect(FEATURE_MODELS).toEqual([]);
-    expect(new AppModel(desktop()).features).toEqual({});
+    expect(Object.keys(new AppModel(desktop()).features)).toEqual([]);
   });
 
   // The point of the whole case: a model registered here gets the same lifecycle
