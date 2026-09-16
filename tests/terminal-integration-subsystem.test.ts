@@ -13,6 +13,8 @@
 //    must fail with BeingDesktop's own sentence and stay usable afterwards.
 //  · the REVEAL handshake end to end: the pushes, the answer, and the two ways it
 //    refuses.
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -45,8 +47,8 @@ class FakePty implements PtyLike {
 
 function fixture({ pty = true, settings = {} as Partial<Settings> }: { pty?: boolean; settings?: Partial<Settings> } = {}) {
   const spawned: FakePty[] = [];
-  // The production mechanism, not a constructor parameter: `main.ts` calls
-  // `registerNodePty()`, which is the only caller of this in the application.
+  // The mechanism the integration phase registers the real module through
+  // (`setDefaultPtyFactory`), standing in for it until `registerNodePty()` lands.
   setDefaultPtyFactory(pty ? () => ({ spawn: (_file: string, _args: string[] | string, options: PtySpawnOptions) => { const handle = new FakePty(options); spawned.push(handle); return handle; } }) : null);
   const handlers = new Map<string, (event: any, ...args: any[]) => Promise<unknown>>();
   const pushes: { channel: string; payload: any }[] = [];
@@ -91,8 +93,9 @@ describe("terminal subsystem", () => {
     const f = fixture({ settings: { projectWorkspace: path.resolve(dirname, ".."), workspace: "/nowhere" } });
     try {
       const created = await f.act("create", {}) as TerminalCreateState;
-      // The Desktop project directory wins over the Portal one, which is what
-      // `state.workspace.path` was in 0.8.26.
+      // The Desktop PROJECT directory — 0.8.26's `state.workspace.path` — and
+      // never the Portal working directory beside it, which is where the engine
+      // runs and which need not exist.
       expect(created.sessions[0].cwd).toBe(path.resolve(dirname, ".."));
       // `being:terminal-state` on every change (src/main.cjs line 1711).
       expect(f.pushes.filter(push => push.channel === "beings:terminal-state").length).toBeGreaterThan(0);
@@ -105,25 +108,28 @@ describe("terminal subsystem", () => {
     } finally { await f.cleanup(); }
   });
 
-  it("falls back to the Portal workspace, and to the home directory when neither is set", async () => {
-    const portal = fixture({ settings: { workspace: path.resolve(dirname, "..") } });
+  it("opens in the home directory when no project is chosen, never in the Portal workspace", async () => {
+    // The regression a packaged smoke run found on 2026-09-16: `settings
+    // .workspace` defaults to `~/Being Desktop Workspace` and is not created
+    // until the user saves connection settings, so using it as a fallback made
+    // every terminal on a fresh profile refuse with
+    //「终端工作目录不存在或无法访问。」.
+    const f = fixture({ settings: { workspace: path.join(os.homedir(), "Being Desktop Workspace") } });
     try {
-      expect((await portal.act("create", {}) as TerminalCreateState).sessions[0].cwd).toBe(path.resolve(dirname, ".."));
-    } finally { await portal.cleanup(); }
-    const neither = fixture();
-    try {
-      // `DesktopTerminal.create` resolves `os.homedir()` when the workspace is
-      // empty; asserting it is a real absolute directory is the whole claim.
-      const created = await neither.act("create", {}) as TerminalCreateState;
-      expect(path.isAbsolute(created.sessions[0].cwd)).toBe(true);
-    } finally { await neither.cleanup(); }
+      const created = await f.act("create", {}) as TerminalCreateState;
+      expect(created.sessions[0].cwd).toBe(await fs.realpath(os.homedir()));
+    } finally { await f.cleanup(); }
   });
 
   it("without a pty module it refuses with BeingDesktop's own sentence and stays usable", async () => {
+    // Integration plan §5.8's degradation, and the state this commit ships in:
+    // nothing is registered, so `DesktopTerminal` fails inside the same try block
+    // a failed `require('node-pty')` failed in.
     const f = fixture({ pty: false });
     try {
-      // The message a failed `require('node-pty')` produced in 0.8.26, unchanged:
-      // the shell name comes from the platform, so match the invariant half.
+      // The message a failed `require('node-pty')` produced in 0.8.26, unchanged;
+      // the shell name comes from the platform, so the invariant half is what is
+      // matched.
       await expect(f.act("create", {})).rejects.toThrow(/交互终端，请检查终端组件与系统安装。$/);
       // Nothing was half-created, the create slot was released, and the channels
       // still answer — the panel shows an empty stage, not a broken client.

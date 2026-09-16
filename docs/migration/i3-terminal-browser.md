@@ -270,3 +270,135 @@ IPC 以「内置浏览器在当前运行环境不可用。」拒绝。
 ### D5 · 通道命名
 外壳浏览器已经占了 `beings:browser-*`（`browser-state/-action/-bounds/-open`）。
 工具浏览器用 `beings:tool-browser-*`，与 I2 计划的 `beings:tools-*` 也不撞。
+
+### D6 · 终端工作目录取 `projectWorkspace`，不回退到 `workspace`（**实测推翻方案 §3.3**）
+
+方案 §3.3 写的是 `getWorkspace: () => ctx.store.settings.projectWorkspace || ctx.store.settings.workspace`。
+**打包冒烟实测（2026-09-16）：这样每个新档案的终端都开不起来。**
+`settings.workspace` 是 **Portal 的工作目录**，默认值是 `~/Being Desktop Workspace`（`app/settings.ts:44`），
+而这个目录要等用户保存过一次连接设置才会被 `mkdir`。于是 `DesktopTerminal.create()` 的 `realpath` 失败，
+抛「终端工作目录不存在或无法访问。」。
+BD 的 `state.workspace.path` 对应的是本仓库的 `projectWorkspace`（`shared/types.ts` 注释写明），
+两者语义也不同：一个是引擎跑在哪，一个是用户在做什么。
+**改为只取 `projectWorkspace`，为空时由 `DesktopTerminal.create()` 回退到 `os.homedir()`——与 BD 完全一致。**
+
+### D7 · 两处既有测试的最小改动（不是弱化，是把断言指向它自己的主体）
+
+1. `tests/chat-ipc.test.ts`：fixture 从 `installDesktopExtensions`（跑真实 `INSTALLERS`）改成
+   `installSubsystems(ctx, [installChatSubsystem])`。
+   原因：该文件第 111 行 `expect([...f.handlers.keys()]).toEqual(CHANNELS)` 断言的是**对话层**的通道集合，
+   任何单元落地都会让它把别人的通道也算进来。改成只装它自己的子系统后，断言强度**一字未减**，
+   而且对后面四个单元免疫。**I1/I2/I4/I6 不需要再改这个文件。**
+2. `tests/renderer-slots.test.ts`：两条「ships empty」改成「carries exactly the surfaces the landed units
+   registered」，并在模块加载时把 `PANEL_SLOTS` 等四个数组与 `FEATURE_MODELS` 的初始内容快照进 `LANDED`
+   （`afterEach` 会清空这些共享数组，第二个 describe 里已经读不到了）。
+   断言从「是空的」变成「恰好是已落地单元注册的这些」——更强，不是更弱。
+   **后续单元落地时只需在这两处各加自己的 key。**
+
+---
+
+## 3. 产出清单
+
+### 3.1 独占新文件
+
+| 文件 | 内容 |
+| --- | --- |
+| `desktop/main/subsystems/terminal.ts` | `installTerminalSubsystem`；装配、reveal、quitting |
+| `desktop/main/subsystems/tool-browser.ts` | `installToolBrowserSubsystem`；`DesktopBrowser` 实例的唯一所有者 |
+| `desktop/main/tools/terminal/ipc.ts` | `registerTerminalIpc` / `terminalPush` / `createRevealGate` / `REVEAL_TIMEOUT_MS` / `TERMINAL_UNAVAILABLE` |
+| `desktop/main/tools/browser/ipc.ts` | `registerToolBrowserIpc` / `toolBrowserPush` / `TOOL_BROWSER_UNAVAILABLE` |
+| `desktop/main/tools/terminal/node-pty.ts` | `registerNodePty()`——全树唯一 `require('node-pty')`（第二个提交） |
+| `desktop/preload/channels/terminal.ts` | `terminal: TerminalAPI` |
+| `desktop/preload/channels/tool-browser.ts` | `toolBrowser: ToolBrowserAPI` |
+| `desktop/shared/terminal-types.ts` | `TerminalAPI` 与 DTO |
+| `desktop/shared/tool-browser-types.ts` | `ToolBrowserAPI` 与 DTO（全部 `ToolBrowser*` 前缀，避开外壳浏览器的 `Browser*`） |
+| `desktop/renderer/terminal/models/terminal.ts` | `TerminalModel` + `terminalModelFactory` |
+| `desktop/renderer/terminal/components/{stage,tabs,panel}.tsx` | xterm 实例 / 标签条 / 面板 |
+| `desktop/renderer/terminal/slot.tsx` | `terminalPanelSlot`、`terminalTopbarSlot` |
+| `desktop/renderer/terminal/styles.css` | 面板样式（类名沿用 BD） |
+| `desktop/renderer/tool-browser/models/tool-browser.ts` | `ToolBrowserModel` + `toolBrowserModelFactory` |
+| `desktop/renderer/tool-browser/components/panel.tsx` | 标签条 + 地址栏 + 视口占位 |
+| `desktop/renderer/tool-browser/slot.tsx`、`styles.css` | 插槽与样式 |
+| `tests/terminal-integration-ipc.test.ts` | 9 条 |
+| `tests/terminal-integration-subsystem.test.ts` | 5 条 |
+| `tests/tool-browser-integration.test.ts` | 6 条 |
+| `tests/terminal-panel-model.test.ts` | 12 条 |
+| `tests/terminal-e2e.mjs` | 打包客户端的真机 E2E（方案 §6.2，第二个提交） |
+
+### 3.2 IPC 通道清单
+
+| 通道 | 方向 | payload | 备注 |
+| --- | --- | --- | --- |
+| `beings:terminal` | invoke | → `TerminalState` | 无终端时答空快照，不拒绝 |
+| `beings:terminal-read` | invoke `(id)` | → `TerminalReplay` | 回放 ≤1MB；`sequence` 与 data 事件共用 |
+| `beings:terminal-action` | invoke `(action, value)` | → `TerminalState`（`create` 额外带 `sessionId`） | create/write/resize/activate/close；未知动作抛「未知终端操作。」 |
+| `beings:terminal-revealed` | invoke `({id, shown})` | → void | 渲染层对 reveal 的回执 |
+| `beings:terminal-state` | push | `TerminalState` | `DesktopTerminal.onChange` |
+| `beings:terminal-data` | push | `TerminalData` | `DesktopTerminal.onData` |
+| `beings:terminal-reveal` | push | `{id}` | 主进程请求面板展示；2s 无回执即失败 |
+| `beings:tool-browser` | invoke | → `ToolBrowserState` | 同上，不可用时答空快照 |
+| `beings:tool-browser-action` | invoke `(action, value)` | → `ToolBrowserState` | new/activate/close/navigate/back/forward/reload/stop；未知动作抛「未知浏览器操作。」 |
+| `beings:tool-browser-viewport` | invoke `({visible, bounds?})` | → `ToolBrowserState` | 面板占位矩形 |
+| `beings:tool-browser-state` | push | `ToolBrowserState` | `DesktopBrowser.onChange` |
+
+校验分工：**白名单（未知字段、非 plain 对象、原型污染）在 IPC 层**；
+**上限与语法（8 会话 / 64KiB / 2..500×1..200 / 16 标签 / 地址语法 / 矩形范围）留在 `DesktopTerminal` 与
+`DesktopBrowser`**，它们的文案原样到达渲染层，不在上层复述。
+来源校验与 quitting 守卫由 `ctx.handle`（`createTrustedHandle`）继承，不重写。
+
+### 3.3 装配点
+
+- `desktop/main/extensions.ts` 的 `INSTALLERS`：`installTerminalSubsystem`、`installToolBrowserSubsystem`。
+- 终端：`new DesktopTerminal({ getWorkspace, onChange → beings:terminal-state, onData → beings:terminal-data })`，
+  environment / platform / shellPath 用默认（对照 `src/main.cjs:1710-1712`）。
+  `quitting()` → `dispose()`（对照 `src/main.cjs:1615`，终端先于工具）。
+- 工具浏览器：`new DesktopBrowser({ WebContentsView: ctx.electron.WebContentsView as BrowserViewConstructor,
+  session: ctx.electron.session as BrowserSessionFactory, getWindow: ctx.window, onChange → beings:tool-browser-state })`。
+  `quitting()` → `destroy()`。两个 `as` 是 i0-seams §A 指定的用法（这两个成员声明为 `unknown`）。
+  **不 import `tools/browser/electron-host.ts`**：`tests/architecture.test.ts` 禁止 `main/subsystems/` 直接 import electron。
+
+### 3.4 共享文件触碰行（逐行）
+
+| 文件 | 加的行 |
+| --- | --- |
+| `desktop/main/extensions.ts` | `import { installTerminalSubsystem } from './subsystems/terminal';` |
+| | `import { installToolBrowserSubsystem } from './subsystems/tool-browser';` |
+| | `INSTALLERS` 内：`  installTerminalSubsystem,` |
+| | `INSTALLERS` 内：`  installToolBrowserSubsystem,` |
+| `desktop/preload/channels/index.ts` | `import { terminal } from './terminal';` |
+| | `import { toolBrowser } from './tool-browser';` |
+| | `desktopChannels` 内：`  terminal,` |
+| | `desktopChannels` 内：`  toolBrowser,` |
+| `desktop/shared/desktop-types.ts` | `export * from './terminal-types';` |
+| | `export * from './tool-browser-types';` |
+| `desktop/shared/types.ts` | `import type { TerminalAPI, ToolBrowserAPI } from './desktop-types';`（单独一行，不改既有 import 行） |
+| | `DesktopAPI` 内：注释 1 行 + `  terminal: TerminalAPI;` |
+| | `DesktopAPI` 内：注释 1 行 + `  toolBrowser: ToolBrowserAPI;` |
+| `desktop/renderer/app/slots.tsx` | `import { terminalPanelSlot, terminalTopbarSlot } from '../terminal/slot';` |
+| | `import { toolBrowserPanelSlot, toolBrowserTopbarSlot } from '../tool-browser/slot';` |
+| | `PANEL_SLOTS` 内：`  terminalPanelSlot,` / `  toolBrowserPanelSlot,` |
+| | `TOPBAR_SLOTS` 内：`  terminalTopbarSlot,` / `  toolBrowserTopbarSlot,` |
+| `desktop/renderer/app/models/registry.ts` | `import { terminalModelFactory } from '../../terminal/models/terminal';` |
+| | `import { toolBrowserModelFactory } from '../../tool-browser/models/tool-browser';` |
+| | `FEATURE_MODELS` 内：`  terminalModelFactory,` / `  toolBrowserModelFactory,` |
+| `MIGRATION.md` | 表格一行 |
+
+另外改了两个既有测试文件（见 D7）：`tests/chat-ipc.test.ts`、`tests/renderer-slots.test.ts`。
+
+**注意**：model 工厂放在 model 文件里而不是 `slot.tsx` 里，是为了让 `app/models/registry.ts`
+（`AppModel` 会 import 它）不把 React 组件拖进 model 图——`tests/architecture.test.ts` 的
+「models/services 不 import components/hooks/react」是按直接边判定的，但这条是它的用意。
+
+---
+
+## 4. 门槛与真机
+
+### 4.1 第一个提交（骨架，pty 工厂不注册）
+
+- `npm run typecheck` 退出码 0。
+- `npx vitest run`：**100 文件通过 / 8 跳过，1103 通过 / 58 跳过**。
+  对照基线（9794cab）96/8、1071/58 → 净增 **32** 条，全部是本单元新增；没有删除或跳过任何既有用例。
+- `tests/architecture.test.ts` 八条全绿（含新目录 `main/subsystems/terminal.ts`、`main/subsystems/tool-browser.ts`
+  不 import electron 这一条）。
+- 「未注入 pty」的优雅失败路径有专门用例：`tests/terminal-integration-subsystem.test.ts` 的
+  「without a pty module it refuses with BeingDesktop's own sentence and stays usable」。

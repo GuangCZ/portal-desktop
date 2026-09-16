@@ -6,13 +6,14 @@
 // `shellPath` are left at their defaults there and are left at their defaults
 // here. Teardown is line 1615: the terminal is disposed before the tool bridge.
 //
-// The pty factory is NOT registered here. `tools/terminal/node-pty.ts` is the one
-// file that reaches for the native module, and main.ts calls it (integration plan
-// §5.8: the panel, the channels and the browser land first, the native module
-// lands in its own commit). Without it every `create` fails with BeingDesktop's
-// own message —「无法启动 … 交互终端，请检查终端组件与系统安装。」— which is exactly
-// what a failed `require('node-pty')` produced in 0.8.26, and the tool bridge
-// drops `desktop_terminal_*` from its catalogue on its own (`DesktopTools`'s
+// The pty factory is NOT registered here yet. `tools/terminal/node-pty.ts` — the
+// one file that reaches for the native module — lands in the next commit
+// (integration plan §5.8: the channels, the panel and the browser ship first, so
+// a platform that cannot build node-pty still gets everything else). Until then
+// every `create` fails with BeingDesktop's own message —「无法启动 … 交互终端，
+// 请检查终端组件与系统安装。」— which is exactly what a failed
+// `require('node-pty')` produced in 0.8.26, and the tool bridge drops
+// `desktop_terminal_*` from its catalogue on its own (`DesktopTools`'s
 // `toolAllowed` gates on `Boolean(getTerminal())`).
 //
 // `reveal` replaces BeingDesktop's `showTerminal` (line 1697), which reached into
@@ -47,11 +48,19 @@ export function installTerminalSubsystem(ctx: SubsystemContext): TerminalSubsyst
   let terminal: DesktopTerminal | null = null;
   try {
     terminal = new DesktopTerminal({
-      // BeingDesktop's `state.workspace.path` is this shell's Desktop project
-      // directory; `workspace` is the Portal one, used when no project is chosen
-      // (shared/types.ts `Settings`). `create()` falls back to the home directory
-      // when both are empty, exactly as 0.8.26 does.
-      getWorkspace: () => ctx.store.settings.projectWorkspace || ctx.store.settings.workspace || '',
+      // BeingDesktop's `state.workspace.path`, which this shell keeps as
+      // `projectWorkspace` (shared/types.ts `Settings`). Empty means the home
+      // directory — `DesktopTerminal.create` does that, as 0.8.26 did.
+      //
+      // DEVIATION from integration plan §3.3, which suggested
+      // `projectWorkspace || workspace`. MEASURED: `settings.workspace` is the
+      // PORTAL working directory and defaults to `~/Being Desktop Workspace`
+      // (app/settings.ts line 44), a path that is not created until the user
+      // saves connection settings. Falling back to it made every terminal on a
+      // fresh profile fail with「终端工作目录不存在或无法访问。」, which is what a
+      // packaged smoke run showed on 2026-09-16. It is also not the same folder:
+      // one is where the engine runs, the other is what the user is working on.
+      getWorkspace: () => ctx.store.settings.projectWorkspace || '',
       onChange: snapshot => push.state(snapshot),
       onData: chunk => push.data(chunk),
     });
