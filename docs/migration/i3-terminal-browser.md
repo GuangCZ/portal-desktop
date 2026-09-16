@@ -227,3 +227,46 @@ disableStdin:readonly, drawBoldTextInBrightColors:false, minimumContrastRatio:1,
 
 - `npm run typecheck` 退出码 0。
 - `npx vitest run`：**96 文件通过 / 8 跳过，1071 通过 / 58 跳过（共 1129）**。
+
+---
+
+## 2. 决定与偏差
+
+### D1 · `DesktopBrowser` 实例的归属（**跨单元约定，I2 合回时必须处理**）
+
+方案 §3.3 的独占文件清单与 IPC 表里**没有任何 browser 条目**，而 §3.2 的 I2 装配段把
+`Browser: DesktopBrowser` 传给 `DesktopTools`，由它在构造体里 `new Browser({...})`。
+但本单元的任务书明确要求「DesktopBrowser 与 DesktopTerminal 的子系统」，定案 5.6 也把工具浏览器定在 `PANEL_SLOTS` 的面板区。
+
+**决定**：I3 建 `tool-browser` 子系统，它是 `DesktopBrowser` 实例的**唯一所有者**，并通过注册表暴露
+`registry.get('tool-browser')?.browser`。I3 负责它的 IPC、preload、面板与可见区域（含与 ClientBrowser 的分区隔离）。
+
+**给 I2 的一行式接法**（I2 本来就要动 `desktop-tools.ts` 做「类型对齐」，见方案 §3.2）：
+给 `DesktopToolsOptions` 加一个可选 `browser?: DesktopBrowserLike`，构造体改成
+`this.browser = browser ?? new Browser({WebContentsView, session, getWindow, onChange: () => this.changed()})`，
+I2 的子系统里传 `browser: ctx.registry.get('tool-browser')?.browser`（惰性拿不到就退回自己 new，行为不变）。
+**若 I2 直接 `new` 而不注入，会出现两个 `DesktopBrowser` 抢同一个 `BrowserWindow` 的 contentView，
+分区相同、`_syncView` 互相 detach——这是一个真实缺陷，不是合并噪声。** 已列进 openIssues。
+
+### D2 · `beings:terminal-action` 的 `create` 返回值
+BD 的 `terminalAction` 对所有动作一律 `return desktopTerminal.snapshot()`，
+于是 `renderer/terminal-panel.js:create()` 里的 `result?.sessionId` **恒为 undefined**（靠 `activeSessionId` 兜底）。
+移植时保留「返回 snapshot」，但在 create 分支额外带上 `sessionId`：返回 `{...snapshot(), sessionId}`。
+这是 BD 渲染层本来就想要的形状，不改变任何协议语义。
+
+### D3 · `showTerminal` 的回执
+BD 走 `win.webContents.executeJavaScript('window.beingTerminal.reveal(id)')` 取布尔回执。
+本壳层没有全局 `window.beingTerminal`，按方案改为：主进程 `activate(id)` → 推 `beings:terminal-state`
+→ 推 `beings:terminal-reveal {id}` → 等渲染层 invoke `beings:terminal-revealed {id, shown}`，**超时 2000ms**。
+未在时限内拿到 `shown:true` 则抛 BD 原文案「终端已创建，但面板尚未展示，请用终端列表和显示工具恢复。」。
+
+### D4 · 子系统不 import electron
+`tests/architecture.test.ts` 有一条「`main/subsystems/` 不得 `import 'electron'`」。
+因此 `tool-browser` 子系统**不 import `tools/browser/electron-host.ts`**，改为把 `ctx.electron.WebContentsView` /
+`ctx.electron.session`（声明为 `unknown`）在使用处 `as` 成 `BrowserViewConstructor` / `BrowserSessionFactory`——
+这正是 i0-seams §A 为这两个成员写的用法。缺席（测试上下文、非 Electron 环境）时不构造浏览器，
+IPC 以「内置浏览器在当前运行环境不可用。」拒绝。
+
+### D5 · 通道命名
+外壳浏览器已经占了 `beings:browser-*`（`browser-state/-action/-bounds/-open`）。
+工具浏览器用 `beings:tool-browser-*`，与 I2 计划的 `beings:tools-*` 也不撞。
