@@ -35,7 +35,7 @@ import type {
 } from '../tools/browser/host';
 import type { DesktopTerminalLike, OrchestrationLike, ToolResult } from '../tools/types';
 import { WorkerPresentation } from '../tools/worker-presentation';
-import { parseConnection } from '../common/loom-connection';
+import { parseConnection, sessionPartition } from '../common/loom-connection';
 import { desktopPortalName } from '../app/identity';
 import type { DesktopSubsystem, SubsystemContext } from './types';
 
@@ -135,6 +135,9 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
   let portalRequest: PortalRequestAdapter | null = null;
   let blocked = '';
   let closed = false;
+  /** The identity the link and the terminal scopes currently belong to, as
+   * `sessionPartition` names it. Empty until a Being has been verified. */
+  let identity = '';
 
   /** Whether the client is still in a state where showing something is sensible.
    * 0.8.26 checks `!exitStarted && win && !win.isDestroyed() && desktopTools`. */
@@ -266,17 +269,30 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
     connectionVerified() {
       // 0.8.26 does not open the relay when a Being is verified: the link is
       // connected by `connectOrchestration()` when orchestration mode is on, and
-      // by the panel's「连接 Being 工具」button otherwise. What a new binding does
-      // need is for the previous one's link, approval queue and remote job list
-      // to be gone — `disconnectLink` bumps the generation, which cancels every
-      // pending call with「工具连接已断开。」.
+      // by the panel's「连接 Being 工具」button otherwise.
+      //
+      // What it DOES do, and only when the identity actually changed, is drop
+      // everything the previous Being owned — `src/main.cjs` line 710 guards this
+      // with `sessionPartition(connection) !== sessionPartition(parsed)`. The
+      // guard is the whole behaviour, not an optimisation: this shell re-verifies
+      // on `beings:portal-start`, on `beings:save` and on a takeover preflight, so
+      // an unguarded disconnect would cut a live tool bridge every time someone
+      // started their Portal. `disconnectLink` bumps the generation, which cancels
+      // every queued call with「工具连接已断开。」, and `terminalTools.reset()`
+      // forgets the session scopes the previous Being's calls were bound to.
       if (closed || !tools) return;
-      try { tools.disconnectLink(); }
+      let next = '';
+      try { if (ctx.store.connectionAddress) next = sessionPartition(parseConnection(ctx.store.connectionAddress)); }
+      catch (error) { report('tools-connection', error); }
+      if (next && next === identity) return;
+      identity = next;
+      try { tools.disconnectLink(); tools.terminalTools.reset(); }
       catch (error) { report('tools-disconnect', error); }
     },
     async connectionCleared() {
       if (closed || !tools) return;
-      try { tools.disconnectLink(); }
+      identity = '';
+      try { tools.disconnectLink(); tools.terminalTools.reset(); }
       catch (error) { report('tools-disconnect', error); }
     },
     async quitting() {

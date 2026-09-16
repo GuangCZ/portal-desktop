@@ -18,7 +18,6 @@ import type { ToolsModel } from "../models/tools";
 export function ToolsBrowserBar({ model }: { model: ToolsModel }) {
   const host = useRef<HTMLDivElement>(null);
   const address = useRef<HTMLInputElement>(null);
-  const tabs = useRef<HTMLDivElement>(null);
   const active = model.activeTab;
 
   const send = () => {
@@ -33,9 +32,15 @@ export function ToolsBrowserBar({ model }: { model: ToolsModel }) {
   };
 
   // Sent after every layout that could have moved it: the panel opening, the
-  // mode changing, the divider dragging, a tab becoming active.
+  // mode changing, the divider dragging, a tab becoming active. The model drops a
+  // rectangle identical to the last one, so a render that changed nothing costs
+  // one measurement and no IPC.
   useLayoutEffect(send);
 
+  // Deliberately keyed on the model alone. `send` closes over two stable refs and
+  // the model, and reads everything else off it at call time, so the observers
+  // are installed once — re-creating a subtree MutationObserver on document.body
+  // every render would be a real cost.
   useEffect(() => {
     let scheduled = 0;
     const layout = () => {
@@ -60,12 +65,13 @@ export function ToolsBrowserBar({ model }: { model: ToolsModel }) {
       document.removeEventListener("visibilitychange", layout);
       cancelAnimationFrame(scheduled);
     };
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model]);
 
   return (
     <section className="tools-pane" id="tools-browser-pane" role="tabpanel" aria-labelledby="tools-browser-mode" hidden={model.mode !== "browser"}>
       <div className="browser-tab-strip">
-        <div className="browser-tabs" id="tools-browser-tabs" role="tablist" aria-label="网页标签" ref={tabs}>
+        <div className="browser-tabs" id="tools-browser-tabs" role="tablist" aria-label="网页标签">
           {model.state.browser.tabs.map((tab) => (
             <div className={`browser-tab${tab.id === model.state.browser.activeTabId ? " active" : ""}`} key={tab.id}>
               <button

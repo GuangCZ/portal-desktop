@@ -193,7 +193,7 @@ async function fixture({ connectionAddress = ADDRESS, workspace = "/tmp/fixture-
    * action caused has actually been sent. */
   const settle = () => new Promise<void>(resolve => setImmediate(resolve));
   return {
-    subsystem, handlers, pushes, errors, window, settle,
+    subsystem, handlers, pushes, errors, window, settle, context,
     setClipboard: (value: string) => { clipboardText = value; },
     // Async, as production is: `createTrustedHandle` wraps every callback in an
     // async function, so a handler that throws synchronously reaches the renderer
@@ -343,9 +343,46 @@ describe("the approval queue over IPC", () => {
     const call = request(f, "desktop_browser_open", { url: "https://example.test/from-being" });
     await f.settle();
     expect(((await f.call("beings:tools")) as DesktopToolsState).requests).toHaveLength(1);
+    // First verification of a different identity than the (empty) one held.
     f.subsystem.connectionVerified?.(null);
     await expect(call).rejects.toThrow("工具连接已断开。");
     expect(((await f.call("beings:tools")) as DesktopToolsState).requests).toEqual([]);
+  });
+
+  // Re-verifying the SAME Being must not cut a live bridge. This shell calls
+  // `connectionVerified` from `beings:portal-start`, `beings:save` and a takeover
+  // preflight as well as from startup, so an unguarded disconnect would drop the
+  // link every time someone started their Portal — 0.8.26 guards it on the
+  // session partition (src/main.cjs line 710).
+  it("leaves a live bridge alone when the same Being is verified again", async () => {
+    const f = await fixture();
+    f.subsystem.connectionVerified?.(null);
+    const call = request(f, "desktop_browser_open", { url: "https://example.test/from-being" });
+    await f.settle();
+    f.subsystem.connectionVerified?.(null);
+    f.subsystem.connectionVerified?.(null);
+    expect(((await f.call("beings:tools")) as DesktopToolsState).requests).toHaveLength(1);
+    // …and a different Being still cuts it.
+    f.subsystem.connectionVerified?.(null);
+    (f.context.store as { connectionAddress: string }).connectionAddress = "https://loom.example.test/other?token=another-token";
+    f.subsystem.connectionVerified?.(null);
+    await expect(call).rejects.toThrow("工具连接已断开。");
+  });
+
+  it("forgets the previous Being's terminal scopes when the identity changes", async () => {
+    const peer = new TerminalSubsystemFake();
+    const f = await fixture({ peers: { terminal: peer } });
+    f.subsystem.connectionVerified?.(null);
+    const tools = f.subsystem.tools!;
+    const scope = tools.terminalTools.scope("session-1");
+    await tools.terminalTools.invoke("desktop_terminal_create", { ...scope, requestId: "r-1" }, {});
+    expect(tools.terminalTools.sessions("session-1")).toHaveLength(1);
+    (f.context.store as { connectionAddress: string }).connectionAddress = "https://loom.example.test/other?token=another-token";
+    f.subsystem.connectionVerified?.(null);
+    // The scope is gone, so a retry with the old session token is refused as
+    // belonging to another desktop session.
+    await expect(tools.terminalTools.invoke("desktop_terminal_list", scope, {}))
+      .rejects.toThrow("终端调用不属于当前桌面会话，请使用当前消息中的会话绑定。");
   });
 });
 
