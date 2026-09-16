@@ -3,18 +3,43 @@
 // (`timestamp`, `age`, `ordered`, `metadata`, `render`'s grouping and
 // `renderSearch`); 2026-09-16. Behaviour rules: docs/sidebar-interaction.md.
 //
-// DEVIATION: 0.8.26 keeps this metadata in the main process, scoped by Being
-// connection and persisted in Desktop settings (`sidebarAction`, src/main.cjs
-// line 1139). There is no such channel in this shell yet, so the metadata lives
-// here, in memory, for the lifetime of the window — pins, projects and archives
-// are gone after a restart. The shapes are 0.8.26's so the persistence stage has
-// nothing to redesign.
+// The metadata itself belongs to the main process — 0.8.26 keeps it bucketed by
+// Being connection in settings.json (`sidebarAction`, src/main.cjs line 1139),
+// and this client does too since integration unit I6
+// (docs/migration/i6-shell-state.md). This model is the PROJECTION of it: while
+// a ledger is bound, `pin` / `archive` / `move` send the change and render what
+// comes back, and the entries below are replaced wholesale by
+// `applyLedger`. Nothing is applied optimistically: a refused change (the Being
+// switched, the profile could not be written) must leave the sidebar showing what
+// was actually saved, which is 0.8.26's rule too — its `mutate` only accepts the
+// state the main process answers with (renderer/sidebar.js line 36).
+//
+// With no ledger bound it keeps its own entries in memory, which is what a test
+// and a window with no bridge get.
 import { Store } from '../../shared/models/store';
-import type { ChatSessionSummary } from '../../../shared/desktop-types';
+import type { ChatSessionSummary, ShellSidebarAction, ShellSidebarState } from '../../../shared/desktop-types';
 
-export interface SessionMetadata { pinned: boolean; archived: boolean; project: string }
+export interface SessionMetadata {
+  pinned: boolean;
+  archived: boolean;
+  project: string;
+  /** Epoch milliseconds of the last explicit `touch`, or 0. It raises a
+   * conversation in the order without a message having arrived — filing a new one
+   * into a project is what does it (0.8.26 src/main.cjs line 1171). */
+  touchedAt: number;
+}
 
-const EMPTY: SessionMetadata = { pinned: false, archived: false, project: '' };
+/** Where a change goes while the main process owns the ledger. */
+export interface SidebarLedger { act(action: ShellSidebarAction): Promise<void> }
+
+/** The action minus the scope this model fills in. Distributed over the union,
+ * because a plain `Omit` of a union keeps only the keys every member shares —
+ * which would drop `id` and `project`, the two that carry the change. */
+type SidebarChange = ShellSidebarAction extends infer Action
+  ? Action extends ShellSidebarAction ? Omit<Action, 'scope'> : never
+  : never;
+
+const EMPTY: SessionMetadata = { pinned: false, archived: false, project: '', touchedAt: 0 };
 
 export const basename = (value: string) => value?.split(/[\\/]/).filter(Boolean).at(-1) || value || '项目';
 
@@ -23,11 +48,12 @@ const timestamp = (value: string | number | undefined) =>
 
 /** The newest thing that happened in a conversation. Opening one is not one of
  * them: "打开会话不会将它重新置顶" (docs/sidebar-interaction.md). */
-export const touched = (session: ChatSessionSummary) => timestamp(session.updatedAt || session.createdAt);
+export const touched = (session: ChatSessionSummary, touchedAt = 0) =>
+  Math.max(touchedAt, timestamp(session.updatedAt || session.createdAt));
 
 /** `刚刚` / `12分` / `3时` / `2天`, as the sidebar has always shown it. */
-export function age(session: ChatSessionSummary, now = Date.now()): string {
-  const at = touched(session);
+export function age(session: ChatSessionSummary, now = Date.now(), touchedAt = 0): string {
+  const at = touched(session, touchedAt);
   if (!at) return '';
   const minutes = Math.max(0, Math.floor((now - at) / 60000));
   return minutes < 1 ? '刚刚' : minutes < 60 ? `${minutes}分` : minutes < 1440 ? `${Math.floor(minutes / 60)}时` : `${Math.floor(minutes / 1440)}天`;
@@ -42,9 +68,16 @@ export interface SessionGroups {
 export class OrganizerModel extends Store {
   /** Only conversations the user has done something to appear here. */
   private entries = new Map<string, SessionMetadata>();
-  /** The project folders the sidebar offers. One in this shell: the workspace
-   * the connection settings name (0.8.26's own fallback, sidebar.js line 117). */
+  /** The project folders the sidebar offers, in the order they were added. */
   projects: string[] = [];
+  /** The Being the current entries belong to, as the main process named it. It
+   * travels with every change so a stale one is refused rather than applied. */
+  scope = '';
+  private ledger: SidebarLedger | null = null;
+
+  /** Whether changes are being saved. False means this is a window with no
+   * bridge, and the sidebar says so rather than pretending. */
+  get persistent() { return this.ledger !== null; }
 
   metadata(id: string): SessionMetadata { return this.entries.get(id) || EMPTY; }
 
@@ -55,15 +88,69 @@ export class OrganizerModel extends Store {
     this.changed();
   }
 
+  /** The ledger the main process just saved. Replaces everything: a task that is
+   * no longer in it has no metadata, which is how removing a project folder
+   * unfiles its conversations in one push. */
+  applyLedger(state: ShellSidebarState) {
+    this.scope = state.scope;
+    this.projects = [...state.projects];
+    this.entries = new Map(Object.entries(state.tasks).map(([id, task]) => [id, { ...EMPTY, ...task }]));
+    this.changed();
+  }
+
+  bindLedger(ledger: SidebarLedger | null) {
+    this.ledger = ledger;
+    this.changed();
+  }
+
   private patch(id: string, change: Partial<SessionMetadata>) {
     this.entries.set(id, { ...this.metadata(id), ...change });
     this.changed();
   }
 
-  pin(id: string) { this.patch(id, { pinned: !this.metadata(id).pinned }); }
-  archive(id: string) { this.patch(id, { archived: !this.metadata(id).archived }); }
-  move(id: string, project: string) { this.patch(id, { project }); }
+  /** Send the change, or — with no ledger — apply the same rule locally. The two
+   * branches must agree, so the local one reproduces the reducer's exclusions:
+   * pinning un-archives and archiving un-pins (main/shell/sidebar-state.ts). */
+  private change(action: SidebarChange, local: () => void): Promise<void> {
+    if (!this.ledger) { local(); return Promise.resolve(); }
+    return this.ledger.act({ ...action, scope: this.scope } as ShellSidebarAction);
+  }
+
+  pin(id: string): Promise<void> {
+    const value = this.metadata(id);
+    return this.change({ type: 'pin', id }, () => this.patch(id, { pinned: !value.pinned, archived: value.pinned ? value.archived : false }));
+  }
+
+  archive(id: string): Promise<void> {
+    const value = this.metadata(id);
+    return this.change({ type: 'archive', id }, () => this.patch(id, { archived: !value.archived, pinned: value.archived ? value.pinned : false }));
+  }
+
+  move(id: string, project: string): Promise<void> {
+    return this.change({ type: 'move', id, project }, () => this.patch(id, { project }));
+  }
+
+  /** Raise a conversation in the order without anything having been said in it.
+   * 0.8.26 files a newly created conversation this way. */
+  touch(id: string): Promise<void> {
+    return this.change({ type: 'touch', id }, () => this.patch(id, { touchedAt: Date.now() }));
+  }
+
+  /** Take a folder out of the sidebar. The folder and its files are untouched;
+   * conversations filed under it become standalone. */
+  removeProject(project: string): Promise<void> {
+    return this.change({ type: 'remove-project', project }, () => {
+      this.projects = this.projects.filter(item => item !== project);
+      for (const [id, value] of this.entries) if (value.project === project) this.entries.set(id, { ...value, project: '' });
+      this.changed();
+    });
+  }
+
+  /** The conversation is gone from this machine. With a ledger bound there is
+   * nothing to do: the entry is keyed by an id that will never be reused, and the
+   * main process keeps it exactly as 0.8.26 does. */
   forget(id: string) {
+    if (this.ledger) return;
     if (!this.entries.delete(id)) return;
     this.changed();
   }
@@ -71,9 +158,10 @@ export class OrganizerModel extends Store {
   /** Newest first, stable among equals — the list does not reshuffle itself
    * while the user is reading it (sidebar.js line 23). */
   ordered(sessions: readonly ChatSessionSummary[]): ChatSessionSummary[] {
+    const at = (session: ChatSessionSummary) => touched(session, this.metadata(session.id).touchedAt);
     return sessions
       .map((session, index) => ({ session, index }))
-      .sort((left, right) => touched(right.session) - touched(left.session) || left.index - right.index)
+      .sort((left, right) => at(right.session) - at(left.session) || left.index - right.index)
       .map(entry => entry.session);
   }
 

@@ -42,8 +42,20 @@ const action = (key: string, order: number): TopbarSlot => ({ key, order, Action
 const sheet = (key: string, view: string): SheetSlot => ({ key, view, Sheet: Nothing });
 
 describe("the renderer slot registry", () => {
-  it("ships empty, so the shell renders exactly what it did before any unit landed", () => {
-    expect([PANEL_SLOTS, SIDEBAR_SLOTS, TOPBAR_SLOTS, SHEET_SLOTS].map(list => list.length)).toEqual([0, 0, 0, 0]);
+  // Every landed unit appends one line to these arrays, so this is the roll call:
+  // it names what is registered, in which region, rather than asserting nothing is
+  // (which it did until the first unit landed). A unit that appends without saying
+  // so here fails, which is the point.
+  // It has to be the first case in the file: `afterEach` empties the real arrays
+  // so the cases below can push fakes into them, and after that the registry is
+  // gone for the rest of the run.
+  it("registers exactly the surfaces the landed units declare", () => {
+    expect(PANEL_SLOTS.map(slot => slot.key)).toEqual([]);
+    expect(SIDEBAR_SLOTS.map(slot => `${slot.placement}:${slot.key}`)).toEqual(["foot:shell-pages"]);
+    expect(TOPBAR_SLOTS.map(slot => slot.key)).toEqual([]);
+    expect(SHEET_SLOTS.map(slot => `${slot.view}:${slot.key}`)).toEqual([]);
+    expect(FEATURE_MODELS.map(feature => feature.key)).toEqual(["shellState"]);
+    expect(Object.keys(new AppModel(desktop()).features)).toEqual(["shellState"]);
   });
 
   it("orders by `order` then `key`, whichever order the branches appended in", () => {
@@ -119,7 +131,10 @@ const register = <K extends keyof AppFeatureModels>(key: K, model: AppFeatureMod
 };
 
 describe("the renderer feature-model registry", () => {
-  it("ships empty, so the shell builds exactly the models it did before any unit landed", () => {
+  // The shell invents nothing of its own: with nothing registered there is
+  // nothing on `features`. The roll call of what IS registered is the first case
+  // in this file, before `afterEach` empties the registry.
+  it("builds exactly the models that are registered, and no others", () => {
     expect(FEATURE_MODELS).toEqual([]);
     expect(new AppModel(desktop()).features).toEqual({});
   });

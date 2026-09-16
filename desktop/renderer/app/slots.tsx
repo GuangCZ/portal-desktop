@@ -20,6 +20,7 @@
 // a title bar or a placeholder for it.
 import type { ComponentType, ReactNode } from 'react';
 import type { AppModel } from './models/app';
+import { ShellPagesSection } from '../settings/components/entry';
 
 /** A dockable panel in the workspace body, after the tool browser. */
 export interface PanelSlot {
@@ -62,6 +63,7 @@ export const PANEL_SLOTS: PanelSlot[] = [
 ];
 
 export const SIDEBAR_SLOTS: SidebarSlot[] = [
+  { key: 'shell-pages', order: 900, placement: 'foot', Section: ShellPagesSection },
 ];
 
 export const TOPBAR_SLOTS: TopbarSlot[] = [

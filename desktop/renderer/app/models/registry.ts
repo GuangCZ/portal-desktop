@@ -17,6 +17,7 @@
 // return a `Store` — optionally one with a `start()` — never a component.
 import type { DesktopAPI } from '../../../shared/types';
 import type { Store } from '../../shared/models/store';
+import { ShellStateModel } from '../../settings/models/shell-state';
 
 /** Each feature adds its key with a `declare module '.../models/registry'` block
  * in its own file, so landing a feature never edits this one. */
@@ -44,5 +45,6 @@ export interface FeatureModelFactory {
 }
 
 export const FEATURE_MODELS: FeatureModelFactory[] = [
+  { key: 'shellState', create: (api, app) => new ShellStateModel(api, app) },
 ];
 // ──────────────────────────────────────────────────────────────────────────────
