@@ -99,6 +99,35 @@ export interface DesktopToolsOptions {
   Browser: DesktopBrowserConstructor;
   Console?: DesktopConsoleConstructor;
   ToolLink?: DesktopToolLinkConstructor;
+  /** Where a failure that has nowhere else to go is filed.
+   *
+   * 0.8.26 built the browser inside the constructor, so a browser that could not
+   * be built took the whole bridge down with it and `boot()`'s try/catch wrote
+   * the reason to the activity log. Construction is deferred now (`getBrowser`),
+   * which moved the throw to the first `snapshot()` — and `changed()` runs that
+   * inside a `setImmediate`, where nothing is listening and an exception is a
+   * main-process crash. The bridge reports and degrades instead. IM, 2026-09-16. */
+  onError?: (scope: string, error: unknown) => void;
+}
+
+/** The one thing left of a browser that could not be built.
+ *
+ * Its `destroyed` is true, which is exactly what it is: the two viewport channels
+ * read that field and answer quietly (tools/ipc.ts, tools/browser/ipc.ts), while
+ * every tool call gets the same sentence the tool-browser subsystem shows in its
+ * panel. The bridge keeps working without it — the console, the terminal scopes
+ * and the relay have nothing to do with the browser. IM, 2026-09-16. */
+function deadBrowser(): DesktopBrowserLike {
+  const refuse = (): never => { throw new Error('内置浏览器暂时无法使用，请重启客户端后重试。'); };
+  return {
+    snapshot: (): LiveBrowserSnapshot => ({tabs: [], activeTabId: null, visible: false}),
+    newTab: refuse, activateTab: refuse, closeTab: refuse, navigate: refuse,
+    goBack: refuse, goForward: refuse, reload: refuse, stop: refuse,
+    readPage: refuse, prepareAction: refuse, click: refuse, fill: refuse, screenshot: refuse,
+    setViewport: refuse,
+    destroyed: true,
+    destroy: () => {},
+  };
 }
 interface InvokeOptions { signal?: AbortSignal; generation?: number; targetToken?: string; reviewJobIds?: string[] }
 
@@ -124,6 +153,7 @@ export class DesktopTools {
   resolveBrowser: () => DesktopBrowserLike | null;
   /** The 0.8.26 constructor call, deferred so it only runs if nothing is injected. */
   createBrowser: () => DesktopBrowserLike;
+  onError?: (scope: string, error: unknown) => void;
   console: DesktopConsoleLike;
   link: DesktopToolLinkLike;
   /** The tool browser, injected or self-built. Every use inside this class goes
@@ -132,10 +162,26 @@ export class DesktopTools {
   get browser(): DesktopBrowserLike {
     const injected = this.resolveBrowser();
     if (injected) return injected;
-    return (this.ownBrowser ??= this.createBrowser());
+    if (this.ownBrowser) return this.ownBrowser;
+    // BUILDING IT IS THE PART THAT CAN THROW, AND THIS GETTER IS READ FROM
+    // `snapshot()`, which `changed()` runs inside a `setImmediate`. An exception
+    // there reaches nothing: this process installs no `uncaughtException` handler,
+    // so it would end the client. `DesktopBrowser`'s constructor locks a partition
+    // down (permissions, downloads, the protocol gate) and any of those can fail —
+    // `subsystems/tool-browser.ts` catches the same throw and blocks its panel,
+    // and when it does, its `browser` is null and this resolver falls through to
+    // here, to the same failing constructor. Report once, then answer with a
+    // browser that is simply not there.
+    try { this.ownBrowser = this.createBrowser(); }
+    catch (error) {
+      this.ownBrowser = deadBrowser();
+      try { this.onError?.('tools-browser-construct', error); }
+      catch { /* Reporting a failure must not raise one. */ }
+    }
+    return this.ownBrowser;
   }
-  constructor({desktopId,WebContentsView,session,getWindow,getConnection,getWorkspace,onChange,orchestration,getTerminal=()=>null,showTerminal=()=>{},desktopPortalName,getBrowser,Browser,Console=DesktopConsole,ToolLink=DesktopToolLink}: DesktopToolsOptions) {
-    this.onChange=onChange;this.getConnection=getConnection;this.getWorkspace=getWorkspace;
+  constructor({desktopId,WebContentsView,session,getWindow,getConnection,getWorkspace,onChange,onError,orchestration,getTerminal=()=>null,showTerminal=()=>{},desktopPortalName,getBrowser,Browser,Console=DesktopConsole,ToolLink=DesktopToolLink}: DesktopToolsOptions) {
+    this.onChange=onChange;this.onError=onError;this.getConnection=getConnection;this.getWorkspace=getWorkspace;
     this.orchestration=orchestration;
     this.getTerminal=getTerminal;
     this.terminalTools=new DesktopTerminalTools({getTerminal,showTerminal});

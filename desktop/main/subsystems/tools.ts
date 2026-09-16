@@ -142,6 +142,12 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
   const viewSession = ctx.electron.session as BrowserSessionFactory | null;
   if (typeof View !== 'function' || typeof viewSession?.fromPartition !== 'function') {
     blocked = '桌面工具暂时不可用，请检查客户端配置目录后重启。';
+    // FILED, NOT ONLY SHOWN. Before the check moved up here this failure was a
+    //「浏览器依赖无效。」out of `new Browser`, caught below and written to
+    // client-errors.log as `tools-install`; a panel message the user may never
+    // open is not a diagnosis. The same line is in `subsystems/tool-browser.ts`,
+    // so one broken façade leaves one entry per subsystem that noticed it.
+    report('tools-install', new Error('Electron 浏览器门面不可用，桌面工具桥未启动。'));
   } else try {
     tools = new DesktopTools({
       desktopId: ctx.desktopId,
@@ -189,6 +195,11 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
       // fallback for a build where that subsystem is absent or could not start.
       getBrowser: toolBrowser,
       Browser: DesktopBrowser,
+      // The bridge builds its own browser lazily when the tool-browser subsystem
+      // has none, and that build can still fail inside `DesktopBrowser`'s
+      // constructor. It happens under `changed()`'s `setImmediate`, so the bridge
+      // has nowhere to raise it — this is where it lands instead.
+      onError: report,
       onChange: (snapshot: DesktopToolsSnapshot) => {
         const peer = orchestrationPeer();
         // The bridge's capabilities feed the orchestration policy's enforcement

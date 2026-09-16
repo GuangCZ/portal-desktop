@@ -261,6 +261,69 @@ describe("the tool browser has exactly one owner", () => {
     expect(f.errors).toEqual([]);
   });
 
+  // The deferred build's OTHER failure mode, and the one that had no floor under
+  // it: the Electron façade is a function, so both subsystems accept it, and
+  // `DesktopBrowser`'s constructor throws anyway — `session.fromPartition`, the
+  // three permission handlers and `webRequest.onBeforeRequest` all run in there.
+  // `subsystems/tool-browser.ts` already caught that and blocked its panel; its
+  // `browser` is then null, so the bridge's resolver falls through to the same
+  // failing constructor — inside `snapshot()`, inside `changed()`'s `setImmediate`,
+  // where an exception is an `uncaughtException` with no handler anywhere in
+  // `desktop/main/` and therefore a dead client.
+  it("survives a browser constructor that throws, and says so once", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "beings-browser-ownership-"));
+    cleanups.push(() => rm(directory, { recursive: true, force: true }));
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const errors: { scope: string; error: unknown }[] = [];
+    const window = new FakeWindow();
+    const built = new Map<string, any>();
+    const extensions = installSubsystems({
+      handle: (channel, callback) => { handlers.set(channel, callback); },
+      exclusive: operation => operation(),
+      window: () => window as never,
+      store: { connection: null, connectionAddress: "", settings: {} as Settings, extras: {}, saveExtra: async () => {} },
+      secretStorage: { isEncryptionAvailable: () => false, encryptString: (value: string) => Buffer.from(value), decryptString: (value: Buffer) => value.toString() },
+      electron: {
+        WebContentsView: FakeView,
+        // A real function, so neither subsystem's façade check fires…
+        session: { fromPartition: () => { throw new Error("partition denied"); } },
+        net: { fetch, request: null, isOnline: () => true },
+        clipboard: { readText: async () => "", writeText: async () => {} },
+        shell: { openPath: async () => "", openExternal: async () => {} },
+      },
+      userData: directory,
+      desktopId: DESKTOP_ID,
+      onError: (scope, error) => { errors.push({ scope, error }); },
+    }, capturing([installToolBrowserSubsystem, installToolsSubsystem], built));
+    cleanups.push(() => extensions.quitting());
+
+    // The panel reports its own refusal, as it always did.
+    expect(errors.map(entry => entry.scope)).toEqual(["tool-browser-construct"]);
+    // The bridge exists — the console, the terminal scopes and the relay have
+    // nothing to do with the browser — and answers with an empty browser rather
+    // than throwing the constructor's failure at whoever asked.
+    const state = (await handlers.get("beings:tools")!()) as DesktopToolsState;
+    expect(state.browser).toEqual({ tabs: [], activeTabId: null, visible: false });
+    expect(errors.map(entry => entry.scope)).toEqual(["tool-browser-construct", "tools-browser-construct"]);
+
+    // AND `changed()` DOES NOT LEAK. This is the exact path that would end the
+    // process: `changed()` → `setImmediate` → `snapshot()` → the getter → the
+    // constructor. The push arriving is the proof that the immediate ran to
+    // completion instead of throwing out of the event loop.
+    window.sent.length = 0;
+    built.get("tools").tools.changed();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const pushed = window.sent.filter(entry => entry.channel === "beings:tools-state");
+    expect(pushed).toHaveLength(1);
+    expect((pushed[0].payload as DesktopToolsState).browser).toEqual({ tabs: [], activeTabId: null, visible: false });
+    // Reported ONCE, not once per access: a dead browser is remembered.
+    expect(errors.filter(entry => entry.scope === "tools-browser-construct")).toHaveLength(1);
+    // Browser tools refuse with the panel's own sentence instead of half-working.
+    await expect(handlers.get("beings:tools-action")!("browser.new", {})).rejects.toThrow("内置浏览器暂时无法使用，请重启客户端后重试。");
+    // And the two viewport channels stay quiet: there is no rectangle to place.
+    expect(await handlers.get("beings:tools-browser-view")!({ visible: false })).toEqual({ tabs: [], activeTabId: null, visible: false });
+  });
+
   it("refuses rather than half-working when there is no Electron to build a browser with", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "beings-browser-ownership-"));
     cleanups.push(() => rm(directory, { recursive: true, force: true }));
@@ -282,6 +345,9 @@ describe("the tool browser has exactly one owner", () => {
     // moved to the subsystem so the refusal still arrives as a refusal and never
     // as a throw out of `changed()`'s setImmediate.
     await expect(handlers.get("beings:tools-action")!("browser.new", {})).rejects.toThrow("桌面工具暂时不可用");
-    expect(errors).toEqual([]);
+    // AND IT IS IN THE LOG. Before the check moved into the subsystems this fault
+    // arrived as a constructor throw and was filed as `tools-install`; the
+    // hoisted check kept the refusal and lost the entry until IM put it back.
+    expect(errors.map(entry => entry.scope)).toEqual(["tool-browser-construct", "tools-install"]);
   });
 });

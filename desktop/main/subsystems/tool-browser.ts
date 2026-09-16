@@ -48,6 +48,10 @@ export function installToolBrowserSubsystem(ctx: SubsystemContext): ToolBrowserS
   const session = ctx.electron.session as BrowserSessionFactory | null;
   if (typeof View !== 'function' || typeof session?.fromPartition !== 'function') {
     blocked = '内置浏览器在当前运行环境不可用。';
+    // The constructor's own failure is reported below; a façade that never got
+    // that far was not, so this one fault used to leave no trace in
+    // client-errors.log at all. IM, 2026-09-16.
+    report('tool-browser-construct', new Error('Electron 浏览器门面不可用，内置浏览器未启动。'));
   } else {
     try {
       browser = new DesktopBrowser({
