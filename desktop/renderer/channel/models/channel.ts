@@ -23,6 +23,7 @@
 // user to reconnect a channel that is already connected is the one mistake this
 // page must not make.
 import { Store, errorText } from "../../shared/models/store";
+import { isTownErrorEnvelope } from "../../../shared/town-desktop-errors";
 import type { DesktopAPI } from "../../../shared/types";
 import type {
   ChannelDraftAck, ChannelDraftPush, ChannelOutcomeState, ChannelServiceStatus,
@@ -68,6 +69,22 @@ interface CardState {
 }
 
 const EMPTY: CardState = { status: "unknown", detail: "", qr: "", readError: "", wizard: false, step: 0 };
+
+/** Turn an envelope back into an Error, HERE rather than in the preload.
+ *
+ * MEASURED on the packaged client (desktop/shared/channel-types.ts,
+ * `ChannelErrorResult`): `contextBridge` copies an Error across the isolated-world
+ * boundary by message and stack alone, so a `code` attached in the preload is
+ * gone by the time this model sees it. Built on this side it survives, because it
+ * never crosses anything — and `code` is what separates「Desktop 暂无权限直接读取
+ * 渠道状态」from「暂时未能读取渠道状态」, two sentences the user acts on differently.
+ *
+ * A rejection is still handled the ordinary way by the caller's `catch`; this
+ * only converts the data form. */
+export function unwrap<T>(answer: T | { __townError: true; code: string; message: string }): T {
+  if (!isTownErrorEnvelope(answer)) return answer as T;
+  throw Object.assign(new Error(answer.message), { code: answer.code });
+}
 
 /** The Town catalogue is validated before it is drawn (renderer/app.js line 827):
  * nine features, unique ids, three known modes, four non-empty strings. A short
@@ -239,10 +256,11 @@ export class ChannelModel extends Store {
     }
   }
 
-  private call(method: "begin" | "check" | "inspect", request: { channel: string; connectionRevision: number }): Promise<unknown> {
-    if (method === "begin") return this.api.channel.begin(request);
-    if (method === "check") return this.api.channel.check(request);
-    return this.api.channel.inspect(request) as Promise<{ channels: ChannelServiceStatus[] }>;
+  private async call(method: "begin" | "check" | "inspect", request: { channel: string; connectionRevision: number }): Promise<unknown> {
+    const answer = method === "begin" ? await this.api.channel.begin(request)
+      : method === "check" ? await this.api.channel.check(request)
+      : await this.api.channel.inspect(request) as { channels: ChannelServiceStatus[] };
+    return unwrap(answer);
   }
 
   private stale(request: number, revision: number, selected: string): boolean {

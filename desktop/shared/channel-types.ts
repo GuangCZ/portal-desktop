@@ -127,20 +127,45 @@ export interface ChannelWorkerState {
   connected: boolean;
 }
 
+/** A failure from one of the four「Town 包络」channels, AS THE RENDERER RECEIVES
+ * IT — as data, not as a rejection.
+ *
+ * MEASURED on the packaged client, 2026-09-16 (docs/migration/i7-channel-drafts.md
+ * 「冒烟结果」): `contextBridge` copies an Error across the isolated-world boundary
+ * by message and stack ALONE. `Object.getOwnPropertyNames(error)` in the renderer
+ * is exactly `['stack', 'message']` — the `code` that
+ * `desktop/shared/town-desktop-errors.ts` puts on it is dropped on the way out of
+ * the preload, and so is the chat catalogue's. That is the whole reason the
+ * envelope exists, so a preload that rethrows it has undone its own work.
+ *
+ * Hence: this unit's four enveloped channels RESOLVE with the envelope, and the
+ * renderer turns it into an Error in its own context, where the property
+ * survives because it never crosses anything. The shape is the same
+ * `{__townError, code, message}` the main process already produces; only the side
+ * that reconstitutes it moved. */
+export interface ChannelErrorResult {
+  __townError: true;
+  code: string;
+  message: string;
+}
+
+/** What an enveloped channel answers with: the value, or the failure as data. */
+export type ChannelAnswer<T> = T | ChannelErrorResult;
+
 export interface ChannelAPI {
   /** This client's own channel state: the epoch, whether a Being is bound, and
    * the last outcome. Read once on mount; `onState` carries every change after
    * that. It asks the service nothing. */
   state(): Promise<ChannelWorkerState>;
   /** 功能任务. Asks the Being to actually connect the channel. */
-  begin(request: ChannelRequestInput): Promise<ChannelOutcomeState>;
+  begin(request: ChannelRequestInput): Promise<ChannelAnswer<ChannelOutcomeState>>;
   /** 功能任务. Asks the Being to read back the channel's real state. */
-  check(request: ChannelRequestInput): Promise<ChannelCheckResult>;
+  check(request: ChannelRequestInput): Promise<ChannelAnswer<ChannelCheckResult>>;
   /** Read-only. Queries the Town service directly; sends the Being nothing. */
-  inspect(request: ChannelRequestInput): Promise<ChannelServiceSnapshot>;
-  /** Always rejects: application secrets are submitted through the channel
-   * service's own configuration entry, never through this client. */
-  feishu(value: unknown): Promise<never>;
+  inspect(request: ChannelRequestInput): Promise<ChannelAnswer<ChannelServiceSnapshot>>;
+  /** Always answers with a failure: application secrets are submitted through the
+   * channel service's own configuration entry, never through this client. */
+  feishu(value: unknown): Promise<ChannelErrorResult>;
   catalog(): Promise<ChannelTownCatalog>;
   /** Opens one of the three public Town pages in the tool browser. */
   openPage(id: string): Promise<{ opened: true }>;

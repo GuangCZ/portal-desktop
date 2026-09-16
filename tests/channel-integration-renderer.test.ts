@@ -124,6 +124,23 @@ it("an unreadable channel keeps its last confirmed state and never reads as unbo
   stop();
 });
 
+it("a failure that arrives as DATA still separates the two read refusals", async () => {
+  // This is the form the real bridge delivers: the preload resolves with the
+  // envelope, because an Error loses its `code` crossing `contextBridge`
+  // (measured — desktop/shared/channel-types.ts). The model must read the code
+  // out of the data, or the AUTH_REQUIRED branch is dead in the packaged client.
+  let envelope: any = { __townError: true, code: 'AUTH_REQUIRED', message: 'no' };
+  const f = harness({ inspect: async () => envelope });
+  const stop = f.model.start();
+  await settle();
+  await f.model.inspect();
+  expect(f.model.readError).toBe("Desktop 暂无权限直接读取渠道状态。这不代表未绑定，无需重复连接。可请 Being 核对绑定状态。");
+  envelope = { __townError: true, code: 'SERVICE_ERROR', message: 'no' };
+  await f.model.inspect();
+  expect(f.model.readError).toBe("暂时未能读取渠道状态。这不代表未绑定，无需重复连接。可请 Being 核对绑定状态。");
+  stop();
+});
+
 it("nothing confirmed at all stays unknown, and a Being-facing failure is an error", async () => {
   const f = harness({
     inspect: async () => { throw new Error("network"); },

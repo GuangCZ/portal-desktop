@@ -16,25 +16,31 @@
 // user acts on.
 import { ipcRenderer } from 'electron';
 import { subscribe } from './bridge';
-import { isTownErrorEnvelope, townErrorFromEnvelope } from '../../shared/town-desktop-errors';
 import type { ChannelAPI, ChannelDraftPush, ChannelWorkerState } from '../../shared/desktop-types';
 
-/** Identical to `townEnveloped` in ./town.ts, and deliberately a second copy of
- * three lines rather than a shared export from that file: these are two
- * integration units' channel files, and the append-only rule that keeps them from
- * colliding also keeps one from importing the other's internals. */
-async function enveloped<T>(channel: string, ...args: unknown[]): Promise<T> {
-  const result: unknown = await ipcRenderer.invoke(channel, ...args);
-  if (isTownErrorEnvelope(result)) throw townErrorFromEnvelope(result);
-  return result as T;
-}
-
+// ── WHY THIS FILE DOES NOT REBUILD THE ERROR, AND ./town.ts DOES ──────────────
+//
+// `./bridge.ts`'s `enveloped` and `./town.ts`'s `townEnveloped` both turn the
+// main process's `{__townError, code, message}` back into an Error carrying
+// `code`, and throw it. MEASURED on the packaged client on 2026-09-16
+// (docs/migration/i7-channel-drafts.md「冒烟结果」): that `code` never arrives.
+// `contextBridge` copies an Error out of the preload's isolated world by message
+// and stack alone — in the renderer, `Object.getOwnPropertyNames(error)` is
+// exactly `['stack', 'message']`. The same measurement on a Town channel
+// (`beings:town-bonfire`) and a conversation channel (`beings:chat-view`) gives
+// the same answer, so this is the shell's boundary and not this unit's mistake.
+//
+// So these four RESOLVE with the envelope and the renderer reconstitutes it on
+// its own side, where nothing is copied and the property survives. The main
+// process is unchanged; only the half that rebuilds the Error moved across the
+// bridge. The other five channels here throw as usual: their failures are one
+// short sentence with no code, which `message` carries perfectly well.
 export const channel: ChannelAPI = {
   state: () => ipcRenderer.invoke('beings:channel-status'),
-  begin: request => enveloped('beings:channel-begin', request),
-  check: request => enveloped('beings:channel-check', request),
-  inspect: request => enveloped('beings:channel-inspect', request),
-  feishu: value => enveloped('beings:channel-feishu', value),
+  begin: request => ipcRenderer.invoke('beings:channel-begin', request),
+  check: request => ipcRenderer.invoke('beings:channel-check', request),
+  inspect: request => ipcRenderer.invoke('beings:channel-inspect', request),
+  feishu: value => ipcRenderer.invoke('beings:channel-feishu', value),
   catalog: () => ipcRenderer.invoke('beings:town-catalog'),
   openPage: id => ipcRenderer.invoke('beings:town-page', id),
   draft: request => ipcRenderer.invoke('beings:town-draft', request),
