@@ -37,6 +37,10 @@ export class ChatProxy {
     let upstream: ReturnType<typeof upstreamRequest>;
     try { upstream = upstreamRequest(request, connection); }
     catch { return new Response('Not found', { status: 404 }); }
+    const isChatSend = request.method === 'POST' && new URL(request.url).pathname === '/api/chat/stream';
+    if (isChatSend && !this.scene) {
+      return Response.json({ error: '客户端场景不可用，暂时无法发送消息。请检查启动提示并重启客户端。' }, { status: 409 });
+    }
     const controller = new AbortController();
     this.requests.add(controller);
     const abort = () => controller.abort();
@@ -47,7 +51,7 @@ export class ChatProxy {
     const timeout = setTimeout(abort, 30_000);
     try {
       let body: ArrayBuffer | string | undefined = ['POST', 'PATCH'].includes(request.method) ? await request.arrayBuffer() : undefined;
-      if (this.scene && request.method === 'POST' && new URL(request.url).pathname === '/api/chat/stream') {
+      if (isChatSend) {
         let message;
         try {
           message = JSON.parse(new TextDecoder().decode(body as ArrayBuffer));
@@ -56,7 +60,8 @@ export class ChatProxy {
           clearTimeout(timeout); cleanup();
           return Response.json({ error: '无效的聊天请求。' }, { status: 400 });
         }
-        // All desktop sends (including splices and retries) report the same room.
+        // The main process owns send identity, regardless of the visible history
+        // scope or any scene fields supplied by the renderer, splices or retries.
         // Scene protocol fields never become part of the user's message text.
         body = JSON.stringify({ ...message, ...this.scene });
         upstream.headers.set('content-type', 'application/json');

@@ -131,6 +131,9 @@ export class TownModel extends Store {
   data: Data | null = null;
   mentionNames: MentionNames = new Map();
   library: KitLibrary | null = null;
+  installedLibrary: KitLibrary | null = null;
+  installedLoading = false;
+  installedError = "";
   loading = false;
   status = "";
   error?: { message: string; auth: boolean };
@@ -175,6 +178,7 @@ export class TownModel extends Store {
   environment: Record<string, string> = {};
   private request = 0;
   private detailRequest = 0;
+  private installedRequest = 0;
   private authRequest = 0;
   private lifecycleRevision = 0;
   private seen = { bonfire: 0, mail: 0, firesides: 0 };
@@ -211,6 +215,7 @@ export class TownModel extends Store {
       clearTimeout(this.reconcileTimer);
       this.request++;
       this.detailRequest++;
+      this.installedRequest++;
       this.authRequest++;
       this.drafts.clear();
       this.content = "";
@@ -247,8 +252,16 @@ export class TownModel extends Store {
     this.changedChannels.clear();
     this.request++;
     this.detailRequest++;
+    ++this.installedRequest;
     this.data = null;
+    this.installedLibrary = null;
+    this.installedLoading = false;
+    this.installedError = "";
     this.library = null;
+    ++this.installedRequest;
+    this.installedLibrary = null;
+    this.installedLoading = false;
+    this.installedError = "";
     this.detail = undefined;
     this.detailLoading = false;
     this.detailError = undefined;
@@ -373,6 +386,7 @@ export class TownModel extends Store {
     this.view = view;
     this.request++;
     this.detailRequest++;
+    this.installedRequest++;
     this.directId = id;
     clearTimeout(this.reconcileTimer);
     this.updateLive();
@@ -488,6 +502,8 @@ export class TownModel extends Store {
     this.error = undefined;
     this.loading = true;
     this.status = "";
+    if (this.view === "kits" && (this.tab !== "local" || this.directId))
+      void this.refreshInstalledKits();
     this.changed();
     try {
       if (this.directId) {
@@ -518,6 +534,10 @@ export class TownModel extends Store {
         const library = await this.api.localKits();
         if (generation !== this.request) return;
         this.library = library;
+        ++this.installedRequest;
+        this.installedLibrary = library;
+        this.installedLoading = false;
+        this.installedError = "";
         this.status = `${library.kits.length} 个本机 Kit · ${library.enabled ? "Portal 已启用 Kits" : "Portal 尚未启用 Kits"} · 清单来自磁盘，加载情况请查看 Portal 日志`;
       } else {
         const [result, auth] = await Promise.all([
@@ -954,6 +974,40 @@ export class TownModel extends Store {
       this.changed();
     }
   }
+  installedKit(name: string) {
+    // Installation targets use manifest.name, including imports and older Grove installs.
+    return this.installedLibrary?.kits.find(kit => kit.name === name);
+  }
+  async refreshInstalledKits() {
+    const generation = ++this.installedRequest;
+    this.installedLoading = true;
+    this.installedError = "";
+    this.installedLibrary = null;
+    this.changed();
+    try {
+      const library = await this.api.localKits();
+      if (generation === this.installedRequest) this.installedLibrary = library;
+    } catch (error) {
+      if (generation === this.installedRequest) this.installedError = errorText(error);
+    } finally {
+      if (generation === this.installedRequest) {
+        this.installedLoading = false;
+        this.changed();
+      }
+    }
+  }
+  async showInstalledKit(name: string) {
+    this.directId = undefined;
+    this.tab = "local";
+    this.tabs.kits = "local";
+    this.search = "";
+    this.offset = 0;
+    const pending = this.load(), generation = this.request;
+    await pending;
+    if (generation !== this.request) return;
+    const kit = this.library?.kits.find(kit => kit.name === name);
+    if (kit) this.selectLocal(kit);
+  }
   async prepareKit(id: string) {
     if (this.prepareBusy || this.plan) return;
     this.prepareBusy = true;
@@ -986,6 +1040,7 @@ export class TownModel extends Store {
   }
   async install() {
     if (!this.plan || this.installBusy) return;
+    const revision = this.lifecycleRevision;
     this.installBusy = true;
     this.installError = "";
     this.changed();
@@ -994,13 +1049,14 @@ export class TownModel extends Store {
         ticket: this.plan.ticket,
         environment: { ...this.environment },
       });
+      if (revision !== this.lifecycleRevision) return;
       this.plan = undefined;
       this.environment = {};
       this.toast(`${result.name}：${result.message}`);
-      this.tab = "local";
-      this.tabs.kits = "local";
-      this.search = "";
-      if (this.view === "kits") await this.load();
+      if (this.view === "kits") {
+        if (this.tab === "local" && !this.directId) await this.showInstalledKit(result.name);
+        else await this.refreshInstalledKits();
+      }
     } catch (error) {
       this.installError = errorText(error);
     } finally {
@@ -1016,6 +1072,16 @@ export class TownModel extends Store {
         this.toast(`${result.name} 已导入。Portal 将自动刷新清单。`);
         if (this.tab === "local") await this.load();
       }
+    });
+  }
+  async deleteKit(kit: LocalKit) {
+    await this.run(async () => {
+      const result = await this.api.deleteKit(kit.name);
+      if (!result.deleted) return;
+      if (this.localKit?.name === kit.name) this.localKit = undefined;
+      if (this.selectedId === kit.name) this.selectedId = "";
+      this.toast(`${kit.name} 已删除。`);
+      await this.load();
     });
   }
   async run(operation: () => Promise<unknown>) {

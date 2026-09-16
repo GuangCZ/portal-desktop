@@ -9,6 +9,7 @@ import type {
 import { Store, errorText } from "../../shared/models/store";
 import { WorkspaceModel } from "./workspace";
 import { TownModel } from "../../town/models/town";
+import type { HistoryScope } from "../../chat/models/scenes";
 
 export class AppModel extends Store {
   snapshot?: Snapshot;
@@ -17,6 +18,8 @@ export class AppModel extends Store {
   view = "chat";
   chatSource = "";
   chatLoading = false;
+  chatHistoryScope: HistoryScope = "current";
+  chatHistoryScopeKnown = false;
   connection = "";
   sbsEnabled = true;
   sbsKnown = false;
@@ -179,13 +182,19 @@ export class AppModel extends Store {
     if (next.settings.hasToken && (!this.chatSource || reload)) {
       this.sbsKnown = false;
       this.chatLoading = true;
+      this.chatHistoryScope = next.chatScene ? "current" : "all";
+      this.chatHistoryScopeKnown = false;
       this.connection = "connecting";
       this.chatSource = `beings://chat/?name=${encodeURIComponent(next.settings.being)}&history_scope=${encodeURIComponent(next.settings.endpoint)}&theme=${this.theme}&revision=${crypto.randomUUID()}`;
+      if (next.chatScene) {
+        this.chatSource += `&scene_id=${encodeURIComponent(next.chatScene.scene_id)}&scene_label=${encodeURIComponent(next.chatScene.scene_meta.scene_label)}`;
+      }
     }
     if (!next.settings.hasToken) {
       this.sbsKnown = false;
       this.chatSource = "";
       this.chatLoading = false;
+      this.chatHistoryScopeKnown = false;
       this.connection = "";
       this.searchEntries = [];
     }
@@ -198,6 +207,7 @@ export class AppModel extends Store {
     this.workspace.frameLoaded();
     this.postAppearance();
     this.post({ type: "beings:sbs-request" });
+    if (this.chatSource) this.post({ type: "beings:history-scope-request", revision: new URL(this.chatSource).searchParams.get("revision") });
     this.town.updateLive();
     this.post({ type: "beings:search-request" });
     this.changed();
@@ -207,6 +217,16 @@ export class AppModel extends Store {
       return;
     this.sbsKnown = false;
     this.post({ type: "beings:sbs-toggle" });
+    this.changed();
+  }
+  changeChatHistoryScope(scope: HistoryScope) {
+    if (!this.chatSource || this.chatLoading || !this.chatHistoryScopeKnown || (scope === "current" && !this.snapshot?.chatScene)) return;
+    this.navigate("chat");
+    this.post({ type: "beings:history-scope", scope, revision: new URL(this.chatSource).searchParams.get("revision") });
+  }
+  setChatHistoryScope(scope: HistoryScope) {
+    this.chatHistoryScope = scope;
+    this.chatHistoryScopeKnown = true;
     this.changed();
   }
   setSbsEnabled(enabled?: boolean) {

@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { ChatState, type ChatRuntime, type ChatPanel } from "./models/chat";
+import { inCurrentScene, sceneItems, sceneName, type HistoryScope } from "./models/scenes";
 import { useModel } from "../shared/hooks/use-model";
 import { Markdown } from "../shared/components/markdown";
 import { TemperatureGlow, ChatActivity } from "./components/messages";
@@ -61,12 +62,25 @@ function ChatView({
   bridge: ChatBridge;
 }) {
   useModel(state);
+  const visibleItems = sceneItems(state.items, state.historyScope, state.currentScene);
+  const currentSceneName = sceneName(state.currentScene, state.currentScene);
+  const showActivity = state.historyScope === "all" || inCurrentScene(state.activeScene, state.currentScene);
   const messages = useRef<HTMLDivElement>(null),
     composer = useRef<HTMLTextAreaElement>(null),
     fileInput = useRef<HTMLInputElement>(null);
   const messageElements = useRef(new Map<string, HTMLDivElement>()),
     index = useRef<ChatIndexHandle>(null),
     scrollLock = useRef(true);
+  const scopeScroll = useRef<Partial<Record<HistoryScope, { top: number; locked: boolean }>>>({});
+  function changeScope(scope: HistoryScope) {
+    if (scope === state.historyScope || (scope === "current" && !state.currentScene.sceneId)) return;
+    if (messages.current) scopeScroll.current[state.historyScope] = { top: messages.current.scrollTop, locked: scrollLock.current };
+    state.historyScope = scope;
+    setSelection(null);
+    setHighlighted(null);
+    state.changed();
+    void runtime.refreshHistory();
+  }
   const dragDepth = useRef(0),
     composing = useRef(false),
     compositionEnd = useRef(0);
@@ -98,10 +112,14 @@ function ChatView({
       search: () => index.current?.publish(),
       jump: (id) => index.current?.jump(id),
       focus: () => composer.current?.focus(),
+      scope: changeScope,
     });
     void runtime.start();
     composer.current?.focus();
   }, [bridge, runtime]);
+  useEffect(() => {
+    bridge.send({ type: "beings:history-scope-state", scope: state.historyScope });
+  }, [bridge, state.historyScope]);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
@@ -127,6 +145,11 @@ function ChatView({
   useLayoutEffect(() => {
     scrollLock.current = true;
   }, [state.resetScroll]);
+  useLayoutEffect(() => {
+    const saved = scopeScroll.current[state.historyScope];
+    scrollLock.current = saved?.locked ?? true;
+    if (messages.current && saved) messages.current.scrollTop = saved.top;
+  }, [state.historyScope]);
   useLayoutEffect(() => {
     const el = composer.current;
     if (!el) return;
@@ -258,7 +281,7 @@ function ChatView({
         }
       }}
     >
-      <TemperatureGlow items={state.items} />
+      <TemperatureGlow items={visibleItems} />
       <div id="drop-zone" className={dragging ? "active" : ""}>
         drop files here
       </div>
@@ -311,6 +334,22 @@ function ChatView({
             ⚙
           </button>
         </header>
+        {parent === window && <div className="chat-history-scope">
+          <div className="chat-scope-switch" role="group" aria-label="对话场景范围">
+            <button type="button" aria-pressed={state.historyScope === "current"} disabled={!state.currentScene.sceneId}
+              title={state.currentScene.sceneId ? currentSceneName : "当前场景标识不可用"} onClick={() => changeScope("current")}>
+              当前场景
+            </button>
+            <button type="button" aria-pressed={state.historyScope === "all"} onClick={() => changeScope("all")}>
+              全部场景
+            </button>
+          </div>
+          <span className="chat-scope-caption" title={state.currentScene.sceneId}>
+            {state.currentScene.sceneId
+              ? state.historyScope === "all" ? `发送到：${currentSceneName}` : currentSceneName
+              : "包含未标记场景的历史对话"}
+          </span>
+        </div>}
         <div
           id="messages"
           ref={messages}
@@ -321,7 +360,13 @@ function ChatView({
             setSelection(null);
           }}
         >
-          {state.items.map((item) =>
+          {!visibleItems.some(item => item.kind === "message") && !state.thinking && (
+            <div className="chat-scope-empty">
+              {state.historyScope === "current" ? "当前场景还没有对话。" : "暂无对话记录。"}
+              {state.historyScope === "current" && <button type="button" onClick={() => changeScope("all")}>查看全部场景对话</button>}
+            </div>
+          )}
+          {visibleItems.map((item) =>
             item.kind === "separator" ? (
               <div
                 key={item.id}
@@ -350,6 +395,7 @@ function ChatView({
                   {item.consecutive
                     ? item.timestamp
                     : `${item.label} · ${item.timestamp}`}
+                  {state.historyScope === "all" && <span className="message-scene" title={item.sceneId || "这条历史消息未提供场景标记"}>{sceneName(item, state.currentScene)}</span>}
                 </div>
                 <Markdown
                   content={item.text}
@@ -369,7 +415,7 @@ function ChatView({
               </div>
             ),
           )}
-          {state.thinking && (
+          {state.thinking && showActivity && (
             <div className="message being thinking-indicator">
               <div className="meta">{state.name}</div>
               <div className="content">
@@ -481,7 +527,7 @@ function ChatView({
       </div>
       <ChatIndex
         ref={index}
-        items={state.items}
+        items={visibleItems}
         container={messages}
         elements={messageElements}
         scrollLock={scrollLock}

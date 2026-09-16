@@ -38,7 +38,7 @@ describe("React chat runtime lifecycle", () => {
   it("binds diagnostic sends to their original Being even if the proxy connection changes", async () => {
     const alice = parseConnection('https://fixture.test/alice/?token=alice-fixture');
     const bob = parseConnection('https://fixture.test/bob/?token=bob-fixture');
-    vi.stubGlobal('location', new URL('beings://chat/?history_scope=' + encodeURIComponent(alice.endpoint)));
+    vi.stubGlobal('location', new URL('beings://chat/?history_scope=' + encodeURIComponent(alice.endpoint) + '&scene_id=desktop-diagnostic'));
     const upstream = vi.fn(async () => response({ ok: true }));
     const proxy = new ChatProxy(() => bob, upstream);
     let result = 0;
@@ -140,8 +140,8 @@ describe("React chat runtime lifecycle", () => {
     runtime.dispose();
   });
 
-  it("sends the same desktop room through ordinary, retry and splice paths without rendering meta as conversation", async () => {
-    vi.stubGlobal("location", new URL("beings://chat/loom.html"));
+  it.each(["current", "all"] as const)("keeps desktop send parameters through scope switches, ordinary sends, retries and splices starting in %s", async initialScope => {
+    vi.stubGlobal("location", new URL("beings://chat/loom.html?scene_id=desktop-fixture&scene_label=桌面·PC"));
     const scene = { scene_id: "desktop-fixture", scene_meta: { client: "portal-desktop/0.1.2", scene_label: "桌面·PC" } };
     const sent: Record<string, unknown>[] = [];
     let stream!: ReadableStreamDefaultController<Uint8Array>;
@@ -166,12 +166,16 @@ describe("React chat runtime lifecycle", () => {
     const state = new ChatState(), runtime = createChatRuntime(state);
     try {
       // An ordinary completed request, then a retrying request held open for a splice.
+      state.historyScope = initialScope;
       await runtime.send("第一条");
+      state.historyScope = initialScope === "current" ? "all" : "current";
+      await runtime.refreshHistory(); // Refreshing a different view never changes send identity.
       const sending = runtime.send("继续讨论");
       await flush();
       expect(sent).toHaveLength(2);
       await vi.advanceTimersByTimeAsync(1000);
       expect(sent).toHaveLength(3);
+      state.historyScope = initialScope;
       await runtime.send("再补充一点", [{ name: "notes.txt", type: "text/plain", size: 3, base64: "YWJj" }]);
       expect(sent).toEqual([
         { message: "第一条", ...scene },
@@ -183,11 +187,30 @@ describe("React chat runtime lifecycle", () => {
       stream.close();
       await sending;
       expect(state.items.some(item => item.kind === "message" && item.text === "正常回复")).toBe(true);
-      expect(JSON.stringify(state.items)).not.toMatch(/desktop-fixture|trace-fixture|scene_meta/);
+      expect(JSON.stringify(state.items.map(item => item.kind === "message" ? item.text : ""))).not.toMatch(/desktop-fixture|trace-fixture|scene_meta/);
+      expect(state.items.filter(item => item.kind === "message").every(item => item.sceneId === "desktop-fixture")).toBe(true);
     } finally {
       runtime.dispose();
       proxy.abortAll();
     }
+  });
+
+  it("preserves the draft and attachments when the desktop scene is unavailable", async () => {
+    vi.stubGlobal("location", new URL("beings://chat/"));
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const state = new ChatState(), runtime = createChatRuntime(state);
+    const files = [{ name: "notes.txt", type: "text/plain", size: 3, base64: "YWJj" }];
+    state.draft = "暂存的消息";
+    state.files = files;
+    try {
+      await runtime.send(state.draft, files);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(state.draft).toBe("暂存的消息");
+      expect(state.files).toBe(files);
+      expect(state.items).toEqual([expect.objectContaining({ role: "system", text: expect.stringContaining("客户端场景不可用") })]);
+      expect(state.streaming).toBe(false);
+    } finally { runtime.dispose(); }
   });
 });
 

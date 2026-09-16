@@ -38,6 +38,7 @@ const api: DesktopAPI = {
   cancelTownPair: requestId => ipcRenderer.invoke('beings:town-pair-cancel', requestId),
   saveTownToken: token => ipcRenderer.invoke('beings:town-token', token),
   localKits: () => ipcRenderer.invoke('beings:kits'),
+  deleteKit: name => ipcRenderer.invoke('beings:kit-delete', name),
   importKit: () => ipcRenderer.invoke('beings:kit-import'),
   prepareKit: id => ipcRenderer.invoke('beings:kit-prepare', id),
   installKit: input => ipcRenderer.invoke('beings:kit-install', input),

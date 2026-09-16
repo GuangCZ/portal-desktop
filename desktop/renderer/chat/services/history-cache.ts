@@ -1,4 +1,6 @@
-// Based on d5z/loom-local a18812c's IndexedDB cache, without scene filtering.
+import { messageScene } from "../models/scenes";
+
+// Store all scenes together; changing the visible scope never changes the cache cursor.
 // Only server-confirmed history is stored; stream/tool state is not a backup.
 export interface HistoryMessage {
   seq: number;
@@ -8,6 +10,7 @@ export interface HistoryMessage {
   from?: string;
   type?: string;
   scene_id?: string;
+  scene_label?: string;
 }
 
 export function historyCacheDatabaseName(endpoint: string) {
@@ -111,6 +114,8 @@ export class HistoryCache {
         for (const key of ["at", "from", "type", "scene_id"] as const) {
           if (typeof m[key] === "string") row[key] = m[key];
         }
+        const scene = messageScene(m);
+        if (scene.sceneLabel) row.scene_label = scene.sceneLabel;
         store.put(row);
       }
       const meta = tx.objectStore("meta");

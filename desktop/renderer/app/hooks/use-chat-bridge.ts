@@ -44,6 +44,10 @@ export function useChatBridge(
       }
       if (message.revision !== new URL(target.src).searchParams.get("revision"))
         return;
+      if (message.type === "beings:history-scope-state") {
+        if (message.scope === "current" || message.scope === "all") app.setChatHistoryScope(message.scope);
+        return;
+      }
       if (message.type === "beings:sbs-state") {
         if (typeof message.enabled === "boolean") app.setSbsEnabled(message.enabled);
         else if (message.known === false) app.setSbsEnabled();

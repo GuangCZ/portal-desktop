@@ -44,6 +44,18 @@ export async function localKits(settings: Settings, home?: string): Promise<KitL
   return { ...location, kits };
 }
 
+export async function deleteLocalKit(settings: Settings, name: string, home = os.homedir()): Promise<void> {
+  if (typeof name !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(name)) throw new Error('无效的 Kit 名称。');
+  const { directory } = await kitLocation(settings, home);
+  const target = path.join(directory, name);
+  if (path.dirname(target) !== path.resolve(directory)) throw new Error('无效的 Kit 路径。');
+  let metadata;
+  try { metadata = await lstat(target); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+  if (!metadata.isDirectory()) throw new Error('Kit 路径不是目录，未删除任何文件。');
+  await rm(target, { recursive: true, force: false });
+}
+
 // Import only a directory chosen through the native file picker. Never run provision scripts.
 // Stage outside kits_dir: Portal must never see a partially copied manifest during startup.
 export async function importLocalKit(source: string, destination: string): Promise<LocalKit> {

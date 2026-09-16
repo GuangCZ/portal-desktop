@@ -123,6 +123,9 @@ export function Topbar({ model }: { model: AppModel }) {
       <ChatSceneIndicator
         scene={app.snapshot?.chatScene}
         connected={hasToken}
+        scope={app.chatHistoryScope}
+        scopeReady={hasToken && !app.chatLoading && app.chatHistoryScopeKnown}
+        onScope={(scope) => app.changeChatHistoryScope(scope)}
         onCopy={(id) => void app.run(async () => {
           await app.api.copyText(id);
           app.toast("场景 ID 已复制");

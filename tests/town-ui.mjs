@@ -53,7 +53,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
       if (url.pathname === '/api/messages') return json({ count: 1, messages: [{ id: '1', sender: url.searchParams.get('with') === 'sent' ? 'Willow' : 'River', recipient: url.searchParams.get('with') === 'sent' ? 'River' : 'Willow', content: url.searchParams.get('with') === 'sent' ? '已发送的测试信件' : '一封测试来信', delivery_status: 'delivered', created_at: '2026-09-07T12:00:00Z' }] });
       if (url.pathname === '/api/grove') {
         const offset = Number(url.searchParams.get('offset'));
-        return json({ count: 25, kits: Array.from({ length: offset ? 1 : 24 }, (_, i) => ({ id: 'kit' + (offset + i), name: 'Tool ' + (offset + i), description: 'A useful kit', display_name: 'Willow', version: '1.0', status: 'grown' })) });
+        return json({ count: 25, kits: Array.from({ length: offset ? 1 : 24 }, (_, i) => ({ id: 'kit' + (offset + i), name: offset + i === 0 ? 'downloaded-kit' : 'Tool ' + (offset + i), description: 'A useful kit', display_name: 'Willow', version: '1.0', status: 'grown' })) });
       }
       if (url.pathname.startsWith('/api/grove/')) return json({ id: 'kit0', name: 'downloaded-kit', description: 'A useful kit', version: '1.0', has_bundle: true, manifest: { command: ['node', 'server.mjs'], tools: [{ name: 'test_tool', description: 'Test tool parameters', params: { type: 'object', properties: { query: { type: 'string' } } } }] } });
       if (url.pathname === '/api/embers' || url.pathname === '/api/scrolls') return json({ total: 1, scrolls: [{ id: 'story1', title: '测试书架故事', display_name: 'Willow', kind: 'ember', updated_at: '2026-09-07T12:00:00Z' }] });
@@ -109,7 +109,10 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
   await page.locator('#kit-env-FIXTURE_API_KEY').fill('fixture-value');
   await mkdir('test-results', { recursive: true }); await page.screenshot({ path: 'test-results/kit-install.png' });
   await page.locator('.kit-install-form').getByRole('button', { name: '安装到本机', exact: true }).click();
-  await page.locator('.catalog-item').filter({ hasText: 'downloaded-kit' }).waitFor({ timeout: 60000 });
+  await page.locator('.kit-detail').getByRole('button', { name: '已安装', exact: true }).waitFor({ timeout: 60000 });
+  assert.equal(await page.getByRole('tab', { name: 'Grove 市集', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.match(await page.locator('.catalog-item').filter({ hasText: 'downloaded-kit' }).textContent(), /已安装/);
+  assert.equal(await page.locator('.kit-detail').getByRole('button', { name: '已安装', exact: true }).isDisabled(), true);
   const downloaded = JSON.parse(await readFile(path.join(dir, 'kits/downloaded-kit/manifest.json'), 'utf8'));
   assert.equal(downloaded.tools[0].name, 'downloaded_ping');
   assert(!JSON.stringify(downloaded).includes('fixture-value'));

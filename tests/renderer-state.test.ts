@@ -95,6 +95,17 @@ const settle = async () => {
 };
 afterEach(() => vi.useRealTimers());
 describe("React desktop state lifecycle", () => {
+  it("passes the proxy's exact scene identity to the chat without changing the cache identity", () => {
+    const app = new AppModel(api().value);
+    const snapshot = state();
+    snapshot.chatScene = { scene_id: "desktop-fixed", scene_meta: { client: "portal-desktop/0.1.3", scene_label: "桌面·测试 & PC" } };
+    app.applySnapshot(snapshot);
+    const url = new URL(app.chatSource);
+    expect(url.searchParams.get("scene_id")).toBe(snapshot.chatScene.scene_id);
+    expect(url.searchParams.get("scene_label")).toBe(snapshot.chatScene.scene_meta.scene_label);
+    expect(url.searchParams.get("history_scope")).toBe(snapshot.settings.endpoint);
+    expect(url.searchParams.has("token")).toBe(false);
+  });
   it("previews Portal logs through Together without posting until the user composes a reference", async () => {
     vi.useFakeTimers();
     const pending = deferred<{ endpoint: string; text: string }>();

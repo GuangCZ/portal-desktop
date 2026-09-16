@@ -73,6 +73,7 @@ export interface DesktopAPI {
   pairTown(input: { beingId: string; code: string }): Promise<void>;
   saveTownToken(token: string): Promise<void>;
   localKits(): Promise<KitLibrary>;
+  deleteKit(name: string): Promise<{ deleted: boolean; name: string }>;
   importKit(): Promise<{ installed: boolean; name?: string }>;
   prepareKit(id: string): Promise<KitInstallPlan>;
   installKit(input: KitInstallInput): Promise<{ name: string; tools: number; message: string }>;

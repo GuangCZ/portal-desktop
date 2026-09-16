@@ -1,7 +1,7 @@
 // Real Chromium/IndexedDB persistence, using an isolated profile and local API.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -12,6 +12,7 @@ let history = [], seq = 0, offline = false;
 const queries = [], sent = [];
 const append = (role, content, scene_id) => history.push({ seq: ++seq, role, content, scene_id, at: new Date().toISOString(), token: 'must-not-be-cached', attachments: ['not-history-fields'] });
 for (let i = 1; i <= 100; i++) append(i % 2 ? 'user' : 'being', `历史 ${i}`, i % 3 ? 'loom-Willow' : 'town-mail');
+history[2].scene_meta = { scene_label: '小镇私信', token: 'must-not-be-cached' };
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
   const json = (data, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data)); };
@@ -100,6 +101,31 @@ try {
   assert.equal(JSON.stringify(initial).includes('not-history-fields'), false);
   assert.ok(initial.messages.some(m => m.scene_id === 'town-mail'));
   assert.ok(initial.messages.some(m => m.scene_id === 'another-client'));
+  assert.equal(initial.messages.find(m => m.seq === 3).scene_label, '小镇私信');
+  assert.equal(initial.messages.some(m => m.scene_meta), false);
+  // Switching views uses one all-scene cache/cursor and preserves the draft and reading position.
+  await open('&name=Willow&scene_id=loom-Willow&scene_label=Loom');
+  assert.equal(await page.getByRole('button', { name: '当前场景', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('#messages .message').count(), 67);
+  assert.equal(await page.getByText('历史 3', { exact: true }).count(), 0);
+  await page.locator('#input').fill('切换时保留草稿');
+  await page.locator('#messages').evaluate(el => { el.scrollTop = 120; });
+  await page.waitForFunction(() => document.querySelector('#messages').scrollTop === 120);
+  const queryCount = queries.length;
+  await page.getByRole('button', { name: '全部场景', exact: true }).click();
+  assert.equal(await page.locator('#messages .message').count(), 102);
+  assert.equal(await page.getByText('历史 3', { exact: true }).count(), 1);
+  assert.ok(await page.locator('.message-scene').getByText('town-mail', { exact: true }).count());
+  assert.equal(await page.locator('#input').inputValue(), '切换时保留草稿');
+  assert.match(await page.locator('.chat-scope-caption').textContent(), /发送到：Loom/);
+  await mkdir('test-results', { recursive: true });
+  await page.screenshot({ path: 'test-results/chat-scenes-all.png' });
+  await page.getByRole('button', { name: '当前场景', exact: true }).click();
+  assert.equal(await page.locator('#messages .message').count(), 67);
+  assert.equal(await page.locator('#messages').evaluate(el => el.scrollTop), 120);
+  assert.equal(queries.length, queryCount, 'Scope changes do not reset or refetch the global history cursor');
+  assert.equal((await cached()).messages.length, 102);
+  await page.screenshot({ path: 'test-results/chat-scenes-current.png' });
   await context.close(); context = null;
 
   // Close the browser process, then restart against the same profile offline.
