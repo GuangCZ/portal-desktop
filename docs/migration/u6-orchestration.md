@@ -733,8 +733,8 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 源码是 `undefined <= now` 为 false（不可续）。已改回 `nextAttemptAt!`（编译后即源码写法）。
 
 有意的偏离（单元边界造成，集成阶段需要接回）：
-1. `agent-process.ts` 的 `WINDOWS_RUNNER` 归 DesktopTerminal 单元，改为构造参数 `windowsRunner` 注入；
-   win32 且未注入时抛 `'Windows worker 运行脚本未注入，无法启动 worker。'`（源码里直接用模块常量，没有这条分支）。
+1. `agent-process.ts` 的 `WINDOWS_RUNNER` 归 DesktopTerminal 单元，仍保留 `windowsRunner` 构造参数供集成阶段覆盖，
+   但默认值是 `vendored.ts` 里逐字节复制的 `WINDOWS_RUNNER`，win32 行为与 `src/agent-process.cjs` 完全一致（见"复审修复"）。
    `agentEnvironment` 同样多了一个可选的 `consoleEnvironment` 参数（默认为 vendored 副本）。
 2. `orchestration-policy.ts` 的 `validDesktopId` / `desktopPortalName` 归身份单元，改为构造参数注入，默认值逐行照抄。
 3. `worker-callbacks.ts` 的 `parseConnection` / `sessionPartition`（src/security.cjs）改为
@@ -769,5 +769,29 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 | `Orchestration.assertEnforced` / `enforcement` | OrchestrationPolicy | 未设置（跳过强制检查） |
 | `Orchestration.getExecutionContext` | main.cjs：`{desktopId, place: desktopTools?.link.capabilities().place}` | `() => ({})` |
 | `Orchestration.detect` / `launch` | agent-kits / agent-process | 本单元自带实现 |
-| `launchAgent` 的 `windowsRunner` / `consoleEnvironment` | src/desktop-console.cjs（DesktopTerminal 单元） | `''`（win32 未注入即抛错）/ vendored 副本 |
+| `launchAgent` 的 `windowsRunner` / `consoleEnvironment` | src/desktop-console.cjs（DesktopTerminal 单元） | 均为 vendored 逐字节副本（可选覆盖，不注入也能正常启动 win32 worker） |
 | 请求上下文帧 `WrapMessage` / `UnwrapMessage` | src/orchestration-message.cjs → P1 的 desktop/main/chat/frame.ts | 仅在 types.ts 声明类型，本单元不使用 |
+
+---
+
+## 复审修复（2026-09-16）
+
+### high：win32 worker 启动被"未注入即抛错"打断
+
+复审指出 `launchAgent` 的 `windowsRunner = ''` + `if (!windowsRunner) throw` 是源码里不存在的分支：
+`Orchestration.launch`（orchestration.ts 的 worker 派发与标题 CLI）和 `agent-kits.ts` 的 `probe` 都不注入它，
+`src/main.cjs` 的真实 wiring 也不传 `launch` / `detect`，机械集成后 Windows 上会 worker 全挂、四个 agent 全报
+`检测失败，请检查程序路径。`。判断成立，已按复审给的第一种修法处理：
+
+- `vendored.ts` 增加 `WINDOWS_RUNNER`，从 `src/desktop-console.cjs:28-101` 原样复制
+  （`String.raw` 模板，脚本里没有反引号或 `${`，2733 字节，脚本比对确认与源文件逐字节相同）。
+- `agent-process.ts`：`windowsRunner = WINDOWS_RUNNER` 作为默认值，删除那条 `throw`；
+  `windowsRunner` 仍是可选构造参数，集成阶段可以换成 DesktopTerminal 单元的正式常量。
+- `types.ts`：`windowsRunner` / `consoleEnvironment` 的注释改为"可选覆盖，默认 vendored 副本"。
+- 新增回归用例（BeingDesktop 与本单元此前都没有覆盖 win32 分支）：
+  `tests/orchestration-agent-process.test.ts` 的
+  `the Windows worker shell runs the owned-job runner and receives the command through stdin`
+  用假 spawn 钉住 win32 的 shell 路径、六个固定参数、`-EncodedCommand` 的 utf16le/base64 载荷等于 `WINDOWS_RUNNER`、
+  `windowsHide/shell/detached` 选项以及 stdin 上的命令文本（`psValue` 编码 + 管道形式）。
+
+现在 `launchAgent({platform:'win32', ...})` 不注入任何东西也能跑通，与 `src/agent-process.cjs` 行为一致。

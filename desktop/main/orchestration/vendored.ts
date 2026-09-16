@@ -3,6 +3,7 @@
 //   sanitizeText      <- src/services.cjs   (Portal services unit)
 //   desktopEnvironment<- src/platform.cjs   (platform unit)
 //   consoleEnvironment<- src/desktop-console.cjs (DesktopTerminal unit)
+//   WINDOWS_RUNNER    <- src/desktop-console.cjs (DesktopTerminal unit)
 // Copied line by line so this unit is testable on its own; the integration phase should re-point
 // the three call sites at the canonical ports instead of keeping two copies.
 
@@ -72,3 +73,79 @@ export function consoleEnvironment(source: NodeJS.ProcessEnv = process.env): Nod
   }
   return result;
 }
+
+/** src/desktop-console.cjs `WINDOWS_RUNNER` (copied byte for byte; `String.raw` keeps every backslash literal). */
+// The shell owns this non-inheritable handle. Windows closes it when the shell
+// exits or Node terminates its process handle, killing only that job's tree.
+// Command text travels through stdin, never through a shell-quoted argument.
+export const WINDOWS_RUNNER = String.raw`
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = [Console]::OutputEncoding
+try {
+  Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class BeingConsoleJob {
+  [StructLayout(LayoutKind.Sequential)] struct Basic {
+    public long ProcessTime, JobTime;
+    public uint Flags;
+    public UIntPtr Minimum, Maximum;
+    public uint ActiveLimit;
+    public UIntPtr Affinity;
+    public uint Priority, Scheduling;
+  }
+  [StructLayout(LayoutKind.Sequential)] struct Counters {
+    public ulong ReadOps, WriteOps, OtherOps, ReadBytes, WriteBytes, OtherBytes;
+  }
+  [StructLayout(LayoutKind.Sequential)] struct Extended {
+    public Basic Basic;
+    public Counters Counters;
+    public UIntPtr ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory;
+  }
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  static extern bool SetInformationJobObject(IntPtr job, int type, IntPtr data, uint length);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  static IntPtr ownedJob;
+  public static void Enter() {
+    ownedJob = CreateJobObject(IntPtr.Zero, null);
+    if (ownedJob == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+    Extended info = new Extended();
+    info.Basic.Flags = 0x2000;
+    int size = Marshal.SizeOf(typeof(Extended));
+    IntPtr memory = Marshal.AllocHGlobal(size);
+    try {
+      Marshal.StructureToPtr(info, memory, false);
+      if (!SetInformationJobObject(ownedJob, 9, memory, (uint)size))
+        throw new Win32Exception(Marshal.GetLastWin32Error());
+    } finally { Marshal.FreeHGlobal(memory); }
+    if (!AssignProcessToJobObject(ownedJob, GetCurrentProcess()))
+      throw new Win32Exception(Marshal.GetLastWin32Error());
+  }
+}
+'@
+  [BeingConsoleJob]::Enter()
+  $commandText = [Console]::In.ReadToEnd()
+} catch {
+  [Console]::Error.WriteLine('[Being Console] Unable to initialize the owned command process: ' + $_.Exception.Message)
+  exit 125
+}
+$ErrorActionPreference = 'Continue'
+$global:LASTEXITCODE = 0
+try {
+  & ([ScriptBlock]::Create($commandText))
+  $commandSucceeded = $?
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  if (-not $commandSucceeded) { exit 1 }
+} catch {
+  [Console]::Error.WriteLine($_.ToString())
+  exit 1
+}
+`;

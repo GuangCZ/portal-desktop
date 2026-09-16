@@ -1,13 +1,35 @@
 // Ported from BeingDesktop 0.8.26 test/agent-process.test.cjs on 2026-09-16.
-// Four cases, names preserved. Two of them spawn a real child process through `launchAgent`,
+// Four ported cases, names preserved. Two of them spawn a real child process through `launchAgent`,
 // using a generated node script as the fake CLI exactly as BeingDesktop does.
+// The fifth case is a regression guard added on 2026-09-16 for the win32 branch, which neither
+// BeingDesktop nor this port covered: it pins the spawn shape to src/agent-process.cjs so the
+// vendored WINDOWS_RUNNER default cannot silently disappear again.
 // Contract: docs/orchestration.md "Environment" (allow-list, no code injection).
 
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { spawn as spawnType } from "node:child_process";
 import { afterAll, describe, expect, it } from "vitest";
-import { agentEnvironment, launchAgent } from "../desktop/main/orchestration/agent-process";
+import { agentEnvironment, launchAgent, psValue } from "../desktop/main/orchestration/agent-process";
+import { WINDOWS_RUNNER } from "../desktop/main/orchestration/vendored";
+
+interface SpawnCall { file: string; args: readonly string[]; options: Record<string, unknown> }
+
+function recordingSpawn() {
+  const calls: SpawnCall[] = [];
+  let written = "";
+  const stream = () => Object.assign(new EventEmitter(), { setEncoding: () => {} });
+  const spawnImpl = ((file: string, args: readonly string[], options: Record<string, unknown>) => {
+    calls.push({ file, args, options });
+    return Object.assign(new EventEmitter(), {
+      stdin: Object.assign(new EventEmitter(), { end: (text: string) => { written += text; } }),
+      stdout: stream(), stderr: stream(), exitCode: null, signalCode: null, pid: 4321,
+    });
+  }) as unknown as typeof spawnType;
+  return { calls, spawnImpl, written: () => written };
+}
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterAll(async () => { for (const cleanup of cleanups) await cleanup(); });
@@ -43,6 +65,21 @@ describe("agent process", () => {
       expect((await child.done).code).toBe(0);
       expect(JSON.parse(output)).toEqual({ key: "synthetic-" + name, url: "http://127.0.0.1/" + name, home: path.join(dir, name), proxy: source.HTTPS_PROXY });
     }
+  });
+
+  it("the Windows worker shell runs the owned-job runner and receives the command through stdin", () => {
+    const fake = recordingSpawn();
+    launchAgent({ file: "C:\\Program Files\\codex.exe", args: ["exec", "--json"], input: "中文需求", cwd: "C:\\work", platform: "win32", spawnImpl: fake.spawnImpl, environment: { SystemRoot: "D:\\Windows", PATH: "C:\\bin", OPENAI_API_KEY: "synthetic" } });
+    expect(fake.calls).toHaveLength(1);
+    const [call] = fake.calls;
+    expect(call.file).toBe("D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    expect(call.args.slice(0, 6)).toEqual(["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-EncodedCommand"]);
+    expect(Buffer.from(String(call.args[6]), "base64").toString("utf16le")).toBe(WINDOWS_RUNNER);
+    expect(WINDOWS_RUNNER).toContain("[BeingConsoleJob]::Enter()");
+    expect(call.options).toMatchObject({ cwd: "C:\\work", windowsHide: true, shell: false });
+    expect(call.options.detached).toBe(undefined);
+    expect((call.options.env as NodeJS.ProcessEnv).OPENAI_API_KEY).toBe("synthetic");
+    expect(fake.written()).toBe(`$agentExecutable = ${psValue("C:\\Program Files\\codex.exe")}\n$agentArguments = @(${psValue("exec")},${psValue("--json")})\n${psValue("中文需求")} | & $agentExecutable @agentArguments`);
   });
 
   it("CLI configuration directories and trusted certificates survive without disabling TLS verification", () => {
