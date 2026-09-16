@@ -36,9 +36,28 @@
 - §4：合回顺序 I3 → I2 → I4 → I1 → I6；I6 与 I1 都动 `sidebar.tsx` / `settings.tsx` 周边，故排在 I1 之后。
 - 附录：I6 独占目录 `main/shell/`、`main/subsystems/shell-state.ts`、`renderer/settings/`。
 
+### `docs/migration/i0-seams.md`（接缝权威说明）
+
+- `SubsystemContext` 成员：`handle`（自带来源校验 + quitting 守卫）、`exclusive`、`window()`、`store`（`SubsystemSettings`）、
+  `electron`、`userData`、`desktopId`、`clientVersion`、`fetchImpl`、`onError(scope, error)`、`registry`、`push(channel, payload)`（窗口守卫已在内部）。
+- **与方案 §2.1 的偏差（权威）**：`SubsystemSettings` 不是 `Settings & Record<string, unknown>`，而是拆成
+  `settings: Settings` + `extras: Readonly<Record<string, unknown>>` + `saveExtra(patch)`（合并进 settings.json，保留其它键，值 `undefined` 即删键）。
+  **I6 的侧栏写盘走 `extras` / `saveExtra`，不给 `Settings` 加字段**（0.8.x 不认识）。
+- 铁律：install 同步体内不得 `ctx.registry.get(...)` 取值，只能包成闭包。
+- `DesktopSubsystem` 可选实现：`linked()`（全部 installer 跑完后同步跑一趟，惰性规则的唯一例外，用于赋值）、
+  `connectionVerified(connection)`（**同步，不得 await `exclusive`**）、`connectionCleared()`、`quitting()`、`ready`。
+- 六个一行式冲突点与「只有 I0 能改」的清单：`main.ts`、`package.json`、`forge.config.ts`、`vite.*.config.ts`、
+  `subsystems/types.ts` 的接口成员、`renderer/app/models/app.ts`。
+- shared 类型：`desktop-types.ts` 是聚合器，各单元建自己的 `<key>-types.ts` 加一行 `export *`；**类型名必须加前缀防撞车**（`export *` 撞名静默丢弃）。
+- renderer 插槽：`page.tsx` / `sidebar.tsx` / `topbar.tsx` 已接好，后续单元不改；插槽组件自带边框与空态；
+  `order` 用百位留空隙；feature model 的订阅/定时器一律放 `start()` 并返回关闭函数。
+- `common/` 已在 I0 一次收敛完（`sanitize` / `platform` / `loom-connection` / `message-context`），各单元不再有「删副本」步骤。
+- `tests/architecture.test.ts` 强制分层；`main/common/` 只能 import node 内建与同目录文件。
+
 ## 3. 进度
 
 - [x] 读方案 §3 约定 / §3.6 / §2.1 / §2.4 / §1.2 / §4 / 附录
+- [x] 读 `docs/migration/i0-seams.md`
 
 ## 4. 决定与偏差
 
