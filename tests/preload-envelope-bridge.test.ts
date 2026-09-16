@@ -18,6 +18,7 @@ import {
 } from "../desktop/shared/town-desktop-errors";
 import { installDecodedBridge } from "../desktop/preload/main-world";
 import { publicErrorMessage } from "../desktop/shared/errors";
+import { envelopesAreRebuiltInPreload, enveloped, townEnveloped } from "../desktop/preload/channels/bridge";
 
 // The preload channel files are the other half of the path, so drive the real
 // ones rather than a hand-written stand-in. Only `invoke` and the two listener
@@ -92,6 +93,23 @@ test("the feature task ledger's own limit is a code that may cross", () => {
     __townError: true, code: "TASK_LIMIT_REACHED", message: "功能任务记录已满，请到任务页结束不再跟踪的等待任务后重试。",
   })).toEqual({
     __townError: true, code: "TASK_LIMIT_REACHED", message: "功能任务记录已满，请到任务页结束不再跟踪的等待任务后重试。",
+  });
+});
+
+test("the preload rejects with the envelope itself, not with an Error", () => {
+  // The whole repair in one assertion. An Error thrown HERE reaches the page with
+  // own properties ["message","stack"] and nothing else, so the preload must hand
+  // the envelope across as data and let the page rebuild it (main-world.ts).
+  expect(envelopesAreRebuiltInPreload()).toBe(false);
+  answer = () => ({ __townError: true, code: "AUTH_REQUIRED", message: "请先完成配对。" });
+  const chat = enveloped("beings:chat-view", "s1").then(() => null, (reason: unknown) => reason);
+  const town = townEnveloped("beings:town-bonfire", {}).then(() => null, (reason: unknown) => reason);
+  return Promise.all([chat, town]).then(([one, two]) => {
+    for (const reason of [one, two]) {
+      expect(reason).not.toBeInstanceOf(Error);
+      expect(reason).toEqual({ __townError: true, code: "AUTH_REQUIRED", message: "请先完成配对。" });
+    }
+    answer = () => ({});
   });
 });
 
@@ -202,6 +220,7 @@ test("every enveloped channel family carries its code to the page", async () => 
     "beings:sbs-set": { __townError: true, code: "ROLLED_BACK", message: "Being 撤销了这次改动。" },
   };
   answer = (channel) => envelopes[channel] ?? {};
+  const before = invoked.length;
   const bridge = install({ ...desktopChannels } as unknown as Record<string, unknown>);
   const chat = bridge.chat as { send: (input: unknown) => Promise<unknown>; detailOpen: (input: unknown) => Promise<unknown> };
   const town = bridge.townDesktop as { speak: (input: unknown) => Promise<unknown>; bonfire: () => Promise<unknown> };
@@ -224,7 +243,8 @@ test("every enveloped channel family carries its code to the page", async () => 
   expect([save instanceof Error, save.code]).toEqual([true, "NEEDS_KEY"]);
   const sbs = await caught(models.setSideBySide(true, 1));
   expect([sbs instanceof Error, sbs.code]).toEqual([true, "ROLLED_BACK"]);
-  expect(invoked.map((one) => one.channel)).toEqual(Object.keys(envelopes));
+  // Each family reached its own channel, in order, and nothing else was invoked.
+  expect(invoked.slice(before).map((one) => one.channel)).toEqual(Object.keys(envelopes));
   answer = () => ({});
 });
 

@@ -151,12 +151,13 @@
 I7 的四条通道以数据形式返回包络、由 `renderer/channel/models/channel.ts` 的 `unwrap()` 在渲染层重建——
 **与本机制是同一个思路**，而且已经是绿的；解码器只碰拒绝路径，所以 Channel 族完全不受影响（见 openIssues 收敛建议）。
 
-`tests/preload-envelope-bridge.test.ts`（新，10 条）：包络规范化（白名单/截断/候选人上限/`NEEDS_KEY`/`TASK_LIMIT_REACHED`）、
+`tests/preload-envelope-bridge.test.ts`（新，11 条）：包络规范化（白名单/截断/候选人上限/`NEEDS_KEY`/`TASK_LIMIT_REACHED`）、
 拒绝的包络 → 真 Error、`NOT_SENT` 的候选人与 detail、**非包络一律穿透**（已解析包络/普通拒绝/同步返回/同步抛/普通值）、
 桥被冻结、**把解码函数 `toString()` 后用 `new Function` 重新求值再跑一遍**（复刻 Electron 的序列化那一步，
 把「必须自足」这条规则变成会红的测试）、**四个通道族各至少一条真路径**
 （`beings:chat-send`/`beings:chat-detail-open`/`beings:town-speak`/`beings:town-bonfire`/`beings:model-config-save`/`beings:sbs-set`，
-用真的 `desktopChannels` + 真的 bridge 助手 + 真的解码器，只有 `ipcRenderer.invoke` 是夹具）、退路的重建。
+用真的 `desktopChannels` + 真的 bridge 助手 + 真的解码器，只有 `ipcRenderer.invoke` 是夹具）、
+**preload 侧确实抛的是包络本身而不是 Error**（`envelopesAreRebuiltInPreload()` 恒 false，两族 `*enveloped` 的拒绝值 `not.toBeInstanceOf(Error)`）、退路的重建。
 
 ### 3.2 【第 2 条】Portal 运行态注入请求帧——已修（定案 §5.2 现在真的成立）
 
@@ -334,8 +335,8 @@ IM 留的四条 `pending`（读 `error.code` 的）全部转绿，退出码 0：
 ### 4.5 打包前后的门槛
 
 - `npm run typecheck`：绿。
-- `npx vitest run`：**130 文件 / 1416 通过 / 24 跳过**（基线 127 / 1398 / 24）。
-  新增 3 个测试文件（`preload-envelope-bridge` 10 条、`chat-integration-portal-state` 3 条、`app-quit-snapshot` 4 条），
+- `npx vitest run`：**130 文件 / 1417 通过 / 24 跳过**（基线 127 / 1398 / 24）。
+  新增 3 个测试文件（`preload-envelope-bridge` 11 条、`chat-integration-portal-state` 3 条、`app-quit-snapshot` 4 条），
   既有文件里加 1 条（`features-feature-tasks`），**跳过数一条没变，既有用例一条没删**。
   `tests/channel-integration-renderer.test.ts` 里那条既有用例改了一处断言（`model` 由「toast 说没有页面」改成
   「打开 models 对话框」，因为行为按任务书第 4 条**有意**改变），同时**补了 `workspace` 仍然 toast** ——规则数 +1。
