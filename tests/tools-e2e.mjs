@@ -151,6 +151,10 @@ try {
   assert.deepEqual(open.inputSchema.properties.target_portal.enum, [portalName]);
 
   // 4. The call waits for a person. Nothing has opened yet.
+  //    The panel opened a blank first tab of its own when it was shown (0.8.26's
+  //    `show()` does the same), so what must not change is the count.
+  const tabs = page.locator('#tools-browser-tabs .browser-tab');
+  const before = await tabs.count();
   const call = rpc('tools/call', {
     name: 'desktop_browser_open',
     arguments: { url: `${base}${PAGE}`, place: portalName, target_portal: portalName },
@@ -159,17 +163,18 @@ try {
   await card.waitFor();
   assert.match(await card.locator('strong').textContent(), /打开网页/);
   assert.match(await card.locator('pre').textContent(), new RegExp(PAGE));
-  assert.equal(await page.locator('#tools-browser-tabs .browser-tab').count(), 0, '未确认前不应打开标签页');
+  assert.equal(await tabs.count(), before, '未确认前不应打开标签页');
 
   // 5. Allow it — and only then does the browser open the page.
   await card.getByRole('button', { name: '允许本次' }).click();
   const result = await call;
   assert.equal(result.isError, false, JSON.stringify(result));
   await page.waitForFunction(
-    path => [...document.querySelectorAll('#tools-browser-tabs .browser-tab button:first-child')].some(tab => tab.title.includes(path) || tab.textContent.includes('Being 打开的页面')),
+    title => [...document.querySelectorAll('#tools-browser-tabs .browser-tab button:first-child')].some(tab => tab.textContent.includes(title)),
     'Being 打开的页面',
     { timeout: 20000 },
   );
+  assert.equal(await tabs.count(), before + 1, '允许后应多出一个标签页');
   await page.waitForFunction(() => !document.querySelector('#tools-requests .tools-request'));
 
   // 6. A second call, denied, must leave the client exactly as it was.
@@ -178,11 +183,11 @@ try {
     arguments: { url: `${base}${PAGE}?second=1`, place: portalName, target_portal: portalName },
   });
   await card.waitFor();
-  const tabsBefore = await page.locator('#tools-browser-tabs .browser-tab').count();
+  const tabsBefore = await tabs.count();
   await card.getByRole('button', { name: '拒绝' }).click();
   const refusal = await denied;
   assert.equal(refusal.isError, true);
-  assert.equal(await page.locator('#tools-browser-tabs .browser-tab').count(), tabsBefore);
+  assert.equal(await tabs.count(), tabsBefore);
 
   assert.deepEqual(errors, [], `渲染层报错：${errors.join(' | ')}`);
   console.log(`PASS: tools-e2e（握手 1 次，tools/list ${toolNames.length} 个工具，允许 1 次、拒绝 1 次）`);
