@@ -46,7 +46,8 @@
 //     replay(options?): { cursor: number } & RouterState
 //     router(options?): ChatRouter
 //   consumeEvents, sceneId, sessionFromScene, inScene, historyRow, imageBlocks, imageBytes,
-//   wrapMessage, IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_MESSAGE, HISTORY_LIMIT
+//   IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_MESSAGE, HISTORY_LIMIT
+// (`wrapMessage` moved to ./frame.ts, next to the unwrap half it must agree with.)
 //
 // Call points the coming chat-sessions port needs (BeingDesktop src/chat-sessions.cjs):
 //   new BeingChat({getContext, desktopId, clientVersion, prepareMessage, fetchImpl?})
@@ -60,6 +61,7 @@
 
 import { randomUUID as nodeRandomUUID } from 'node:crypto';
 import { parseConnection } from './connection';
+import { wrapMessage } from './frame';
 import {
   MESSAGES,
   type ChatContext,
@@ -103,18 +105,6 @@ const fail = (code: ChatErrorCode): ChatError =>
   Object.assign(new Error(MESSAGES[code] || MESSAGES.SERVICE_ERROR), { code });
 
 const errorCode = (error: unknown): unknown => (error as { code?: unknown } | null | undefined)?.code;
-
-// Runtime context is transient request metadata. Keep it outside the human message in local
-// history, while supplying it as text to Heart (scene_meta is routing metadata). Ported from
-// BeingDesktop src/orchestration-message.cjs lines 18-26; the unwrap half already lives in
-// ./frame.ts and the two merge in a later stage.
-const CONTEXT_PREFIX = '[Being Desktop request context v1; length=';
-const CONTEXT_SUFFIX = '\n[/Being Desktop request context v1]\n\n';
-export function wrapMessage(text: string, context?: string): string {
-  if (!context) return text;
-  const trimmed = context.trimEnd();
-  return CONTEXT_PREFIX + trimmed.length + ']\n' + trimmed + CONTEXT_SUFFIX + text;
-}
 
 // A Desktop conversation maps to exactly one scene, and the mapping is reversible both ways.
 export function sceneId(desktopId: string, sessionId: string): string {

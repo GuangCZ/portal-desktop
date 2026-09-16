@@ -1,6 +1,6 @@
-// Ported from BeingDesktop 0.8.26 src/orchestration-message.cjs lines 16-37;
-// 2026-09-16. Kept here rather than with the orchestration port so the store can
-// use it now; the two merge in a later stage.
+// Ported from BeingDesktop 0.8.26 src/orchestration-message.cjs lines 1-37;
+// 2026-09-16. `wrapMessage` moved here from the first stage's being-chat.ts on
+// the same date, so both halves of the frame are defined together.
 //
 // Runtime context is transient request metadata. It is supplied to Heart as text
 // (scene_meta is routing metadata, not content), but it is not part of what the
@@ -9,6 +9,43 @@
 // on the way out.
 const PREFIX = '[Being Desktop request context v1; length=';
 const SUFFIX = '\n[/Being Desktop request context v1]\n\n';
+
+/**
+ * Put a request-context frame in front of a user message.
+ *
+ * The declared length is of the trimmed context, and it is what `unwrapMessage`
+ * trusts, so the two must trim identically — they are kept in one file for that
+ * reason. No context means no frame at all: an empty header would still have to
+ * be stripped back out of every stored row.
+ */
+export function wrapMessage(text: string, context?: string): string {
+  if (!context) return text;
+  const trimmed = context.trimEnd();
+  return PREFIX + trimmed.length + ']\n' + trimmed + SUFFIX + text;
+}
+
+/**
+ * The orchestrator-mode instructions appended to the request context.
+ *
+ * Ported from BeingDesktop src/orchestration-message.cjs lines 4-14. Only the
+ * disabled branch is live in this stage: the orchestration subsystem, which owns
+ * `mode` and the worker tools the enabled branch describes, arrives later. This
+ * is its injection point — `setOrchestrationInstructions` replaces the
+ * implementation once that subsystem exists, rather than the chat layer growing a
+ * dependency on it. Note `unwrapMessage` below already tolerates a context that
+ * ends with the enabled branch's footer, so a frame written by the finished
+ * version is stripped correctly by this one.
+ */
+export type OrchestrationMode = { enabled?: boolean } & Record<string, unknown>;
+// Until then both branches are empty: the disabled one legitimately so, the
+// enabled one because nothing can turn it on yet.
+let instructions: (mode: OrchestrationMode | null | undefined) => string = () => '';
+export function orchestrationInstructions(mode: OrchestrationMode | null | undefined): string {
+  return instructions(mode);
+}
+export function setOrchestrationInstructions(implementation: (mode: OrchestrationMode | null | undefined) => string): void {
+  instructions = implementation;
+}
 
 /**
  * Strip a request-context frame from a user message.
