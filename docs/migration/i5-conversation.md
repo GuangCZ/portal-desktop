@@ -218,7 +218,12 @@ Worktree `.local/i5-conversation`，分支 `i5-conversation`，基线 `next @ 7b
 - **D3 `PortalState` 拿不到（未决）。** `main.ts` 把 `PortalSupervisor` 留在自己的闭包里，没有传给 `installDesktopExtensions`；`SubsystemContext` 也没有这个字段，而 `subsystems/types.ts` 与 `main.ts` 都是本单元不得修改的文件。因此 `subsystems/chat.ts` 传 `getPortalState: () => null`，帧里 `portal.status` 恒为 `not_configured`、`health` 恒为 `unknown`。**未把整个 `portal` 置 null**：帧正文有一句「已有部署的配置名见 `runtime.portal.configuredName`」，置 null 会让这句话指向不存在的字段；`configuredName` 与 `workspace` 来自已保存的 profile，是真值。方向上偏保守（Being 会更谨慎而不是更大胆），但仍是错的，列进 openIssues。
 - **D4 Kit 没有市场 ID。** BD 的 `listInstalledComposerKits` 读 `.being-desktop-install.json` 回执把市场 ID 找回来，本仓库 `kits/install.ts` 只写 `.beings-install.json{sha256, installedAt}`。因此 composer 的 kit `id` 用 handle 兜底，`icon` 恒为 `''`（菜单画名字首字母）。
 - **D5 `ChatComposerEntry.builtin` 从 `boolean` 改成 `string`**（`'search' | 'browse' | ''`）。BD `buildKitPrompt` 对两个内置能力展开的是**不同**的指令段，布尔量表达不了，P1 的占位类型在这里必须让位。
-- **D6 `⌘1–9` 是相对 BD 的新增。** BD 0.8.26 的 `renderer/app.js:1300` 只绑 `⌘B` / `⌘,`，`⌘<数字>→task-<n>` 来自 `renderer/desktop-menu.cjs:35` 的菜单加速键。本仓库没有那张菜单，规则照 `renderer/sidebar.js:280`（`ordered().filter(!archived)[n-1]`）实现在 keyboard 块里；`⌘1` 保留原来的「切到对话页」含义。
+- **D6 `⌘1–9` 的计数顺序是「最近」，不是「屏幕上第几行」。** BD 0.8.26 的 `renderer/app.js:1300` 只绑 `⌘B` / `⌘,`，`⌘<数字>→task-<n>` 来自 `renderer/desktop-menu.cjs:35` 的菜单加速键；本仓库没有那张菜单，规则照 `renderer/sidebar.js:280` 实现在 keyboard 块里，`⌘1` 保留原来的「切到对话页」含义。
+  **注意这里踩过一次坑**：侧栏 `render()`（`sidebar.js:98`）画的是「置顶段 → 项目段 → 其余」的分组顺序，但 `command` 用的是
+  `ordered().filter(!archived)[n-1]` —— 纯 recency，无视分组。也就是说 BD 里 `⌘3` 是「你第三近碰过的会话」，不是「屏幕上第三行」。
+  `OrganizerModel.listed()` 一开始按分组顺序写（看起来更合理：数第几行就是第几个），复核 BD 源码后改回 recency：
+  这是行为移植，不是行为优化，而且 recency 的编号在置顶/取消置顶时不会跳。`tests/conversation-model.test.ts` 加了一条钉住它
+  （置顶把行挪到屏幕顶端、但不改它的编号；归档的会话不占编号）。
 - **D7 E2E 锚点与方案写的不同。** §6.1 写 `#client-main` / `#startup-screen[hidden]` / `.chat-message[data-role=user]` / `.chat-live`——真实代码是 `#connect-button` / `.chat-native` / `.chat-message.is-user` / `.chat-message.is-being.is-live`（`components/{messages,composer}.tsx` 实测）。按真实类名写。
 - **D8 夹具必须报告活跃流。** `/api/stream/active` 一律 204 时，`BeingChat.stop` 的 `probe()` 得到 `verdict: 'gone'` 就返回 `{stopped:false, reason:'idle'}`，**根本不会发 `POST /api/stop`**——第一次跑就是这样超时的。夹具改成在流打开期间返回 `{stream_id, origin:'human', events:[{event:'content_block_delta', data:{scene_id}}]}`，`speaking` 才为真、场景才可证明属于本会话，停止才是真的停止。
 - **D9 控制字符必须写成转义。** `renderer/conversation/models/{directory,worker-results}.ts` 与 `tests/conversation-renderer.test.ts` 一度把 `\x00`、`\x1f`、`‪` 等直接写成了裸字节，git 因此把三个文件当二进制（`Bin 0 -> N`），合回 next 时会变成二进制冲突而不是可读 diff。已按 BD `renderer/town-mentions.js:6` 与 `common/sanitize.ts` 的写法改回文本转义，运行时行为不变。
@@ -234,9 +239,9 @@ Worktree `.local/i5-conversation`，分支 `i5-conversation`，基线 `next @ 7b
 ## 6. 冒烟与门槛
 
 - `npm run typecheck`：绿。
-- `npx vitest run`：**114 文件 / 1270 通过 / 24 跳过**（基线 109 / 1197 / 34）。新增 5 个测试文件、+73 通过；重新启用 10 条 skip（34 → 24）。既有用例一条未删、未弱化。
+- `npx vitest run`：**114 文件 / 1271 通过 / 24 跳过**（基线 109 / 1197 / 34）。新增 5 个测试文件、+74 通过；重新启用 10 条 skip（34 → 24）。既有用例一条未删、未弱化。
 - **打包真跑**：`PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package`（绕代理）+ `codesign --force --deep --sign -`，`resources/heart-portal` 用 clang 编的 Mach-O stub（`--version` 打印 `heart-portal 0.0.0`）。
-- **`tests/electron-smoke.mjs`：18 条全过**（§6.1 的 10 步全部走到）。覆盖：打包客户端启动 → 真实设置对话框连接夹具 → 侧栏一个会话 → 基线 `GET /api/history` 恰好一次 → 发一句 → `.chat-message.is-user` + 流式行 → `POST /api/chat/stream` 的 body 带 `scene_id`（`desktop-<uuid>-<uuid>`）/ `scene_meta.scene_label` / `scene_meta.client` / `client_ref`，`message` 带 v1 帧且声明长度属实、剥掉后正是人说的话、帧里 `chatSessionId` 等于场景里的会话 UUID、直接模式无 orchestrator 段、token 不在 body 任何位置 → 停止按钮 → `POST /api/stop` 恰好一次 → 重启后会话、标题、双方消息都在，且转写里没有 `request context v1`。
+- **`tests/electron-smoke.mjs`：18 条全过**（在最终树上重新打包后又跑了一遍，仍全过）（§6.1 的 10 步全部走到）。覆盖：打包客户端启动 → 真实设置对话框连接夹具 → 侧栏一个会话 → 基线 `GET /api/history` 恰好一次 → 发一句 → `.chat-message.is-user` + 流式行 → `POST /api/chat/stream` 的 body 带 `scene_id`（`desktop-<uuid>-<uuid>`）/ `scene_meta.scene_label` / `scene_meta.client` / `client_ref`，`message` 带 v1 帧且声明长度属实、剥掉后正是人说的话、帧里 `chatSessionId` 等于场景里的会话 UUID、直接模式无 orchestrator 段、token 不在 body 任何位置 → 停止按钮 → `POST /api/stop` 恰好一次 → 重启后会话、标题、双方消息都在，且转写里没有 `request context v1`。
 - 未跑：`npm run test:all` 全量（会串行占用四个 worktree 共用的 E2E 锁，且包含其它单元的脚本）。本单元只保证 `electron-smoke` 从「skipped」变「passed」，§6.3.4 的「skipped 名单只减不增」在这一项上成立。
 - `npm run start` 开发实例未单独跑：打包产物启动（§6.3 第 3 条，更强的一条）已真跑通过。
 

@@ -181,13 +181,17 @@ export class OrganizerModel extends Store {
     };
   }
 
-  /** The conversations the sidebar lists, in the order it lists them: pinned
-   * first, then each project folder, then everything else. What the shell's
-   * ⌘1–9 counts, so the tenth row on screen is the tenth row for the keyboard
-   * too — an archived conversation is in neither. */
+  /** What ⌘1–9 counts: the unarchived conversations in recency order.
+   *
+   * Deliberately NOT the sidebar's visual order. 0.8.26 renders pinned rows, then
+   * project folders, then the rest (sidebar.js line 98), but its own shortcut
+   * reads `ordered().filter(!archived)[n-1]` (line 280) — most recently touched
+   * first, grouping ignored. So ⌘3 is the third conversation you touched, not the
+   * third row on screen, and it keeps meaning that when something is pinned.
+   * Ported as measured; the grouped reading was tried and rejected as an
+   * optimisation of behaviour rather than a port of it. */
   listed(sessions: readonly ChatSessionSummary[]): ChatSessionSummary[] {
-    const groups = this.groups(sessions);
-    return [...groups.pinned, ...groups.projects.flatMap(project => project.sessions), ...groups.standalone];
+    return this.ordered(sessions).filter(session => !this.metadata(session.id).archived);
   }
 
   /** The search panel's two categories. Matches title and project name, as

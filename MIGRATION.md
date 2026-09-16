@@ -354,3 +354,4 @@ I0 的接缝铺好之后，五到七个单元在各自的 worktree 里把移植�
 I0 之后每个集成单元在下表**追加一行**（详情写在各自的 `docs/migration/<unit>.md`）。表头由第一个落地的单元建起。
 | 单元 | 接上了什么 | 用户可见的变化 |
 | I1 · Town | Town 直连读写、累积时间线、成员目录与六位码配对（`subsystems/town.ts` + 24 条 `beings:town-*` 通道 + 三条推送）；删除旧 Town 层与 u3 的 Portal 控制器 | **需要重新配对**：凭据改由 `<userData>/town-client` 保管（与 BeingDesktop 0.8.x 同格式），旧的 `town-credential.json` 不再读取，也没有迁移器；篝火/围炉/私信改为本机直连，不再经 Being 转发，未配对时发送会提示「请用 Being 提供的六位配对码连接 Town。」 |
+| I5 · 对话补全 | 请求上下文帧（发送时在主进程读取本机运行态，`prepareMessage` + `desktopEnvironment`）、解释卡片的七条 `beings:chat-detail-*` / `beings:chat-worker-result` 通道、composer 的 `/` Kit 与 `@` 成员补全数据、Worker 结果卡片；`tests/electron-smoke.mjs` 按原生对话页重写并在打包客户端上跑通 | 选中转写里的文字可以「添加到对话」或开一张**临时**解释卡片（关闭即不留本地记录）；`/` 唤出已安装 Kit 与两个内置能力、`@` 唤出 Being 成员（提及会公开到篝火，发送前要求本人按键确认）；委派出去的 Worker 有结果时，对话里出现可打开预览的验收卡片；`⌘1–9` 切到侧栏第 N 个会话 |

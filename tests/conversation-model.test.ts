@@ -689,6 +689,19 @@ describe("the sidebar's arrangement", () => {
     expect(basename("")).toBe("项目");
   });
 
+  // BeingDesktop renderer/sidebar.js line 280: the shortcut reads `ordered()`,
+  // not the grouped list the sidebar draws at line 98. Pinning a conversation
+  // moves its row to the top of the screen and must NOT move its number.
+  it("counts ⌘1-9 by recency, not by where the row sits on screen", () => {
+    const organizer = new OrganizerModel();
+    expect(organizer.listed(list).map(item => item.id)).toEqual(["new", "same-a", "same-b", "old"]);
+    organizer.pin("old");
+    expect(organizer.groups(list).pinned.map(item => item.id)).toEqual(["old"]);
+    expect(organizer.listed(list).map(item => item.id)).toEqual(["new", "same-a", "same-b", "old"]);
+    organizer.archive("new");
+    expect(organizer.listed(list).map(item => item.id)).toEqual(["same-a", "same-b", "old"]);
+  });
+
   it("takes a conversation out of a project without touching the project", () => {
     const organizer = new OrganizerModel();
     organizer.setProjects(["/home/me/work"]);
