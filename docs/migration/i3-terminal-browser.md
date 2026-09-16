@@ -323,6 +323,8 @@ BD 的 `state.workspace.path` 对应的是本仓库的 `projectWorkspace`（`sha
 | `tests/terminal-integration-subsystem.test.ts` | 5 条 |
 | `tests/tool-browser-integration.test.ts` | 6 条 |
 | `tests/terminal-panel-model.test.ts` | 12 条 |
+| `tests/tool-browser-panel-model.test.ts` | 10 条（复审后补，见 §6） |
+| `tests/subsystem-installers.test.ts` | 1 条：真实 `INSTALLERS` 全部装上、无重复通道名（复审后补，见 §6；后续单元不需要改它） |
 | `tests/terminal-e2e.mjs` | 打包客户端的真机 E2E（方案 §6.2，第二个提交） |
 
 ### 3.2 IPC 通道清单
@@ -460,6 +462,8 @@ BD 的 `state.workspace.path` 对应的是本仓库的 `projectWorkspace`（`sha
    建议的一行接法写在 D1 里。**合回顺序是 I3 → I2，所以这件事由 I2 的作者或整合者在 rebase 时处理。**
 3. **工具浏览器没有独立的 E2E。** 本次用一次性脚本在开发树里实测过（见 §4.2 第 1 条），
    但没有落成可重复的 `tests/tool-browser-e2e.mjs`——方案 §6.2 也没有要求。
+   （渲染层模型本身在复审后已有 `tests/tool-browser-panel-model.test.ts` 覆盖，见 §6；
+   缺的是「真的挂上 `WebContentsView`」这一段，只有打包客户端能验。）
    既有的 `tests/browser-e2e.mjs` 测的是外壳浏览器，本单元一行未改。
    **注意**：它里面的 `contentView.children.find(v => v.webContents)` 在两个浏览器同时挂载时会取到第一个；
    该脚本只开外壳浏览器，所以当前仍然正确，但 I2 扩写它时要留意。
@@ -477,7 +481,11 @@ BD 的 `state.workspace.path` 对应的是本仓库的 `projectWorkspace`（`sha
 7. **xterm 的字号变量**：`typography()` 读 `--font-mono` 与 `--text-code`，这两个 CSS 变量是 BeingDesktop 的，
    **本仓库的样式表里没有定义**，所以现在一直走兜底（等宽栈 + 12px）。
    等 I6 的外观设置把这两个变量补上，终端字号就会跟着走，不需要再改这里。
-8. **`connectionCleared()` 依然没有调用方**（P1 就有的缺口，I0 原样保留）。
+8. **三个面板并排在窄窗口下仍会溢出**（复审第 5 条只修了一半）：本单元的两个面板已经可压缩
+   （`flex: 0 1 42%`），但外壳浏览器的 `#browser-panel{flex:0 0 49%}` 在 `desktop/renderer/app/styles.css:92`，
+   是本单元不许改的文件。窗口宽度约 1024px 以下、外壳浏览器 + 终端 + 工具浏览器全开时仍会溢出十几像素。
+   彻底解决要给 `#browser-panel` 也加 `flex-shrink`，属于 I2/I6。
+9. **`connectionCleared()` 依然没有调用方**（P1 就有的缺口，I0 原样保留）。
    本单元的两个子系统都没有实现它——终端与浏览器是本地工具，换 Being 不需要清空。
 
 ---
