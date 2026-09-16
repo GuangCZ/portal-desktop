@@ -308,3 +308,34 @@ IM 留的四条 `pending`（读 `error.code` 的）全部转绿，退出码 0：
   ——`desktop/main/town/session/session.ts` 的 `getBonfireMessages` 把 `/api/bonfire/hear` 与 `getMembers()` 放在同一个
   `Promise.all` 里（IM openIssue 10 / 复审 finding 2）。**属 IT 的独占目录，本单元按分工保持红。**
 - 脚本一字未改。
+
+### 4.4 其余 11 个脚本（同一份打包产物，逐条实跑）
+
+| 脚本 | 结果 |
+| --- | --- |
+| `npm run test:tools` | **PASS**（握手 1 次、`tools/list` 15 个工具、允许 1 次拒绝 1 次、收起面板后原生视图已分离） |
+| `npm run test:terminal` | **PASS**（打包客户端能启动 PTY、回显命令并关闭会话） |
+| `npm run test:sidebar` | **PASS**（14 条规则全过） |
+| `npm run test:browser` | **PASS**（原生页面、地址、历史、弹窗、模态层叠、会话保留、隔离、关闭清理） |
+| `npm run test:menu-keyboard` | **PASS** |
+| `npm run test:update-progress` | **PASS** |
+| `npm run test:town-names` | **PASS** |
+| `npm run test:seed-garden` | **PASS** |
+| `npm run test:e2e`（electron-smoke） | **PASS — 18 checks** |
+| `npm run test:sbs-refresh` | **PASS — 28 checks** |
+| `npm run test:model-settings` | **PASS — 13 checks** |
+
+11 个脚本退出码全部为 0。
+
+**其中三条直接验证了第 6 条**：`tools` / `browser` / `terminal` 是在 `codesign --force --deep --sign -` 之后的
+**第一次**运行里通过的——按 IM openIssue 3，这三个以前在这一刻必然 `electron.launch: Timeout 180000ms exceeded`。
+三份日志里都出现了 `Keychain coverage: MOCK`，说明默认真的生效了，而且没有一条 check 因此变松（它们本来就不测钥匙串）。
+
+### 4.5 打包前后的门槛
+
+- `npm run typecheck`：绿。
+- `npx vitest run`：**130 文件 / 1416 通过 / 24 跳过**（基线 127 / 1398 / 24）。
+  新增 3 个测试文件（`preload-envelope-bridge` 10 条、`chat-integration-portal-state` 3 条、`app-quit-snapshot` 4 条），
+  既有文件里加 1 条（`features-feature-tasks`），**跳过数一条没变，既有用例一条没删**。
+  `tests/channel-integration-renderer.test.ts` 里那条既有用例改了一处断言（`model` 由「toast 说没有页面」改成
+  「打开 models 对话框」，因为行为按任务书第 4 条**有意**改变），同时**补了 `workspace` 仍然 toast** ——规则数 +1。
