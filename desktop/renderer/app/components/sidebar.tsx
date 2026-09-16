@@ -136,7 +136,9 @@ export function Sidebar({ model }: { model: AppModel }) {
           type="button"
           id="add-project"
           className="sidebar-add-project"
-          disabled={shell.busy}
+          // Nothing to add it to in a window with no ledger: the note below says
+          // why rather than letting the dialog open onto a folder nobody saves.
+          disabled={shell.busy || !organizer.persistent}
           title="把一个本机文件夹加进侧栏，用来给会话分组"
           onClick={() => void app.run(() => shell.addProject())}
         >

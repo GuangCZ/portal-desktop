@@ -354,6 +354,7 @@ localStorage for the same reason」，把「每窗口内存态」说成了与 lo
 
 时序核对过，不会闪一下：`app/page.tsx` 的 `#client-main` 在 `startup !== "ready"` 时是 `hidden`，而 `startup` 要等
 `AppModel.start()` 里的 `snapshot()` 回来才变 `ready`——`start()` 同步绑账本，所以侧栏可见时 `persistent` 已经是 true。
+同一条件也把「添加项目文件夹」置灰——没有账本可加，让目录对话框开出来再把结果丢掉是更坏的沉默。
 e2e 新增 `no-ledger-note-while-bound`（绑上账本的窗口一条 `.sidebar-note` 都不该有）把这个反向性质钉住。
 
 ### 9.5 SBS 只读显示与 `beings:sidebar-project-select`（low）——**仍未做，需要人拍板**

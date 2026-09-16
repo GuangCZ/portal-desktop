@@ -62,8 +62,9 @@ export class ShellStateModel extends Store {
   start() {
     const shell = host(this.app);
     // No bridge, no binding: the projection keeps its own entries, the sidebar
-    // still works, and nothing pretends to have been saved. The only way to be
-    // here is a preload without this unit's channels.
+    // still works, and nothing pretends to have been saved — it says so, off
+    // `organizer.persistent` (app/components/sidebar.tsx). The only way to be here
+    // is a preload without this unit's channels.
     if (!this.api?.shellState) return () => {};
     const stop = this.api.shellState.onSidebar(state => this.accept(state));
     shell?.conversation.organizer.bindLedger({ act: action => this.act(action) });
