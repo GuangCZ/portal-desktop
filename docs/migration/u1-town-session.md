@@ -751,3 +751,34 @@ function fixture({pinned = '', identity = {town_id: townId, mentions: []}, hello
 12. `public directories and scrolls use Town identities without leaking private fields` —— `beingsDto([{town_id: otherId, display_name:'Bob'}])[0].id === otherId`；`beingsDto([{town_id: null, being_id:'bob', display_name:'Bob'}])` 抛 `INVALID_RESPONSE`（**`hasOwn town_id` 为真但值是 null → memberId 返回 null**）；`scrollListDto({scrolls:[{id:'note1', title:'Fixture', town_id: otherId, display_name:'Bob', visibility:'private', revision:1, share_token:'private'}], total:1, offset:0, limit:1}, {limit:1})` → `scrolls[0].beingId === otherId`，不含 `share_token`。
 
 （实际 `test(...)` 调用 **12** 次。）
+
+### 集成参考：BeingDesktop src/main.cjs boot() 里的实例化（已读）
+
+```js
+const townClient = new TownClient({
+  getContext: () => ({key: connection ? sessionPartition(connection) : '', beingId: state.connection.beingName,
+                      revision: generation, connected: !exitStarted && state.connection.status === 'connected'}),
+  store: new TownClientStore({directory: path.join(app.getPath('userData'), 'town-client'), safeStorage}),
+  fetchImpl: (url, options) => net.fetch(url, options),
+  onChange: () => broadcast(),
+  onEvent: event => {
+    if (event?.type === 'profile_changed') { invalidateTownMembers(); return; }
+    townBackground.notifyEvent(event);
+    if (event?.type === 'dm' && win && !win.isDestroyed()) win.webContents.send('being:town-messages', {kind: 'dm'});
+  },
+});
+const townSession = new TownSession({
+  getContext: () => ({configured: state.connection.configured, connected: state.connection.status === 'connected',
+                      exiting: exitStarted, connectionId: generation, identityRevision,
+                      beingName: state.connection.beingName, townId: townClient.state().townId}),
+  writeImpl: request => townSpeak(request),
+  getIdentity: options => townClient.identity(options),
+  fetchImpl: (url, options) => net.fetch(url, {...options, credentials: 'omit', referrerPolicy: 'no-referrer'}),
+  readImpl: (route, options) => townClient.read(route, options),
+  onChange: () => broadcast(),
+});
+```
+- **注意**：`TownSession` 自身的 `_request` 不设 `referrerPolicy`，由 main 在注入的 `fetchImpl` 里补上（同时再强制一次 `credentials:'omit'`）。移植后集成阶段要保留这一层包装。
+- `TownClient.getContext` 返回 `{key, beingId, revision, connected}`；`TownSession.getContext` 返回 `{configured, connected, exiting, connectionId, identityRevision, beingName, townId}`。两者字段**不同**，不能合并。
+- `townSpeak` 是 main 里的函数：先 `townClient.speak`，只有 `AUTH_REQUIRED` 才回退 `townWriter.send`（中继，范围外）。
+- 另有 `OnboardingInspection` 会构造一次性的 `TownSession`（只给 `getContext`/`getIdentity`/`fetchImpl`），说明这三个之外的注入项都可选。
