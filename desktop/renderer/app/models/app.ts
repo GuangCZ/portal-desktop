@@ -10,20 +10,18 @@ import { Store, errorText } from "../../shared/models/store";
 import { WorkspaceModel } from "./workspace";
 import { TownModel } from "../../town/models/town";
 import { ConversationModel } from "../../conversation/models/conversation";
-import type { HistoryScope } from "../../chat/models/scenes";
 
 export class AppModel extends Store {
   snapshot?: Snapshot;
   theme: "light" | "dark" = "light";
   startup: "loading" | "ready" | "error" = "loading";
   view = "chat";
+  /** The identity of the conversation surface currently on screen: a fresh token
+   * per connection, not a page to load. `use-conversation-bridge` reloads the
+   * conversation whenever it changes. */
   chatSource = "";
   chatLoading = false;
-  chatHistoryScope: HistoryScope = "current";
-  chatHistoryScopeKnown = false;
   connection = "";
-  sbsEnabled = true;
-  sbsKnown = false;
   toastMessage = "";
   settingsOpen = false;
   clientSettingsOpen = false;
@@ -58,8 +56,8 @@ export class AppModel extends Store {
   );
   readonly town: TownModel;
   /** The native conversation layer. It replaced the sandboxed Loom document on
-   * 2026-09-16; `chatSource` survives as the scene identity the shell derives
-   * from a connection, not as a page to load. */
+   * 2026-09-16, and the `beings://chat` path it used to live behind was removed
+   * with the rest of the iframe wiring. */
   readonly conversation: ConversationModel;
   constructor(readonly api: DesktopAPI) {
     super();
@@ -190,76 +188,38 @@ export class AppModel extends Store {
     this.snapshot = next;
     this.workspace.snapshot(next);
     if (next.settings.hasToken && (!this.chatSource || reload)) {
-      this.sbsKnown = false;
       this.chatLoading = true;
-      this.chatHistoryScope = next.chatScene ? "current" : "all";
-      this.chatHistoryScopeKnown = false;
       this.connection = "connecting";
-      this.chatSource = `beings://chat/?name=${encodeURIComponent(next.settings.being)}&history_scope=${encodeURIComponent(next.settings.endpoint)}&theme=${this.theme}&revision=${crypto.randomUUID()}`;
-      if (next.chatScene) {
-        this.chatSource += `&scene_id=${encodeURIComponent(next.chatScene.scene_id)}&scene_label=${encodeURIComponent(next.chatScene.scene_meta.scene_label)}`;
-      }
+      this.chatSource = crypto.randomUUID();
     }
     if (!next.settings.hasToken) {
-      this.sbsKnown = false;
       this.chatSource = "";
       this.chatLoading = false;
-      this.chatHistoryScopeKnown = false;
       this.connection = "";
       this.searchEntries = [];
     }
     this.changed();
   }
+  /** A new conversation surface is on screen. It kept the name it had while the
+   * surface was an iframe waiting for `load`; what it now marks is the shell
+   * letting go of the previous connection's search index. */
   frameLoaded() {
     this.chatLoading = false;
     this.search = "";
     this.searchEntries = [];
-    this.workspace.frameLoaded();
-    this.postAppearance();
-    this.post({ type: "beings:sbs-request" });
-    if (this.chatSource) this.post({ type: "beings:history-scope-request", revision: new URL(this.chatSource).searchParams.get("revision") });
     this.town.updateLive();
-    this.post({ type: "beings:search-request" });
     this.changed();
-  }
-  toggleSbs() {
-    if (!this.snapshot?.settings.hasToken || !this.sbsKnown || this.chatLoading)
-      return;
-    this.sbsKnown = false;
-    this.post({ type: "beings:sbs-toggle" });
-    this.changed();
-  }
-  changeChatHistoryScope(scope: HistoryScope) {
-    if (!this.chatSource || this.chatLoading || !this.chatHistoryScopeKnown || (scope === "current" && !this.snapshot?.chatScene)) return;
-    this.navigate("chat");
-    this.post({ type: "beings:history-scope", scope, revision: new URL(this.chatSource).searchParams.get("revision") });
-  }
-  setChatHistoryScope(scope: HistoryScope) {
-    this.chatHistoryScope = scope;
-    this.chatHistoryScopeKnown = true;
-    this.changed();
-  }
-  setSbsEnabled(enabled?: boolean) {
-    if (typeof enabled === "boolean") this.sbsEnabled = enabled;
-    this.sbsKnown = typeof enabled === "boolean";
-    this.changed();
-  }
-  postAppearance() {
-    this.post({ type: "beings:appearance", theme: this.theme });
-    this.post({ type: "beings:reading", size: this.readingSize });
   }
   async toggleTheme() {
     await this.run(async () => {
       this.theme = await this.api.appearance(
         this.theme === "light" ? "dark" : "light",
       );
-      this.postAppearance();
       this.changed();
     });
   }
   setReadingSize(size: number) {
     this.readingSize = size;
-    this.postAppearance();
     this.changed();
     try {
       localStorage.setItem("beings:reading-size", String(size));
@@ -270,13 +230,7 @@ export class AppModel extends Store {
   openSearch() {
     if (!this.snapshot?.settings.hasToken) return;
     this.searchOpen = true;
-    this.post({ type: "beings:search-request" });
     this.changed();
-  }
-  chatAction(action: string) {
-    this.clientSettingsOpen = false;
-    this.navigate("chat");
-    this.post({ type: "beings:chat-action", action });
   }
   async sharePortalLogs() {
     if (this.logsLoading) return;

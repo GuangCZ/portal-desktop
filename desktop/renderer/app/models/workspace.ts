@@ -1,19 +1,24 @@
 import { Store } from "../../shared/models/store";
-import {
-  SceneStore,
-  sceneExcerpt,
-  type SceneView,
-  type SceneObservation,
-} from "../../shared/models/scene";
+import { SceneStore, type SceneView } from "../../shared/models/scene";
 import type { Snapshot } from "../../../shared/types";
+/**
+ * The companion panel: what the user is looking at elsewhere in the client, and
+ * the quotation they chose to bring into the conversation.
+ *
+ * Until 2026-09-16 it also spoke a capture protocol with the sandboxed Loom
+ * document — the page told the shell which message the user had selected, and
+ * announced every send so the shell could file an environment envelope beside
+ * it. The conversation is native now and carries its own references
+ * (`shared/chat-references.ts`), so all that is left here is the outbound half:
+ * `compose()` offers a quotation, and the conversation answers whether its
+ * draft was empty enough to take it.
+ */
 export class WorkspaceModel extends Store {
   readonly scenes = new SceneStore();
   open = false;
   draftRequest = "";
   private timer?: ReturnType<typeof setTimeout>;
   private online = false;
-  private pending: SceneObservation | null = null;
-  private frozen: SceneObservation | null = null;
   constructor(
     private navigate: (view: string) => void,
     private toast: (message: unknown) => void,
@@ -25,8 +30,6 @@ export class WorkspaceModel extends Store {
   start() {
     const reset = () => {
       this.open = false;
-      this.frozen = null;
-      this.pending = null;
       this.draftRequest = "";
       clearTimeout(this.timer);
       this.changed();
@@ -84,61 +87,7 @@ export class WorkspaceModel extends Store {
       this.scenes.event("返回来源页面", ref.title, "引用保留发送前版本");
     }
   }
-  frameLoaded() {
-    this.frozen = null;
-  }
   receive(message: Record<string, unknown>) {
-    if (
-      message.type === "beings:scene-select" &&
-      this.scenes.current.view === "chat" &&
-      typeof message.id === "string" &&
-      /^[a-zA-Z0-9-]{1,80}$/.test(message.id) &&
-      typeof message.text === "string" &&
-      message.text.trim() &&
-      message.text.length <= 2100 &&
-      (message.role === "user" || message.role === "being")
-    ) {
-      const excerpt = sceneExcerpt(message.text.trim());
-      this.scenes.select({
-        id: `chat:${message.id}`,
-        title: excerpt.split("\n")[0].slice(0, 60),
-        author: message.role === "user" ? "你" : this.scenes.being,
-        excerpt,
-        private: true,
-      });
-      this.scenes.pin();
-      this.toggle(true);
-    }
-    if (
-      message.type === "beings:scene-capture" &&
-      typeof message.id === "string" &&
-      /^[a-zA-Z0-9-]{1,80}$/.test(message.id)
-    ) {
-      const old = this.scenes.reference;
-      this.scenes.reference =
-        message.hasSceneDraft && this.frozen ? this.frozen : null;
-      this.scenes.capture(message.id);
-      this.scenes.reference = old;
-      this.changed();
-      this.post({ type: "beings:scene-captured", id: message.id });
-    }
-    if (
-      message.type === "beings:scene-result" &&
-      typeof message.id === "string"
-    ) {
-      const envelope = this.scenes.envelopes.find(
-        (item) => item.messageId === message.id,
-      );
-      if (!envelope) return;
-      this.scenes.event(
-        message.ok === true ? "对话请求已被接受" : "对话请求未确认",
-        envelope.environment.title,
-        message.ok === true
-          ? "页面环境快照仅保存在本机"
-          : "请查看对话中的请求结果",
-      );
-      if (message.ok === true && message.hasSceneDraft) this.frozen = null;
-    }
     if (
       message.type === "beings:scene-draft-result" &&
       message.id === this.draftRequest &&
@@ -147,8 +96,6 @@ export class WorkspaceModel extends Store {
       clearTimeout(this.timer);
       this.draftRequest = "";
       if (message.ok) {
-        this.frozen = this.pending;
-        this.pending = null;
         this.scenes.event(
           "引用已放入对话草稿",
           this.scenes.reference?.title,
@@ -157,7 +104,6 @@ export class WorkspaceModel extends Store {
         this.navigate("chat");
         this.toggle(false);
       } else {
-        this.pending = null;
         this.toast("对话输入框已有草稿，请先处理原草稿，再放入引用。");
       }
       this.changed();
@@ -183,7 +129,6 @@ export class WorkspaceModel extends Store {
       .split("\n")
       .map((line) => "> " + line)
       .join("\n")}`;
-    this.pending = structuredClone(scene);
     this.draftRequest = crypto.randomUUID();
     this.changed();
     this.post({
@@ -196,7 +141,6 @@ export class WorkspaceModel extends Store {
     this.timer = setTimeout(() => {
       if (this.draftRequest) {
         this.draftRequest = "";
-        this.pending = null;
         this.changed();
         this.toast("对话页面尚未准备好，请稍后重试。");
       }

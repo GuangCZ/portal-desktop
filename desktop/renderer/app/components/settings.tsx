@@ -151,14 +151,6 @@ export function ClientSettings({ model }: { model: AppModel }) {
               Town 配对与身份 <span>›</span>
             </button>
             <button
-              data-chat-action="model"
-              disabled={!app.snapshot?.settings.hasToken}
-              onClick={() => app.chatAction("model")}
-              data-settings-route=""
-            >
-              模型设置 <span>›</span>
-            </button>
-            <button
               data-view="portal"
               onClick={() => {
                 app.clientSettingsOpen = false;

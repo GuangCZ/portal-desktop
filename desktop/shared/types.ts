@@ -46,8 +46,7 @@ export interface SaveSettings {
 export type PortalPhase = 'running' | 'stopped' | 'starting' | 'connected' | 'reconnecting' | 'stopping' | 'external' | 'error';
 export interface PortalState { phase: PortalPhase; pid?: number; managed?: boolean; runtimePath?: string; conflict?: boolean; message: string; logs: string[] }
 export interface BackgroundState { supported: boolean; installed: boolean; enabled: boolean; running: boolean; existing: boolean; label?: string; pid?: number; message: string }
-export interface ChatScene { scene_id: string; scene_meta: { client: string; scene_label: string } }
-export interface Snapshot { settings: Settings; portal: PortalState; background?: BackgroundState; chatScene?: ChatScene; notice?: string;
+export interface Snapshot { settings: Settings; portal: PortalState; background?: BackgroundState; notice?: string;
   /** The profile's persistent Desktop ID (desktop-id.json). Absent while the
    * identity file cannot be read; see main/app/identity.ts. */
   desktopId?: string }

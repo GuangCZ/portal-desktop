@@ -1,13 +1,16 @@
 import type { Connection } from './connection';
-import { upstreamRequest } from './proxy';
 
 // Verify the saved Being endpoint and credential before starting local tools.
 // A failed check does not erase configuration or prevent the client opening.
 export async function verifyBeingConnection(connection: Connection | null, fetcher: typeof fetch): Promise<void> {
   if (!connection) throw new Error('尚未配置 Being，Portal 未启动。');
-  const request = upstreamRequest(new Request('beings://chat/api/status'), connection);
+  // Built here since the renderer's request proxy was removed on 2026-09-16;
+  // the shape is the one `upstreamRequest` produced for this route — endpoint
+  // plus `/api/status`, the token as a query parameter, no relay secret.
+  const url = new URL(connection.endpoint + '/api/status');
+  url.searchParams.set('token', connection.token);
   try {
-    const response = await fetcher(request.url, { headers: request.headers, redirect: 'error',
+    const response = await fetcher(url.href, { headers: new Headers({ accept: '*/*' }), redirect: 'error',
       credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(8000) });
     if (response.status === 401 || response.status === 403) throw new Error('Being 凭据验证失败，Portal 未启动。请检查连接设置。');
     if (!response.ok || !response.body) throw new Error('Being 暂时无法连接，Portal 未启动。请稍后重试。');

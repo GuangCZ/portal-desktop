@@ -23,11 +23,9 @@ import { stageInstaller } from './updates/manual-installer';
 import { installerEvent, installerTarget, handleInstallerEvent } from './updates/installer-events';
 import { BackgroundPortal } from './portal/background';
 import { KitInstaller } from './kits/install';
-import { ChatProxy } from './chat/proxy';
-import { loadDesktopScene } from './chat/scene';
 import { verifyBeingConnection } from './chat/ready';
 import { redact } from './chat/connection';
-import type { ChatScene, SaveSettings } from '../shared/types';
+import type { SaveSettings } from '../shared/types';
 import { TownLive } from './town/live';
 import { TownClient, TownCredentials, TOWN_ORIGIN } from './town/client';
 import { registerTownIpc } from './town/ipc';
@@ -42,8 +40,8 @@ const startedAt = new Date().toISOString();
 // The display name, and — since Electron derives the profile directory and the
 // encrypted-storage identity from it — the application name as well. The
 // lower-case slug this client reports to Being, Town and GitHub is
-// `being-desktop`, spelled at each of its three call sites (chat/scene.ts,
-// town/pairing.ts, updates/checker.ts) as in BeingDesktop 0.8.26.
+// `being-desktop`, spelled at each of its call sites (town/pairing.ts,
+// updates/checker.ts) as in BeingDesktop 0.8.26.
 const CLIENT_NAME = 'Being Desktop';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'beings', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
@@ -69,7 +67,6 @@ let window: BrowserWindow | null = null;
 let windowReady = false;
 let browser: ClientBrowser | undefined;
 let portal: PortalSupervisor;
-let proxy: ChatProxy;
 let store: SettingsStore;
 let background: BackgroundPortal;
 let kitInstaller: KitInstaller;
@@ -181,13 +178,8 @@ async function ready() {
     portal.state = { phase: 'error', message: startupNotice, logs: [] };
   }
   if (!background.state.supported) store.settings.backgroundEnabled = false;
-  let chatScene: ChatScene | undefined;
-  let chatSceneNotice: string | undefined;
-  try { chatScene = await loadDesktopScene(directory, app.getVersion(), os.hostname()); }
-  catch { chatSceneNotice = '桌面场景标识未能读取或保存，暂时无法发送消息。请检查客户端配置目录后重启。'; }
-  proxy = new ChatProxy(() => store.connection, net.fetch.bind(net) as typeof fetch, chatScene);
   const assets = app.isPackaged ? path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`) : path.resolve('desktop/generated');
-  registerLocalProtocol(assets, proxy);
+  registerLocalProtocol(assets);
   configureLocalSession();
   let recoveryBlocked = false;
   const clientInstall = new ClientInstall(directory, background);
@@ -347,7 +339,7 @@ async function ready() {
   handle('beings:check-updates', showUpdates);
   handle('beings:cancel-update', () => { updateDownload?.abort(); });
   handle('beings:update-state', () => updates.state);
-  const snapshot = () => ({ settings: store.settings, desktopId, portal: portal.state, background: background.state, chatScene, notice: [startupNotice && errorLog.report('startup-notice', startupNotice), chatSceneNotice].filter(Boolean).join('\n') || undefined });
+  const snapshot = () => ({ settings: store.settings, desktopId, portal: portal.state, background: background.state, notice: startupNotice && errorLog.report('startup-notice', startupNotice) });
   const verifyConnection = async () => {
     await reusePreviousConfig();
     await verifyBeingConnection(store.connection, net.fetch.bind(net) as typeof fetch);
@@ -465,8 +457,10 @@ async function ready() {
       }
       throw error;
     }
+    // The conversation layer is rebound by `verifyConnection` above; nothing
+    // else here holds a request against the Being that was just replaced.
     townLive?.dispose();
-    proxy.abortAll(); return snapshot();
+    return snapshot();
   }));
   handle('beings:choose', async (kind: string) => {
     if (kind !== 'workspace') throw new Error('Invalid dialog');
@@ -650,7 +644,7 @@ else {
     lifecycleError = '';
     void exclusive(async () => { await extensions?.quitting(); await kitInstaller?.dispose(); await portal.stop(); browser?.close(); await errorLog.flush(); }).then(() => {
       clearInterval(backgroundPoll); clearInterval(updatePoll);
-      townLive?.dispose(); proxy.abortAll();
+      townLive?.dispose();
       quitCleanupDone = true; tray?.destroy(); app.quit();
     }).catch(error => {
       errorLog.report('client-quit', error);

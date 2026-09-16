@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AppModel } from "../models/app";
 import { useModel } from "../../shared/hooks/use-model";
-import { ChatSceneIndicator } from "./chat-scene";
 export function Topbar({ model }: { model: AppModel }) {
   const app = useModel(model);
   const [expanded, setExpanded] = useState(false),
@@ -120,17 +119,11 @@ export function Topbar({ model }: { model: AppModel }) {
   const label = labels[app.connection] || "尚未连接";
   return (
     <header className="topbar">
-      <ChatSceneIndicator
-        scene={app.snapshot?.chatScene}
-        connected={hasToken}
-        scope={app.chatHistoryScope}
-        scopeReady={hasToken && !app.chatLoading && app.chatHistoryScopeKnown}
-        onScope={(scope) => app.changeChatHistoryScope(scope)}
-        onCopy={(id) => void app.run(async () => {
-          await app.api.copyText(id);
-          app.toast("场景 ID 已复制");
-        })}
-      />
+      {/* The scene indicator, the SBS switch and the two in-page panels all
+          belonged to the sandboxed Loom document. The React conversation
+          replaced it on 2026-09-16 and the iframe path was removed with it, so
+          rather than leaving controls that post into nothing they are gone
+          until the native equivalents land — see MIGRATION.md. */}
       <div className="pair-name">
         <span className="pair-human">你</span>
         <span className="pair-link" aria-hidden="true">
@@ -139,22 +132,6 @@ export function Topbar({ model }: { model: AppModel }) {
         <span id="conversation-name">
           {app.snapshot?.settings.being || "Being"}
         </span>
-        {/* SBS and the two in-page panels below lived in the sandboxed Loom
-            document, which the React conversation replaced on 2026-09-16. They
-            stay hidden until the native equivalents land (openIssues in
-            docs/migration/p1-ui.md) rather than posting into nothing. */}
-        <button
-          className={`sbs-header-switch${app.sbsKnown && app.sbsEnabled ? " enabled" : ""}`}
-          hidden
-          type="button"
-          aria-label="切换 SBS 自主醒来"
-          aria-pressed={app.sbsKnown ? app.sbsEnabled : undefined}
-          title={app.sbsKnown ? (app.sbsEnabled ? "SBS 自主醒来：开" : "SBS 自主醒来：关") : "SBS 状态未同步，可刷新重试"}
-          disabled={!hasToken || !app.sbsKnown || app.chatLoading}
-          onClick={() => app.toggleSbs()}
-        >
-          <span className="sbs-header-dot" aria-hidden="true" />
-        </button>
       </div>
       <div className="topbar-actions">
         <button
@@ -314,26 +291,10 @@ export function Topbar({ model }: { model: AppModel }) {
                 打开原版 Loom
               </button>
               <button
-                data-chat-action="being"
-                hidden
-                disabled={!hasToken}
-                onClick={() => app.chatAction("being")}
-              >
-                关于 Being
-              </button>
-              <button
                 id="open-town-guide"
                 onClick={() => void app.run(() => app.api.openTownLink("/"))}
               >
                 小镇说明
-              </button>
-              <button
-                data-chat-action="privacy"
-                hidden
-                disabled={!hasToken}
-                onClick={() => app.chatAction("privacy")}
-              >
-                隐私说明
               </button>
             </div>
           </div>

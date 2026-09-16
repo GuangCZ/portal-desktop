@@ -105,16 +105,19 @@ test("shared contracts and renderer utilities do not depend on feature implement
   ).toEqual([]);
 });
 
-test("the native conversation does not reach into the retired chat page's services", () => {
-  // renderer/chat is the sandboxed Loom document the React conversation replaced
-  // on 2026-09-16. Its services talk to a Being over HTTP from the renderer,
-  // which is exactly what the native layer exists to stop doing: every byte the
-  // conversation shows now comes through the main process.
+test("the retired chat page is gone from the renderer", () => {
+  // renderer/chat was the sandboxed Loom document the React conversation
+  // replaced on 2026-09-16; it and the main-process request proxy behind
+  // `beings://chat` were deleted together. Its services fetched from a Being in
+  // the renderer, which is exactly what the native layer exists to stop doing:
+  // every byte the conversation shows now arrives over IPC. Assert the absence
+  // rather than a rule about it, so re-creating the directory fails here.
   expect(
-    edges.filter(
-      (edge) =>
-        edge.source.startsWith("renderer/conversation/") &&
-        edge.target.startsWith("renderer/chat/services/"),
+    sources(path.join(root, "renderer")).filter((file) =>
+      path
+        .relative(root, file)
+        .replaceAll(path.sep, "/")
+        .startsWith("renderer/chat/"),
     ),
   ).toEqual([]);
 });

@@ -7,10 +7,6 @@ export interface SceneObservation {
   selection?: SceneResource;
 }
 export interface SceneEvent { id: string; at: string; label: string; scene: string; state?: string }
-export interface SceneEnvelope {
-  schema: 'being.environment/v1'; messageId: string; source: { channel: 'being-desktop'; instanceId: string };
-  audience: string; capturedAt: string; environment: SceneObservation; delivery: 'local-only';
-}
 const titles: Record<SceneView, string> = { chat: '与你的 Being 交谈', town: '小镇广场', bonfire: '篝火', firesides: '围炉', mail: '私信', seeds: '种子花园', embers: '书架', scrolls: '卷轴', kits: '工具间', portal: 'Portal 设置' };
 export class SceneStore extends EventTarget {
   readonly instanceId = crypto.randomUUID();
@@ -18,7 +14,6 @@ export class SceneStore extends EventTarget {
   history: SceneEvent[] = [];
   visits = new Map<string, { title: string; view: SceneView; at: string }>();
   reference: SceneObservation | null = null;
-  envelopes: SceneEnvelope[] = [];
   being = '';
   endpoint = '';
   private versions = new Map<string, number>();
@@ -35,7 +30,7 @@ export class SceneStore extends EventTarget {
     this.notify();
   }
   resetIdentity() {
-    this.reference = null; this.envelopes = []; this.history = []; this.visits.clear(); this.versions.clear();
+    this.reference = null; this.history = []; this.visits.clear(); this.versions.clear();
     this.current = { ...this.current, identity: '', selection: undefined, count: undefined, filters: {}, status: 'loading' };
     this.dispatchEvent(new Event('identity-reset')); this.notify();
   }
@@ -62,14 +57,5 @@ export class SceneStore extends EventTarget {
   pin() {
     if (!this.current.selection) return;
     this.reference = structuredClone(this.current); this.event('保留了带出处的引用');
-  }
-  capture(messageId: string) {
-    const observation = structuredClone(this.reference || this.current);
-    const envelope: SceneEnvelope = { schema: 'being.environment/v1', messageId, source: { channel: 'being-desktop', instanceId: this.instanceId }, audience: this.being, capturedAt: new Date().toISOString(), environment: observation, delivery: 'local-only' };
-    // Excerpts stay in the explicit reference preview; environment snapshots carry IDs, not private text.
-    if (envelope.environment.selection) envelope.environment.selection.excerpt = '';
-    this.envelopes = [envelope, ...this.envelopes].slice(0, 30);
-    this.event('捕获发送时的场景', observation.title, '环境仅保存在本机');
-    return envelope;
   }
 }

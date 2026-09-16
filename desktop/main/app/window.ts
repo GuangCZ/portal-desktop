@@ -34,11 +34,11 @@ export function createMainWindow(options: MainWindowOptions) {
   if (process.platform === 'win32') window.setMenuBarVisibility(false);
   window.webContents.setWindowOpenHandler(({ url }) => { options.openExternal(url); return { action: 'deny' }; });
   window.webContents.on('will-navigate', event => event.preventDefault());
+  // Every frame, including the top-level one, may only ever be the shell. The
+  // one exception used to be the `beings://chat/` document; the conversation is
+  // native since 2026-09-16 and there is no child frame left to allow.
   window.webContents.on('will-frame-navigate', event => {
-    const url = event.url;
-    const parsed = new URL(url);
-    const chatDocument = parsed.protocol === 'beings:' && parsed.hostname === 'chat' && parsed.pathname === '/';
-    if (!chatDocument && url !== options.shellURL()) { event.preventDefault(); options.openExternal(url); }
+    if (event.url !== options.shellURL()) { event.preventDefault(); options.openExternal(event.url); }
   });
 
   const browser = new ClientBrowser(window, state => {

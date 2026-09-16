@@ -95,16 +95,19 @@ const settle = async () => {
 };
 afterEach(() => vi.useRealTimers());
 describe("React desktop state lifecycle", () => {
-  it("passes the proxy's exact scene identity to the chat without changing the cache identity", () => {
+  // The scene the conversation reports is minted in the main process now, and
+  // the surface identity the shell keeps is only a change token: the sandboxed
+  // document it used to address — and the endpoint and scene labels it had to
+  // carry across that boundary — went with the iframe on 2026-09-16.
+  it("identifies the conversation surface without carrying anything about the connection", () => {
     const app = new AppModel(api().value);
-    const snapshot = state();
-    snapshot.chatScene = { scene_id: "desktop-fixed", scene_meta: { client: "being-desktop/0.1.3", scene_label: "桌面·测试 & PC" } };
-    app.applySnapshot(snapshot);
-    const url = new URL(app.chatSource);
-    expect(url.searchParams.get("scene_id")).toBe(snapshot.chatScene.scene_id);
-    expect(url.searchParams.get("scene_label")).toBe(snapshot.chatScene.scene_meta.scene_label);
-    expect(url.searchParams.get("history_scope")).toBe(snapshot.settings.endpoint);
-    expect(url.searchParams.has("token")).toBe(false);
+    app.applySnapshot(state());
+    const first = app.chatSource;
+    expect(first).not.toBe("");
+    expect(first).not.toContain("://");
+    expect(first).not.toContain(state().settings.endpoint);
+    app.applySnapshot(state("other"), true);
+    expect(app.chatSource).not.toBe(first);
   });
   it("previews Portal logs through Together without posting until the user composes a reference", async () => {
     vi.useFakeTimers();
@@ -152,45 +155,6 @@ describe("React desktop state lifecycle", () => {
     expect(app.workspace.scenes.reference).toBeNull();
     expect(app.workspace.open).toBe(false);
   });
-  it("invalidates SBS on refresh and waits for confirmed state instead of toggling optimistically", () => {
-    const app = new AppModel(api().value), post = vi.fn();
-    app.post = post;
-    app.applySnapshot(state());
-    app.frameLoaded();
-    expect(post).toHaveBeenCalledWith({ type: 'beings:sbs-request' });
-    expect(app.sbsKnown).toBe(false);
-    app.setSbsEnabled(false);
-    app.applySnapshot(state());
-    expect(app.sbsKnown).toBe(true);
-    const source = app.chatSource;
-    app.applySnapshot(state(), true);
-    expect(app.chatSource).not.toBe(source);
-    expect(app.sbsKnown).toBe(false);
-    post.mockClear();
-    app.toggleSbs();
-    expect(post).not.toHaveBeenCalled();
-    app.frameLoaded();
-    expect(post).toHaveBeenCalledWith({ type: 'beings:sbs-request' });
-    app.setSbsEnabled(false);
-    post.mockClear();
-    app.toggleSbs();
-    app.toggleSbs();
-    expect(post).toHaveBeenCalledTimes(1);
-    expect(post).toHaveBeenCalledWith({ type: 'beings:sbs-toggle' });
-    expect(app.sbsEnabled).toBe(false);
-    expect(app.sbsKnown).toBe(false);
-    app.setSbsEnabled(true);
-    expect(app.sbsKnown).toBe(true);
-    expect(app.sbsEnabled).toBe(true);
-    app.setSbsEnabled();
-    expect(app.sbsKnown).toBe(false);
-    app.setSbsEnabled(true);
-    const disconnected = state();
-    disconnected.settings.hasToken = false;
-    app.applySnapshot(disconnected);
-    expect(app.sbsKnown).toBe(false);
-  });
-
   it("refreshes each place navigation and clears pending details when changing features", async () => {
     const pending = deferred<TownResult>();
     const query = vi.fn<DesktopAPI['town']>(async query => {
