@@ -155,3 +155,53 @@ readPage/prepareAction/click/fill/screenshot/snapshot()/destroy()`；另导出 `
 `DesktopTools` 在构造体里 `this.browser = new Browser({WebContentsView, session, getWindow, onChange})`——
 即 **DesktopBrowser 的实例由 I2 的组合根间接创建**。§3.3 的独占文件清单里没有任何 browser 文件、IPC 表里也没有 browser 通道。
 → 见 §3「决定与偏差」里的 D1。
+
+### 1.8 BD `src/main.cjs` 的终端装配与 IPC（逐行对照物）
+
+- 行 1710-1712：`new DesktopTerminal({getWorkspace:()=>state.workspace.path, onChange:s=>win.webContents.send('being:terminal-state',s),
+  onData:c=>win.webContents.send('being:terminal-data',c)})`——没传 pty/environment/platform/shellPath。
+- 行 1102-1116：
+  - `handle('getTerminalState',()=>desktopTerminal.snapshot())`
+  - `handle('readTerminal',id=>desktopTerminal.read(id))`
+  - `handle('terminalAction', async(action,value)=>{ if(exitStarted) throw new Error('桌面端正在退出。');
+    switch(action){create/write/resize/activate/close} default: throw new Error('未知终端操作。'); return desktopTerminal.snapshot(); })`
+    —— **create 之后也返回 snapshot()，不返回 sessionId**；渲染层靠 `result?.sessionId` 取值，所以 BD 的 `create` 分支
+    其实丢掉了 sessionId（`renderer/terminal-panel.js:create()` 里 `result?.sessionId` 恒为 undefined，随后靠
+    `accept(await bridge.getTerminalState())` 与 `activeSessionId` 兜底）。移植时保持返回 snapshot，**并额外带上 sessionId**
+    见 §3 D2。
+  - `handle('readNativeText',()=>clipboard.readText().slice(0,65536))`（I2 的通道，终端粘贴要用）
+  - `handle('copyDesktopText', v => …)`（I2 的通道，终端复制要用）；本仓库已有 `beings:clipboard-copy`。
+- 行 1697-1703 `showTerminal`：`exitStarted || !win || win.isDestroyed()` → 抛「桌面窗口已关闭。」；
+  `desktopTerminal.activate(id)` → 推 `being:terminal-state` → `executeJavaScript('window.beingTools?.show("console"); window.beingTerminal?.reveal(id)')`
+  → `if(!shown) throw new Error('终端已创建，但面板尚未展示，请用终端列表和显示工具恢复。')`。
+- 行 1615 shutdown：`await desktopTerminal?.dispose(); await desktopTools?.dispose();`（终端先于工具）。
+
+### 1.9 BD `renderer/terminal-panel.js`（204 行，界面规则来源）
+
+**typography()（第 18 行）**：
+`fontFamily = --font-mono || 'ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace'`；
+`fontSize = clamp(8, 32, ([12,13,14].includes(--text-code) ? --text-code : 12) + fontZoom)`；
+`cursorBlink = !matchMedia('(prefers-reduced-motion: reduce)').matches`。
+
+**terminalTheme()（第 19-23 行）**：`background = --background || '#181818'`，`foreground = --text || '#dfdfdf'`，
+`selection = /^#[\da-f]{6}$/i.test(foreground) ? foreground+'33' : (--line || '#ffffff1a')`；
+`cursor=foreground`、`cursorAccent=background`、`selectionBackground=selectionInactiveBackground=selection`；
+16 色写死：black #181818 / red #e2777a / green #9bbd91 / yellow #d6bb85 / blue #8aa9d6 / magenta #ba9bd2 /
+cyan #84b8bc / white #dfdfdf / brightBlack #777777 / brightRed #ee9294 / brightGreen #b3d2a9 / brightYellow #e4d0a6 /
+brightBlue #abc3e6 / brightMagenta #d0b5e3 / brightCyan #a2d0d3 / brightWhite #f1f1f1。
+
+**terminalOptions(readonly)**：`{...typography(), fontWeight:400, lineHeight:1.2, letterSpacing:0, cursorStyle:'bar',
+cursorWidth:1, scrollback:5000, allowProposedApi:false, allowTransparency:false, convertEol:readonly,
+disableStdin:readonly, drawBoldTextInBrightColors:false, minimumContrastRatio:1, theme:terminalTheme()}`。
+
+**回放/增量的序号协议（`replay` / `receive`）**：
+先 `readTerminal(id)` 拿 `{sequence, data, truncated}`，`terminal.reset()`，truncated 时先写
+`\x1b[90m[较早的终端输出已截断]\x1b[0m\r\n`；回放期间到达的事件进 `pending`，回放结束后按 sequence 升序补发。
+`receive`：`sequence <= entry.sequence` 丢弃；`sequence > entry.sequence + 1`（有洞）→ 入 pending 并**重新 replay**。
+
+**其它规则**：`fit()` 走 `requestAnimationFrame`，宽 <30 或高 <20 不 fit；fit 时把 typography 逐键 diff 后写回
+`terminal.options`；`resize` 只在 `cols>=2 && rows>=1` 且状态 running/starting 且尺寸变了才发。
+键盘：Ctrl/Cmd+C（有选区或按了 Shift）复制、Ctrl/Cmd+V 粘贴、Ctrl/Cmd +/-/0 调字号（fontZoom 限 -6..20）。
+`reveal(id)`：`accept(await getTerminalState())` → 没有这个 id 返回 false → `setSelected` → `show()` →
+等一帧 → 返回 `visible && selected===key && host 的宽高都 >0`。
+主题变化靠 `window 'being-theme-change'` 事件 + `prefers-reduced-motion` 的 change 事件重新 fit。
