@@ -32,7 +32,9 @@ Portal Desktop 是基于 **React、TypeScript、Electron、Vite 和 Rust** 的�
 - **调整分栏**：拖动分隔线改变宽度，双击恢复默认比例，也支持键盘调整。
 - **连接诊断**：展示版本、构建标识和 Being / Town / Portal 状态；导出不包含聊天正文、凭据或引擎日志的状态报告。
 
-浏览器使用独立的持久登录会话，无客户端本机 API。聊天的 Markdown 与高亮资源随应用打包，不依赖运行时 CDN 脚本。对话过程展示来自当前流式事件；服务端历史未提供的思考和工具过程不会在重载后补造。
+浏览器使用独立的持久登录会话，无客户端本机 API。对话的 Markdown 与高亮资源随应用打包，不依赖运行时 CDN 脚本。对话过程展示来自当前流式事件；服务端历史未提供的思考和工具过程不会在重载后补造。
+
+对话核心在主进程，一个会话就是一个 scene：主进程用本 profile 的 Desktop 身份与会话 ID 合成 `scene_id`，并按它把每一条流式事件和每一行历史路由回各自的会话，因此多个会话可以同时呼吸。渲染层不持有 Being 地址或 token，也不向 Being 发请求，只订阅 `beings:chat-*` 通道显示主进程核对过的行。已同步的行按 Being 身份分文件缓存在 profile 的 `chat-cache/` 下，由系统钥匙串（Electron `safeStorage`）加密，不再使用浏览器 IndexedDB。沙箱 `beings://chat` 页面与它的请求代理已于 2026-09-16 移除，见 [MIGRATION.md](MIGRATION.md)。
 
 ### Town 阅读与发言
 
@@ -151,12 +153,11 @@ scripts/           资源准备、构建、测试与发布脚本
 tests/             客户端单元测试与集成测试
 resources/         品牌资源、上游许可及本地构建产物
 .github/workflows/ CI 与发布流程
-loom.html          React 聊天页挂载入口
 ```
 
 桌面源码按进程分为 `main`、`preload`、`shared`、`renderer`；React 界面先按业务大模块组织，再在模块内分 `components / models / hooks`。详见[桌面目录说明](desktop/README.md)与 [React 界面结构](desktop/renderer/README.md)。
 
-聊天页也可在浏览器使用：运行 `npm run build:chat`，用静态 HTTP 服务托管 `desktop/generated`，访问 `/loom.html?api=https://example.com/your-being&token=YOUR_TOKEN`。API 需允许该浏览器来源。现在 HTML 入口依赖编译后的本地资源，不再支持单独下载一个 HTML 文件运行。链接中的 token 是凭据，请勿公开分享。桌面版本以 `package.json` 为准，根目录 `VERSION` 记录 Loom 协议版本。
+对话界面是桌面壳层的一部分，随壳层一起编译，没有独立的 HTML 入口，也不再能在普通浏览器里单独打开。桌面版本以 `package.json` 为准，根目录 `VERSION` 记录 Loom 协议版本。
 
 ## 路线图
 
@@ -199,7 +200,7 @@ loom.html          React 聊天页挂载入口
 
 ## 数据与权限
 
-Loom 与 Town 凭据分别通过系统密钥库加密保存，配对码不落盘。聊天 iframe 与本机 IPC 隔离；主进程按固定路由代理请求。Linux 密钥库不可用时不会降级为明文保存。后台服务的凭据保存方式见 [架构说明](desktop/ARCHITECTURE.md)。
+Loom 与 Town 凭据分别通过系统密钥库加密保存，配对码不落盘。渲染层不持有 Being 地址或 token：对话只经固定的 `beings:chat-*` IPC 通道，由主进程校验入参后注入凭据。Linux 密钥库不可用时不会降级为明文保存。后台服务的凭据保存方式见 [架构说明](desktop/ARCHITECTURE.md)。
 
 启用命令执行后，Portal 可以执行当前用户权限下的命令，工作目录限制不等于操作系统沙箱。Kit 是可执行工具，使用前应了解其来源、依赖与访问范围。安装和配置成功不代表第三方账号已授予全部操作权限。
 

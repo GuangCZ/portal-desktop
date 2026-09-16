@@ -339,7 +339,7 @@ async function ready() {
   handle('beings:check-updates', showUpdates);
   handle('beings:cancel-update', () => { updateDownload?.abort(); });
   handle('beings:update-state', () => updates.state);
-  const snapshot = () => ({ settings: store.settings, desktopId, portal: portal.state, background: background.state, notice: startupNotice && errorLog.report('startup-notice', startupNotice) });
+  const snapshot = () => ({ settings: store.settings, desktopId, portal: portal.state, background: background.state, notice: startupNotice ? errorLog.report('startup-notice', startupNotice) : undefined });
   const verifyConnection = async () => {
     await reusePreviousConfig();
     await verifyBeingConnection(store.connection, net.fetch.bind(net) as typeof fetch);

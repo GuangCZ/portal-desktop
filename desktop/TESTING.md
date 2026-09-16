@@ -11,13 +11,12 @@
 | 测试层 | 自动验证内容 | 命令 |
 | --- | --- | --- |
 | 类型检查 | 桌面 IPC、设置、渲染器与后台服务的类型契约 | `npm run typecheck` |
-| 私信名称与小镇入口 | 真实 React/导航组件，本地 fixture：隐藏 ID、精确回复地址、横向入口展开/收起、键盘、窄屏、草稿保留 | `npm run test:town-names` |
+| 私信名称 | 真实 React 组件，本地 fixture：隐藏 ID、精确回复地址、旧格式收件人、配对身份展示、mentions | `npm run test:town-names` |
 | Seed Garden / 弹窗切换 | 公开阅读、筛选、派生关系、经验墙、卷轴一致的链接栏；弹窗内切换、每次刷新、旧响应隔离、窄屏深色排版 | `npm run test:seed-garden` |
-| SBS 状态同步 | 真实 Loom 与桌面桥接、本地配置接口；刷新重新读取、慢响应、外部修改、切换失败、旧响应隔离与重试恢复 | `npm run test:sbs-refresh` |
 | Town SDK 协议界面 | 自动取码/确认、取消、鉴权失败转手动、草稿保留、手动配对、真实 SSE hello、三类消息 via 标记、发送身份及自身私信拦截；本地 fixture，不向真实 Being/Town 写入 | `npm run test:town-sdk` |
 | 客户端生命周期 | 关闭隐藏、菜单/再次启动恢复原窗口、明确退出；未连接 Being 时操作客户端自启开关（系统登录项 API 使用 fixture，不修改用户登录项） | `npm run test:client-lifecycle` |
 | Portal 窗口生命周期 | 关闭窗口后仍能调用真实 Portal、恢复原窗口、网络重连不重启引擎、明确停止 | `npm run test:portal-e2e` |
-| 客户端单元测试 | 凭据隔离、代理路由、流式请求、Portal 守护、配置失败回滚、Town 认证和 Kit 导入边界 | `npm test` |
+| 客户端单元测试 | 凭据隔离、对话协议与断线恢复、会话路由、流式请求、Portal 守护、配置失败回滚、Town 认证和 Kit 导入边界 | `npm test` |
 | Rust 原生测试 | 配置解析、单实例锁、Relay 握手与退避、进程管理、路径边界、命令策略、Kit 工具及重启协议 | 在 Portal 源码目录执行 `cargo test --locked -p heart-portal -- --test-threads=1` |
 | 桌面集成 | 实际 Electron 安装包、本地 HTTP/WebSocket 模拟 Being、真实 Rust Portal、附件与 SSE、文件写入、stdio Kit、模型设置、主题、草稿保留、对话刻度索引/搜索、过程区停止按钮和配置重载 | `npm run test:e2e` |
 | 原生后台服务 | 实际 macOS LaunchAgent，关闭客户端后工具调用、SIGKILL 恢复、无界面启动登录项、附着和停用持久化 | 已包含在 macOS 桌面集成中 |
@@ -34,13 +33,17 @@
 
 Town 正文提及显示由 `tests/town-mentions.test.ts` 与 `test:town-names` 覆盖：篝火、围炉和私信使用已读取的服务端身份元数据，将完整且大小写一致的 `@Town ID` 显示为名称，悬停保留原 ID。名称缓存仅在当前配对身份内复用；未知 ID、短前缀、代码和链接保持原文。该转换不修改 API 原始正文、回复地址或发送内容，也不代表服务端已成功投递提及。
 
-`test:town-names` 使用无头 Chrome，不打开日常客户端；默认需要本机安装 Google Chrome，也可通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定 Chromium。截图写入 `test-results/town-names.png` 和 `test-results/chat-places-*.png`。
+`test:town-names` 使用无头 Chrome，不打开日常客户端；默认需要本机安装 Google Chrome，也可通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定 Chromium。截图写入 `test-results/town-names.png` 与 `test-results/town-mentions-*.png`。
 
 `test:seed-garden` 使用相同的无头 Chrome 配置，在本地 fixture 中验证真实组件，截图为 `test-results/seed-garden.png` 与 `test-results/seed-garden-narrow.png`。`tests/seeds.test.ts` 随 `npm test` 检查固定公开路由、筛选参数编码、凭据隔离、深链接和过期详情响应。
 
-`test:sbs-refresh` 会先生成最新 Loom 资源，再用无头 Chrome 加载本地 HTTP fixture。使用真实顶部刷新按钮和 SBS 开关，只读写模拟配置，不连接真实 Being。与其他 Chrome fixture 一样，可通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定浏览器路径。
+> **2026-09-16 起有五个 E2E 脚本处于跳过状态。** `tests/{electron-smoke,town-sdk,
+> portal-runtime-e2e,town-ui,sbs-refresh}.mjs` 都通过 `page.frameLocator('#chat-frame')`
+> 驱动对话，而 `beings://chat` 这条 iframe 路径已随对话核心迁移一起删除。它们现在在文件头
+> 说明原因并直接 exit 0，因此 **`test:all` 目前不覆盖打包客户端的对话冒烟、Town SDK 往返与
+> Portal 运行时**。重写计划见根目录 [MIGRATION.md](../MIGRATION.md) 的「P1 完成状态」。
 
-`test:all` 包含私信名称、Seed Garden、SBS 刷新和内置浏览器回归。Windows 安装升级测试单独执行，需要交互式桌面会话和已构建的 Setup。测试使用临时安装目录、独立 profile、本地模拟 Being 和真实计划任务；NSIS 的用户级快捷方式、缓存和卸载登记会在结束时恢复。如果该 Windows 账户已有日常 NSIS 安装，测试会拒绝运行，应换测试账户。旧版本由当前包构造，不代表覆盖所有历史发布版。失败时保留临时目录和 `installation-metadata.json` 供排查。
+`test:all` 包含私信名称、Seed Garden 和内置浏览器回归。Windows 安装升级测试单独执行，需要交互式桌面会话和已构建的 Setup。测试使用临时安装目录、独立 profile、本地模拟 Being 和真实计划任务；NSIS 的用户级快捷方式、缓存和卸载登记会在结束时恢复。如果该 Windows 账户已有日常 NSIS 安装，测试会拒绝运行，应换测试账户。旧版本由当前包构造，不代表覆盖所有历史发布版。失败时保留临时目录和 `installation-metadata.json` 供排查。
 
 Windows 的离线升级、坏引擎回滚与独立 Portal 接管另用 PowerShell 执行：`$env:PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS='1'; npx vitest run tests/background-native.test.ts tests/runtime-update-native.test.ts --maxWorkers=1`。这些检查需要真实计划任务权限，不能以普通单元测试中的跳过结果代替。
 
@@ -98,10 +101,11 @@ macOS 临时签名包每次重建后可能等待真实钥匙串授权。仅在�
 Markdown、分页、安装和浏览器隔离由现有 Electron `test:town-sdk`、`test:town-ui`、
 `test:browser` 和 `test:e2e` 使用新构建的包验证。
 
-`npm run test:chat-react` 编译并测试完整 React 聊天页，使用本地 HTTP fixture 覆盖历史与索引、
-Markdown/高亮与危险链接、模型切换失败和补充密钥、OAuth、附件、流式追加、停止、错误收尾、
-引用草稿保护、断点重放，以及明暗主题和窄屏布局。`npm run test:sbs-refresh` 验证配置读取竞争，
-`npm run test:town-names` 验证 React 小镇快捷入口的键盘与焦点。
+对话层由 `npm test` 覆盖：主进程侧的协议、断线恢复、行存储、缓存、会话与 IPC 在
+`tests/{being-chat,being-recovery,chat-store,chat-cache,chat-sessions,chat-details,chat-ipc,
+session-recovery,session-titles}.test.ts`，渲染层侧的时间线投影、发送/停止、草稿与引用在
+`tests/{conversation-model,composer}.test.ts`。原先编译整张 React 聊天页的
+`test:chat-react` / `test:chat-history` 随 iframe 路径删除。
 
 ### 2026-09-14 本机验证记录
 

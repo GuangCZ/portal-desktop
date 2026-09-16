@@ -152,7 +152,8 @@ renderer/chat 整个目录、loom.html、构建脚本、相关测试）从仓库
 | 测试删除：chat-runtime / chat-scopes / chat-scene / chat-react / chat-history / chat-reference | 已完成 |
 | 测试改写：connection.test.ts、renderer-state.test.ts、architecture.test.ts、town-names.mjs、menu-keyboard.mjs、client-lifecycle.mjs | 已完成（town-names 与 menu-keyboard 实跑通过） |
 | E2E 跳过：sbs-refresh / electron-smoke / town-sdk / portal-runtime-e2e / town-ui | 已完成（五个脚本均实跑 exit 0） |
-| 文档：ARCHITECTURE.md / README.md / README_CN.md / MIGRATION.md | 未开始 |
+| 文档：ARCHITECTURE.md / README.md / README_CN.md / MIGRATION.md | 已完成 |
+| 文档（顺带）：desktop/README.md、renderer/README.md、TESTING.md、SHARED-WORKSPACE.md | 已完成 |
 | typecheck + vitest | 通过（463 passed / 16 skipped） |
 
 ### 实跑记录

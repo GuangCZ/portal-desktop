@@ -18,15 +18,15 @@ desktop/
 ├─ preload/preload.ts       固定的 IPC 白名单，向顶层页面提供 window.beings
 ├─ shared/                  跨进程类型契约和纯身份规则，不含 Electron/Node 实现
 ├─ renderer/                React 页面，按大模块再分 components/models/hooks
-├─ generated/               自动生成的聊天静态资源，不手工编辑或提交
+├─ generated/               自动生成的随包资源（第三方许可声明），不手工编辑或提交
 ├─ macos-signing.json        macOS 构建签名配置
 └─ windows-installer.json    Windows NSIS 安装身份配置
 ```
 
 `main/` 处理进程、文件系统、凭据和系统 API；`renderer/` 处理可见界面、表单及页面状态。
 两者只通过 `preload/` 的固定接口与 `shared/types.ts` 契约协作，不互相导入实现。
-聊天 iframe 另通过受限 `beings://chat/api/*` 代理和校验后的 `postMessage` 通信。
-共享目录只保留平台无关的类型和纯函数。
+对话也走这条路：`beings:chat-*` 请求加上 `beings:chat-event` / `beings:chat-state` 两个推送，
+没有第二个窗口、第二个源或 postMessage 桥。共享目录只保留平台无关的类型和纯函数。
 
 根目录的 `forge.config.ts`、`vite.*.config.ts`、`tsconfig.json` 是打包、编译和类型检查配置，
 按工具约定保留在根目录。构建入口由 `forge.config.ts` 明确指定；源目录的改变不改变安装包内的

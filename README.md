@@ -32,11 +32,11 @@ The main view centers on one Being conversation. Search, model, connection, and 
 - **Resize the split**: drag the divider, double-click to restore the default ratio, or adjust it with the keyboard.
 - **Connection diagnostics**: inspect the version, build identifier, and Being / Town / Portal status. Exported reports omit conversation text, credentials, and engine logs.
 
-The browser has a separate persistent website session and no access to the client's local APIs. Chat Markdown and highlighting assets are bundled without runtime CDN scripts. Thinking and tool activity come from the current stream; details absent from server history are not reconstructed after a reload.
+The browser has a separate persistent website session and no access to the client's local APIs. Conversation Markdown and highlighting assets are bundled without runtime CDN scripts. Thinking and tool activity come from the current stream; details absent from server history are not reconstructed after a reload.
 
-Loom keeps synchronized conversation messages in local IndexedDB, based on [loom-local's cache](https://github.com/d5z/loom-local/blob/a18812c35d2e2322f745f841d1d94fdec6015893/loom.html#L3621). All sources returned by the configured Being's history API appear together; there is no scene filter or source grouping. Startup reads the latest 300 cached messages, including while offline, then fetches newer records using the history cursor. The initial network load retrieves the latest 100 messages; this does not backfill the Being's entire past. The render limit does not delete older cached records. Confirmed live/replay replies enter the cache through history synchronization; unfinished replies, attachment bytes and tool/thinking details are not archived.
+The conversation core runs in the main process. A conversation is a scene: the main process derives each session's `scene_id` from this profile's Desktop identity and routes every streamed event and history row back to its own session by that key, so several sessions can be in flight at once. The renderer holds no Being address or token and makes no request to a Being; it subscribes to the `beings:chat-*` IPC channels and renders rows the main process has already reconciled. The sandboxed `beings://chat` page and its request proxy were removed on 2026-09-16; see [MIGRATION.md](MIGRATION.md).
 
-On Windows the chat database normally lives under `%APPDATA%/portal-desktop/IndexedDB` (legacy installations may use `%APPDATA%/Beings/IndexedDB`; a custom profile uses its own directory). It uses the client's persistent session, separate from the embedded website browser. This cache is not application-encrypted or a permanent backup: clearing profile/site data removes it, and unavailable storage falls back to server history. `npm run test:chat-history` checks process restart, offline recovery, mixed sources, incremental pagination and storage failures in an isolated Chromium profile.
+Synchronized rows are cached per Being identity under `chat-cache/` in the client profile directory, encrypted with the OS keychain via Electron `safeStorage` — no browser IndexedDB is involved. Startup reads the cached window, including while offline, then fetches newer records using the history cursor; this does not backfill the Being's entire past. Clearing the profile removes the cache, and unavailable storage falls back to server history. Drafts, attachment bytes, unfinished replies and tool/thinking details absent from server history are not archived.
 
 ### Reading and posting in the Town
 
@@ -156,12 +156,11 @@ scripts/           Asset preparation, builds, tests, and release scripts
 tests/             Client unit and integration tests
 resources/         Branding, upstream licenses, and local build outputs
 .github/workflows/ CI and release workflows
-loom.html          React chat HTML entry
 ```
 
 Desktop sources are separated into `main`, `preload`, `shared`, and `renderer`. React features keep their own `components`, `models`, and `hooks`. See the [desktop layout](desktop/README.md) and [React layout](desktop/renderer/README.md).
 
-The chat page also runs in a browser: run `npm run build:chat`, serve `desktop/generated` with a static HTTP server, and open `/loom.html?api=https://example.com/your-being&token=YOUR_TOKEN`. The API must allow your browser origin. The HTML entry now requires its compiled local assets; it is no longer a standalone downloaded file. The token is a credential; do not share the link publicly. `package.json` defines the desktop version; `VERSION` tracks the Loom protocol version.
+The conversation is part of the desktop shell and is compiled with it; there is no separate HTML entry and no second build step, so it no longer runs in an ordinary browser. `package.json` defines the desktop version; `VERSION` tracks the Loom protocol version.
 
 ## Roadmap
 
@@ -204,7 +203,7 @@ Using [BeingDesktop's orchestration design](https://github.com/GuangCZ/BeingDesk
 
 ## Data and permissions
 
-Loom and Town credentials are stored separately using system-backed encryption. Pairing codes are not persisted. The chat iframe is isolated from local IPC, and the main process proxies an allowlisted set of routes. If a Linux keyring is unavailable, storage does not fall back to plaintext. See [Architecture](desktop/ARCHITECTURE.md) for background-service credential storage.
+Loom and Town credentials are stored separately using system-backed encryption. Pairing codes are not persisted. The renderer never holds a Being address or token: the conversation reaches the Being only through fixed `beings:chat-*` IPC channels, which the main process validates before injecting credentials. If a Linux keyring is unavailable, storage does not fall back to plaintext. See [Architecture](desktop/ARCHITECTURE.md) for background-service credential storage.
 
 Enabling command execution lets Portal run commands with the current user's privileges; a workspace restriction is not an operating-system sandbox. Kits are executable tools, so review their source, dependencies, and access requirements before use. Successful installation and configuration do not prove that a third-party account has authorized every operation.
 
