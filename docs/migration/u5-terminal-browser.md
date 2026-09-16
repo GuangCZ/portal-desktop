@@ -301,3 +301,26 @@ constructor({desktopId, WebContentsView, session, getWindow, getConnection, getW
 **本单元对应的注入点**：
 - `DesktopTerminal`：`pty`（`PtyFactory`，集成时传 `require('node-pty')`）、`getWorkspace`、`onChange`、`onData`、`environment`、`platform`、`shellPath`。
 - `DesktopBrowser`：`WebContentsView`（构造器）、`session`（`{fromPartition}`）、`getWindow`、`onChange` —— 三个 electron 触点统一为 `ElectronBrowserHost`，真适配在 `tools/browser/electron-host.ts`。
+
+### portal-desktop 既有 `desktop/main/browser/`（ClientBrowser，不修改）
+
+`browser.ts` — `class ClientBrowser`，`constructor(private window: BrowserWindow, private publish: (state: BrowserState) => void)`，直接 `import { BrowserWindow, WebContentsView, session, shell } from 'electron'`。
+- **单标签页**：内部只有一个可选 `view?: WebContentsView`，`open(input?)` / `close()` / `action('back'|'forward'|'reload'|'stop'|'external'|'close')` / `setBounds({x,y,width,height,visible})`。
+- 分区 `persist:beings-browser`，只设置 `setPermissionRequestHandler` 与 `setPermissionCheckHandler`（无 `setDevicePermissionHandler`、无 `will-download`、无 `webRequest.onBeforeRequest`）。
+- 状态 `BrowserState = {open, address, title, loading, canGoBack, canGoForward, error?}`，靠 `navigationHistory.getActiveIndex()/getAllEntries()` 推导前进后退。
+- 布局 `layout()` 会乘 `window.webContents.getZoomFactor()`。
+- 支持 `shell.openExternal`（"在系统浏览器打开"）。
+- 脱敏在 `url.ts`：`browserURL(input)`（长度 ≤ 16000，无 scheme 时补 `https://`，只允许 http/https 且无凭据）与 `browserAddress(input)`（把命中 `token|secret|password|api[-_]?key|authorization|^code$` 的查询参数**删除**并把值收进 `secrets`，hash 整体收进 secrets 并清空），标题脱敏用 `chat/connection` 的 `redact`。
+
+**与本单元移植的 `tools/browser/browser.ts`（DesktopBrowser）的区别**：
+| 维度 | ClientBrowser（既有） | DesktopBrowser（本单元移植） |
+| --- | --- | --- |
+| 标签页 | 单页 | 多标签页，上限 16，`activeTabId` |
+| 用途 | 用户手动浏览的外壳浏览器 | Being 可读可操作的工具浏览器（readPage / prepareAction / click / fill / screenshot） |
+| electron 耦合 | 直接 import electron | 全部经构造参数注入，测试可脱离 electron |
+| 地址解析 | `browserURL`：无 scheme 一律补 https | `normalizeBrowserUrl`：只有 localhost/IP/域名形状才补 scheme，其余文本直接拒绝（不当搜索词） |
+| 脱敏 | 删除敏感参数、hash 收入 secrets | `safeUrl` 把敏感参数值替换成 `[redacted]`、命中的 hash 整体替换；`safeTitle` 另做内嵌 URL 与 `key: value` 脱敏 |
+| 安全面 | 权限两项 | 权限三项 + `will-download` 拦截 + `webRequest.onBeforeRequest` 协议闸门 + `will-attach-webview` + 弹窗转内部标签页 |
+| 页面注入 | 无 | 隔离世界 1004 的 `__beingBrowserDocument` / `__beingBrowserTargets` 与 revision 校验 |
+
+**可能的复用点**（留给后续集成阶段，本单元不做）：两者最终应共用一个 partition 与一套脱敏工具；`url.ts` 的 `browserURL` 与 `normalizeBrowserUrl` 语义不同，不可互换（ClientBrowser 把裸文本当域名，DesktopBrowser 会拒绝），合并时必须以 DesktopBrowser 的更严格语义为准并回归 `tests/browser-url.test.ts`。`ClientBrowser.layout()` 的 zoomFactor 缩放是 portal-desktop 特有的，DesktopBrowser 的 `_syncView()` 没有；集成到同一个窗口时需要决定是否补上。
