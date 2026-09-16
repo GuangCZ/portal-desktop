@@ -75,3 +75,39 @@
 - `CallbackManager` 是 `Orchestration` 被 `WorkerCallbacks` 驱动的子集。
 - 功能任务 DTO：`FeatureTaskRecord`、`FeatureTaskSnapshot`、`FeatureTaskLedger`、`TownSyncRecord`、`NormalizeTownSyncRecords`、
   `FeatureTaskContext`、`PrepareFeatureTaskDraft`。
+
+### BeingDesktop src/orchestration-message.cjs（56 行）
+- `orchestrationInstructions(mode)` 在第 4–14 行；`mode?.enabled` 为假返回 `''`。
+- 实测（`node -e` 直接 require 真实模块）：`{enabled:true,defaultAgent:'codex',paths:{}}` 输出长 **1508** 字符，
+  以 `[Being Desktop Orchestrator mode]\n` 开头，以 `JSON.stringify(mode) + '\n[/Being Desktop Orchestrator mode]\n\n'` 结尾。
+- 夹具已抄到 scratchpad（3115 字节的源码片段）；测试里放**源码逐字节副本**。
+- portal-desktop 的注入点：`desktop/main/chat/frame.ts:46` `setOrchestrationInstructions(impl)`，
+  其 mode 类型是 `{ enabled?: boolean } & Record<string, unknown>` —— 我的 `orchestrationInstructions` 形参必须用同一形状才能直接传入。
+
+### BeingDesktop src/main.cjs 装配段（实读行号）
+- 114–122：`townSyncRecords/featureHistory/featureHistories(WeakMap)/openFeatureHistories(Set)/featureHistoryCache(Map)`
+  + `featureMethods`（16 项 + 2 项 Grove）+ `taskRunner`。
+- 163–176：`new Orchestration({...})` + `callbacks.setTransport({send,resume,ready,toolsReady,report})`。
+  `ready: () => !exitStarted && Boolean(connection) && state.connection.status==='connected'`。
+- 359–362：`new OrchestrationPolicy({getIdentity,getDesktopId,getBridge,getMode,onChange})` + `orchestration.assertEnforced=...`。
+- 490–520：`loadFeatureHistory` / `publishFeatureTasks` / `featureHistoryCurrent` / `registerFeatureRequest`。
+- 721–735：`handle()` 的三段守卫（sdkReadMethods 直通 → featureMethods+!current 抛 SESSION_CHANGED → taskRunner.run + serialized→mutationTail）。
+- 1118–1134：编排 7 条 IPC（`getOrchestration`/`inspectAgents`/`getWorker`/`cancelWorker`/`retryWorkerCallback`/`reconnectWorkers`/`saveOrchestration`）。
+  `inspectAgents(paths)` = `orchestration.inspect(normalizeMode({paths}).paths)`。
+- 1241–1251：`getFeatureTasks`/`getFeatureTask`/`endFeatureTaskTracking`（reading 判定）/`discussFeatureTask`。
+- 1623：退出时 `[...openFeatureHistories].map(h => h.flush())`。
+- SESSION_CHANGED 三句（逐字）：`'连接身份已变化，请重新读取功能任务。'`（restore 后）、
+  `'连接身份正在切换，请稍后重新选择功能。'`（handle 守卫）、`'连接身份已变化，请重新选择功能。'`（serialized 执行前）。
+
+### BeingDesktop src/loom-town-sync.cjs 第 9–29 行
+- `normalizeTownSyncRecords(value)`：MAX_RECORDS=256、只取尾部 256 条；`Object.getOwnPropertyDescriptor(value,index)?.value`；
+  原型必须是 `Object.prototype`；恰好四个自有键 `requestId/route/beingId/prompt` 且都是 value 描述符的 string；
+  requestId 必须 UUID（version 1-8、variant 89ab）；route 必须在 7 条 bonfire/fireside 白名单内、或 `libraryRoute(route)`、
+  或 `/^\/desktop\/channel\/(feishu|wechat)\/(begin|status)$/`；beingId `/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/`；
+  prompt ≤160000 且以 `[Being Desktop Town sync:<requestId>]` 开头；`prompt.replace(/\s+/g,' ').trim()`；
+  同 requestId 不同内容 → 双方都丢弃并记入 conflicts。
+- 依赖 `libraryRoute`（BD src/town-library-contract.cjs）→ 本仓库**已存在**
+  `desktop/main/town/session/library-contract.ts` 的 `libraryRoute`/`detailId`/`scrollId`（含 RESERVED_SCROLL_IDS）。
+
+### tests/architecture.test.ts（199 行，八条）
+- 无规则禁止 `main/features/` import `main/town/`；`main/common/` 只准 node 内建；`main/subsystems/` 不准 import electron。
