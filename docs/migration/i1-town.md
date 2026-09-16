@@ -52,3 +52,29 @@ u1/u2/u3 的构造签名、portal-desktop 自带 town 模块的重叠判定、�
 ## 2. 进度
 
 - [x] 读计划 §3/§3.1/§2.1/§2.4/§4/附录/§1
+
+### 1.6 `docs/migration/i0-seams.md`（接缝权威说明）
+
+核对了 §A–§I，与本单元相关的实测结论：
+
+- **I0 已经把同源副本一次收敛完**（偏差于方案 §2.5 的分步走）：`town/session/sanitize.ts`、`town/channel/sanitize.ts`、
+  `town/channel/loom-connection.ts` **已删除**，导入已改指 `main/common/*`。所以 §3.1「要收敛的副本」里只剩
+  `town/timeline/cached-reads.ts` 的内联 `scrollId` 要改 import。
+- `SubsystemSettings` 是 `{connection, connectionAddress, settings, extras, saveExtra}`（不是方案写的交叉类型）。
+- `ElectronBindings.clipboard` 是 Promise 形态；`WebContentsView`/`session`/`net.request` 是 `unknown`。
+- `ctx.push` **已自带窗口守卫**，子系统不必自己判断 destroyed。
+- **`connectionCleared` main.ts 从来没有调用过**（I0 如实记录的既有缺口）。本单元的 `connectionCleared` 仍要实现，
+  但不能把它当作唯一的解绑路径——`connectionVerified(null)` 才是真实会走到的那条。
+- `linked()` 是惰性规则的唯一例外出口（用于赋值而非读取），本单元不需要。
+- renderer feature model 的类型是 `FeatureModel = Store & { start?(): () => void }`，
+  **订阅/定时器一律放 `start()` 并返回关闭函数**；构造函数里不得读 AppModel 状态。
+- 插槽排序 `order` 升序、同 order 按 `key`；`order` 用百位。
+- `export *` 撞名是静默丢弃 → `shared/town-desktop-types.ts` 的类型名必须带前缀（`TownDesktop*`）。
+- architecture 测试现在是八条（含 `main/common/` 依赖边界、`subsystems/` 不得 import electron）。
+
+### 1.7 接缝文件真身
+
+`subsystems/types.ts`、`subsystems/chat.ts`（模板）、`extensions.ts`（`installSubsystems` 可注入 installer 列表）、
+`preload/channels/{bridge,chat,index}.ts`（`subscribe` / `enveloped` 两个助手）、`shared/{desktop-types,types}.ts`、
+`renderer/app/slots.tsx`（四数组 + `visiblePanels`/`sidebarSections`/`topbarActions`/`viewSheets`）、
+`renderer/app/models/registry.ts`（`FEATURE_MODELS` + `AppFeatureModels` + `FeatureModel`）。
