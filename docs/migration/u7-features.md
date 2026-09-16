@@ -208,6 +208,113 @@ vitest 改写约定：`node:assert/strict` 的 `assert.equal` = 严格相等 →
 `assert.throws(fn, {code})` 需自己捕获断言 `error.code`（vitest 的 toThrow 对象参数比的是 message）；
 `assert.match/doesNotMatch` → `expect(s).toMatch / not.toMatch`。
 
+### src/feature-task-runner.cjs（203 行，已逐行读完）
+
+导出：`module.exports = {FeatureTaskRunner, currentTask}`。**`OPERATIONS` 与 `WAITING_CODES` 未导出**
+（interfaces.md §8 说「在 `feature-task-runner.OPERATIONS` 登记」是指改源码里的表，不是外部读属性）。
+依赖 `node:async_hooks` 的 `AsyncLocalStorage`（模块级单例 `context`）与 `node:crypto` 的 `createHash`。
+
+模块级常量：
+- `WAITING_CODES = new Set(['REQUEST_ACCEPTED','RESULT_UNKNOWN','WAITING_SBS','SBS_NOT_CONFIGURED'])`
+- `WAITING_DETAIL = '请求结果尚待确认；不会自动重发。'`
+- `OPERATIONS`（`Object.freeze`，13 项，值是 `[feature, operation, title, execution]` 四元组，逐字）：
+  `listScrolls: ['scroll','list','读取卷轴目录','being']`、`getScroll: ['scroll','read','读取卷轴正文','being']`、
+  `getGroveCatalog: ['grove','list','读取工具包目录','local']`、`getGroveDetail: ['grove','inspect','查看工具包','local']`、
+  `prepareGroveInstallation: ['grove','prepare','检查工具包安装条件','local']`、`installGroveKit: ['grove','install','安装工具包','local']`、
+  `installEligibleGroveKits: ['grove','install_batch','批量安装工具包','local']`、`deployPortal: ['portal','deploy','部署 Portal','local']`、
+  `startPortal: ['portal','start','启动 Portal','local']`、`stopPortal: ['portal','stop','停止 Portal','local']`、
+  `checkPortalUpdates: ['portal','check_updates','检查 Portal 更新','local']`、
+  `beginChannelConnection: ['channel','connect','连接消息渠道','being']`、`checkChannelStatus: ['channel','check','检查消息渠道状态','being']`。
+
+帮助函数：
+- `object(v)`：非 null、typeof object、非数组。
+- `own(value, key)`：只读**自有数据属性**（getter 不求值），不存在或是访问器 → `undefined`。全文所有字段读取都走它。
+- `definition(name, first)`：
+  - `name === 'requestTownRead'`：`kind = own(first,'kind')` 必须是 `'bonfire'|'fireside'` 否则 null；
+    返回 `{feature: kind, operation: kind === 'fireside' && !own(first,'firesideId') ? 'list' : 'read',
+    title: kind === 'bonfire' ? '读取篝火消息' : (own(first,'firesideId') ? '读取围炉消息' : '读取围炉目录'), execution: 'being'}`。
+  - 否则 `Object.hasOwn(OPERATIONS, name)` 才取四元组，否则 null（→ `run` 直接透传 `fn()`，不建账）。
+- `requestKey(name, args)`：结构化归一后 sha256。`entries` 计数上限 500、`depth > 8` → `TypeError('Feature task arguments exceed the supported size')`；
+  字符串长度 > 16384 同一错误；`undefined→['undefined']`、`null→['null']`、`string→['string',v]`、
+  `boolean`/有限 `number` → `[typeof, v]`；数组 → `['array', items.map(...)]`；
+  非 plain 对象（原型非 Object.prototype）→ `TypeError('Invalid feature task arguments')`；
+  含 symbol 键或访问器 → `TypeError('Invalid feature task argument fields')`；
+  对象 → `['object', Object.keys(descs).sort().map(k => [k, normalize(value)])]`。
+  摘要 = `createHash('sha256').update(name).update('\0').update(JSON.stringify(normalize(args))).digest('hex')`。**只留摘要，不留原始参数。**
+- `currentTask()`（模块级导出）：`context.getStore()` 为空 → null；否则 `active.ledger.get(active.id)`，
+  命中返回 `{ledger, task}`，未命中返回 null。
+- `wait(ledger, id, detail = WAITING_DETAIL)` → `ledger.update(id,{status:'waiting', detail})`。
+- `input(ledger, id, detail)` → `ledger.update(id,{status:'needs_input', detail})`。
+- `failed(ledger, id, error)`：`code = own(error,'code')`；
+  `'RESULT_UNCONFIRMED'` → `input(..., '请求已发送，但自动检查尚未取得可核对的结果。请在功能页检查；不会自动重发。')`；
+  `WAITING_CODES` 命中 → `wait(ledger, id)`（默认 WAITING_DETAIL）；否则 `ledger.fail(id, error)`。
+- `responseFailure(result)`：`error = own(result,'error')`，当它 `!== undefined && !== null && !== false && !== ''` 时，
+  返回 `object(error) ? error : {code: own(result,'code')}`；
+  否则 `own(result,'__townError') === true || own(result,'ok') === false` → `{code: own(result,'code')}`；否则 null。
+
+`finish(name, first, result, ledger, id)` —— **分支顺序即语义，逐条照抄不得合并**：
+1. `responseFailure` 命中 → `failed(...)` 返回。
+2. `own(result,'accepted') === true || WAITING_CODES.has(own(result,'code'))` → `failed(ledger, id, {code: own(result,'code') || 'REQUEST_ACCEPTED'})`。
+3. `['busy','BUSY'].includes(own(result,'status')) || own(result,'code') === 'BUSY'` → `ledger.fail(id,{code:'BUSY'})`。
+4. `own(result,'status') === 'accepted' || === 202` → `wait(ledger, id)`。
+5. `['error','failed'].includes(own(result,'status'))` → `ledger.fail(id,{code: own(result,'code')})`。
+6. `done = summary => ledger.complete(id, {summary})`。
+7. `name === 'requestTownRead'`：`state = own(result,'status')`；`errorCode = own(state,'errorCode')` 真值 → `failed(ledger,id,{code:errorCode})`；
+   围炉目录（`own(first,'kind')==='fireside' && !own(first,'firesideId')`）：`rooms = own(result,'rooms')`，
+   `owned`/`joined` 都是数组 → `done(\`已读取围炉目录：创建 ${owned.length} 个，加入 ${joined.length} 个。\`)`；
+   否则分支：`messages = own(own(result,'snapshot'),'messages')`，`own(state,'status') === 'ready' && Array.isArray(messages)`
+   → `done(\`已读取 ${messages.length} 条${own(first,'kind')==='bonfire' ? '篝火' : '围炉'}消息。\`)`；
+   都不命中 → `wait(ledger, id)`。
+8. `listScrolls` + `Array.isArray(own(result,'scrolls'))` → `done(\`已读取 ${result.scrolls.length} 份卷轴的目录。\`)`。
+9. `getScroll` + `typeof own(own(result,'scroll'),'title') === 'string'` → `done(\`已读取卷轴《${result.scroll.title.slice(0,160)}》当前页。\`)`。
+10. `getGroveCatalog` + `Array.isArray(own(result,'kits'))` → `done(\`已读取 ${result.kits.length} 个工具包。\`)`。
+11. `getGroveDetail` + `typeof own(result,'name') === 'string'` → `done(\`已读取工具包 ${result.name.slice(0,160)} 的说明。\`)`。
+12. `prepareGroveInstallation` + `status === 'needs_setup'` → `input(..., '安装条件检查完成，请在工具包页面查看要求并完成配置；尚未安装或运行脚本。')`。
+13. `['prepareGroveInstallation','installGroveKit']`：`status === 'needs_being'` → `input(..., own(result,'detail') || '此工具包需要 Being 协助，请在详情页查看原因。')`；
+    `['ready','installed'].includes(status)` → `done(own(result,'detail') || '工具包检查已完成。')`。
+14. `installEligibleGroveKits` + `Array.isArray(own(result,'results'))`：
+    `items=result.results`，统计 `installed`(status==='installed')、`needs`('needs_being')、`errors`('failed')，
+    `done(\`批量检查 ${items.length} 个 Kit：本机已安装 ${installed} 个，需 Being 协助 ${needs} 个，失败 ${errors} 个。加载状态见工具市场。\`)`。
+15. `['deployPortal','startPortal','stopPortal']`：`portal = name === 'deployPortal' ? result : own(result,'portal')`；`status = own(portal,'status')`；
+    `'error'` → `ledger.fail(id,{code:'SERVICE_ERROR'})`；
+    `stopPortal` 且 `['stopped','not_configured']` → `done('Portal 本地进程已停止。')`；
+    非 `stopPortal` 且 `'running'` → `done('Portal 本地进程已启动；中继连接状态请在 Portal 页面确认。')`；
+    `['external','existing_configuration','existing_connection','not_configured','stopped']` → `input(..., status === 'external'
+      ? 'Portal 由外部程序管理，请在 Portal 页面查看当前状态。' : 'Portal 尚未完成此操作，请在 Portal 页面核对程序、配置和连接。')`；
+    否则 `wait`。
+16. `checkPortalUpdates`：`update = own(result,'portalUpdate')`，`status = own(update,'status')`；
+    `'error'` → `ledger.fail(id,{code:'NETWORK_ERROR'})`；`'available'` → `done('检查完成：Portal 有新版本，可在设置中查看。')`；
+    `'current'` → `done('检查完成：Portal 已是当前稳定版本。')`；
+    `['not_installed','unknown']` → `input(..., '请先在 Portal 页面确认已配置的程序版本，再检查更新。')`；否则 `wait`。
+17. `['beginChannelConnection','checkChannelStatus']`：`status = own(result,'status')`；
+    `label = own(first,'channel') === 'feishu' ? '飞书' : own(first,'channel') === 'wechat' ? '微信' : '渠道'`；
+    `'connected'` → `done(\`Being 返回：${label}已连接。\`)`；`'error'` → `ledger.fail(id,{code:'SERVICE_ERROR'})`；
+    `'unsupported'` → `ledger.update(id,{status:'failed', detail: \`当前 Being 尚不支持连接${label}。\`})`（**注意是 update 不是 fail，没有 errorCode**）；
+    `'disconnected' && name === 'checkChannelStatus'` → `done(\`Being 返回：${label}当前未连接。\`)`；
+    `['registered','disabled','expired','disconnected','needs_input','needs_setup'].includes(status) || own(result,'qrCodeDataUrl') || own(result,'qrCodeUrl')`
+    → `input(..., \`请在${label}功能页查看授权或配置步骤；连接尚未确认。\`)`；否则 `wait`。
+18. 兜底：`wait(ledger, id, '返回结果尚不足以确认操作完成，请在对应功能页面查看。')`。
+
+`class FeatureTaskRunner`：
+- `constructor({getLedger} = {})`：非函数 → `TypeError('Feature task runner requires getLedger')`；
+  `this.getLedger = getLedger`；`this._flights = new WeakMap()`（ledger → `Map<key, Promise>`，**按账本实例隔离在途请求**）。
+- `currentTask()` → 模块级 `currentTask()`。
+- `recordRequest(record)`：`active = context.getStore()`；`requestId = own(record,'requestId')`；
+  无 store 或 requestId 非 string → `null`；否则 `active.ledger.update(active.id, {requestId})` 并返回其结果。
+- `run(name, args, fn)`：
+  - `fn` 非函数 → `TypeError('Feature task callback is required')`。
+  - `values = Array.isArray(args) ? args : args === undefined ? [] : [args]`；`source = values[0]`；
+    `first = {kind: own(source,'kind'), firesideId: own(source,'firesideId'), channel: own(source,'channel')}`（**只提取三个字段，getter 不求值**）。
+  - `definition` 为 null → **直接 `return fn()`（不建账、不去重）**。
+  - `ledger = this.getLedger()`；假值或缺 `begin/update/complete/fail/get` 任一方法 → `TypeError('Invalid feature task ledger')`。
+  - `key = requestKey(name, values)`；取/建 `flights`；**`flights.has(key)` → 直接返回已有 promise（同参在途去重）**。
+  - `ledger.begin(taskDefinition)`；若抛错且 `name === 'stopPortal' && own(error,'code') === 'TASK_LIMIT_REACHED'` → 降级 `return fn()`；否则 rethrow。
+  - `promise = Promise.resolve().then(() => context.run({ledger, id: task.id}, async () => {
+      try { const result = await fn(); finish(name, first, result, ledger, task.id); return result; }
+      catch (error) { failed(ledger, task.id, error); throw error; } }))
+      .finally(() => { if (flights.get(key) === promise) flights.delete(key); })`；
+    `flights.set(key, promise)`；返回 promise。**捕获的 ledger 在整个 run 期间属于发起时的身份。**
+
 ## 进度
 
 | 模块 | 状态 |
@@ -215,7 +322,7 @@ vitest 改写约定：`node:assert/strict` 的 `assert.equal` = 严格相等 →
 | docs 摘要（architecture §4/§6/§8） | 已读 |
 | docs/interfaces.md §3/§5/§7 | 已读 |
 | src/feature-tasks.cjs | 已读 |
-| src/feature-task-runner.cjs | 未开始 |
+| src/feature-task-runner.cjs | 已读 |
 | src/feature-task-history.cjs | 未开始 |
 | src/feature-task-discussion.cjs | 未开始 |
 | test/feature-tasks.test.cjs | 已读（15 个用例） |
