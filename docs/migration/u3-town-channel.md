@@ -146,3 +146,10 @@
 
 ### portal-desktop 既有 `desktop/shared/town-pairing.ts`
 - 只导出 `townPairPrompt`（措辞与 BeingDesktop `PAIR_PROMPT` 不同，**不要改它**；本单元用自己的常量）。
+
+### 目标工程约定（tsconfig / vitest.config / tests/architecture.test.ts）
+- `strict: true`、target ES2022、module ESNext、moduleResolution Bundler、`noEmit`；include `desktop/**/*.ts`、`tests/**/*.ts`。
+- vitest 只收 `tests/**/*.test.ts`；`npm run typecheck` = `tsc --noEmit`。
+- architecture.test.ts 扫 `desktop/{main,preload,renderer,shared}`：renderer 不得 import main/preload/electron/node；main/preload 不得 import renderer；shared 不得 import 任何层或 electron/node。**main 层可以 import node: 内置模块**（本单元只用 `node:crypto` 的 randomUUID；能注入就注入）。
+- 主进程风格：单引号、2 空格、`private` 字段 + 构造函数参数属性、`Data = Record<string, unknown>` 守卫函数、中文用户文案 + 英文注释。
+- 测试风格：`import { expect, it, vi } from 'vitest'`；本单元按指令统一用双引号（`tests/architecture.test.ts` 即双引号先例）。
