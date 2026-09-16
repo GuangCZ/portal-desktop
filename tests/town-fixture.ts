@@ -55,6 +55,13 @@ export const TOWN_CHANNELS = [
 
 export const PLAIN_CHANNELS = new Set(['beings:town', 'beings:town-open']);
 
+/** `beings:town*` channels that are NOT this subsystem's. The fixture installs
+ * the real `INSTALLERS` list, so every unit's channels land in the same map;
+ * these three belong to the Channel unit (I7, `main/town/channel/ipc.ts`) and are
+ * excluded by name rather than by loosening the assertion — a `beings:town*`
+ * channel that is neither in `TOWN_CHANNELS` nor here still fails. */
+export const FOREIGN_TOWN_CHANNELS = new Set(['beings:town-catalog', 'beings:town-page', 'beings:town-draft']);
+
 export const settle = async () => { for (let i = 0; i < 25; i++) await new Promise(resolve => setImmediate(resolve)); };
 
 type Responder = (url: URL, options: RequestInit) => Response | Promise<Response>;

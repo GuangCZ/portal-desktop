@@ -4,6 +4,7 @@ import type { DesktopToolsAPI } from './desktop-types';
 import type { OrchestrationAPI } from './desktop-types';
 import type { ShellStateAPI } from './shell-state-types';
 import type { TownDesktopAPI } from './desktop-types';
+import type { ChannelAPI } from './desktop-types';
 export interface UpdateState {
   phase: 'idle' | 'checking' | 'available' | 'current' | 'unavailable';
   currentVersion: string; latestVersion?: string; message: string; releaseUrl: string;
@@ -114,6 +115,8 @@ export interface DesktopAPI {
   shellState: ShellStateAPI;
   /** Town's direct reads, timeline and pairing (town-desktop-types.ts). */
   townDesktop: TownDesktopAPI;
+  /** Feishu/WeChat channels, the Town catalogue and composer drafts (channel-types.ts). */
+  channel: ChannelAPI;
   // ────────────────────────────────────────────────────────────────────────────
 }
 declare global { interface Window { beings: DesktopAPI } }

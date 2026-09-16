@@ -29,33 +29,14 @@ export interface TownPairingState {
   errorCode: string | number;
 }
 
-/* ---------------------------------------------------- Loom view (town.cjs) */
+/* ----------------------------------------------- Loom view (town.cjs): gone */
 
-/** Electron WebContents, reduced to what BeingDesktop src/town.cjs actually calls. */
-export interface WebContentsLike {
-  mainFrame: WebFrameLike | null;
-  isDestroyed(): boolean;
-  isLoadingMainFrame(): boolean;
-  getURL(): string;
-}
-
-/** Electron WebFrameMain, reduced to what src/town.cjs actually calls. */
-export interface WebFrameLike {
-  isDestroyed(): boolean;
-  detached: boolean;
-  executeJavaScript(code: string): Promise<unknown>;
-}
-
-/** main.cjs boot(): `() => ({connection, generation, revision: viewRevision, view, configured, status, exiting})`. */
-export interface LoomDraftContext {
-  connection?: { displayUrl: string; url?: string } | null;
-  generation?: unknown;
-  revision?: unknown;
-  view?: { webContents: WebContentsLike } | null;
-  configured?: boolean;
-  status?: string;
-  exiting?: boolean;
-}
+// `WebContentsLike`, `WebFrameLike` and `LoomDraftContext` described the sandboxed
+// Loom document `prepareLoomDraft` injected a draft into. That path was replaced by
+// the native composer push in integration unit I7 (decision §5.4, ./draft.ts), and
+// the three types had no reader left. The context a draft is fenced against is now
+// `NativeDraftContext` in ./draft.ts: the same connection, generation and identity
+// revision, minus the view — there is no second document to keep in step.
 
 /* --------------------------------------------- channel (channel-being.cjs) */
 

@@ -1,0 +1,56 @@
+/* The message-channel page and the Town feature catalogue. Shapes follow
+   BeingDesktop 0.8.26's town-app.css (`.ta-channel*`, `.ta-wizard*`) under this
+   shell's variables and rhythm (desktop/renderer/app/styles.css), so both themes
+   come for free. Loaded by slot.tsx, so nothing outside this unit imports it. */
+
+.channel-panel{flex:0 0 340px;width:340px;display:flex;flex-direction:column;gap:14px;background:var(--surface);border-left:1px solid var(--line);padding:22px 20px;overflow:auto;overscroll-behavior:contain;z-index:4}
+.channel-panel-head{display:flex;align-items:flex-start;gap:10px}
+.channel-panel-head h2{flex:1;font-family:Georgia,'Songti SC',serif;font-size:19px;font-weight:500;margin:0}
+.channel-panel-head .icon-button{color:var(--secondary)}
+
+.channel-tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);padding-bottom:8px}
+.channel-tabs button{font:inherit;font-size:12px;padding:5px 10px;border:1px solid transparent;border-radius:7px;background:none;color:var(--secondary);cursor:pointer}
+.channel-tabs button[aria-current="page"]{border-color:var(--line);background:var(--control);color:var(--text)}
+
+.channel-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.channel-card{display:grid;gap:3px;justify-items:start;text-align:left;font:inherit;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--text);cursor:pointer}
+.channel-card[aria-pressed="true"]{border-color:var(--accent,var(--text));background:var(--control)}
+.channel-card strong{font-size:13px;font-weight:500}
+.channel-card-note{font-size:10px;line-height:1.6;color:var(--muted)}
+
+.channel-body{display:grid;gap:11px}
+.channel-heading{display:flex;align-items:center;gap:8px}
+.channel-heading h3{flex:1;margin:0;font-size:15px;font-weight:500}
+.channel-badge{font-size:10px;padding:2px 7px;border:1px solid var(--line);border-radius:999px;color:var(--secondary);white-space:nowrap}
+.channel-badge[data-status="connected"]{color:var(--text)}
+.channel-badge[data-status="error"],.channel-badge[data-status="failed"]{color:var(--danger,#c0392b)}
+.channel-copy{margin:0;font-size:12px;line-height:1.8;color:var(--text)}
+.channel-notice{margin:0;font-size:11px;line-height:1.8;color:var(--secondary)}
+.channel-actions{display:flex;flex-wrap:wrap;gap:8px}
+.channel-actions button{font:inherit;font-size:12px;padding:5px 11px;border:1px solid var(--line);border-radius:7px;background:var(--control);color:var(--text);cursor:pointer}
+.channel-actions button.primary{background:var(--text);color:var(--surface);border-color:var(--text)}
+.channel-actions button:disabled{opacity:.55;cursor:default}
+.channel-message{display:grid;gap:7px}
+.channel-message h3{margin:0;font-size:14px;font-weight:500}
+.channel-message p{margin:0;font-size:12px;line-height:1.8;color:var(--secondary)}
+
+.channel-steps{display:flex;gap:10px;margin:0;padding:0;list-style:none}
+.channel-steps li{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)}
+.channel-steps li.is-current{color:var(--text)}
+.channel-step-number{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border:1px solid var(--line);border-radius:999px;font-size:10px}
+.channel-steps li.is-current .channel-step-number{border-color:var(--text)}
+.channel-wizard{display:grid;gap:9px;padding:13px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.channel-wizard h4{margin:0;font-size:13px;font-weight:500}
+.channel-wizard p{margin:0;font-size:12px;line-height:1.8;color:var(--secondary)}
+.channel-qr{width:168px;height:168px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#fff;padding:6px}
+
+.channel-features{display:grid;gap:9px}
+.channel-feature{display:flex;align-items:flex-start;gap:10px;padding:11px;border:1px solid var(--line);border-radius:9px;background:var(--bg)}
+.channel-feature-copy{flex:1;display:grid;gap:3px}
+.channel-feature-copy strong{font-size:13px;font-weight:500}
+.channel-feature-copy small{font-size:10px;line-height:1.7;color:var(--muted)}
+.channel-feature button{font:inherit;font-size:11px;padding:4px 9px;border:1px solid var(--line);border-radius:7px;background:var(--control);color:var(--text);cursor:pointer;white-space:nowrap}
+.channel-feature button:disabled{opacity:.55;cursor:default}
+.channel-checked{margin:0;font-size:10px;color:var(--muted)}
+
+@media (max-width:900px){.channel-panel{flex-basis:100%;width:100%;border-left:none;border-top:1px solid var(--line)}}

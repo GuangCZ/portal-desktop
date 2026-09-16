@@ -26,6 +26,7 @@ import { toolBrowserPanelSlot, toolBrowserTopbarSlot } from '../tool-browser/slo
 import { featureTasksPanel, orchestrationActions, orchestrationPanel, sessionWorkersSection } from '../orchestration/slot';
 import { ShellPagesSection } from '../settings/components/entry';
 import { TownFeedLinks } from '../town/components/sidebar-feeds';
+import { channelAction, channelPanel } from '../channel/slot';
 
 /** A dockable panel in the workspace body, after the tool browser. */
 export interface PanelSlot {
@@ -70,6 +71,7 @@ export const PANEL_SLOTS: PanelSlot[] = [
   toolsPanel,
   orchestrationPanel,
   featureTasksPanel,
+  channelPanel,
 ];
 
 export const SIDEBAR_SLOTS: SidebarSlot[] = [
@@ -83,6 +85,7 @@ export const TOPBAR_SLOTS: TopbarSlot[] = [
   toolBrowserTopbarSlot,
   toolsAction,
   orchestrationActions,
+  channelAction,
 ];
 
 export const SHEET_SLOTS: SheetSlot[] = [

@@ -1,22 +1,30 @@
-// Ported from BeingDesktop src/town.cjs on 2026-09-16.
+// Ported from BeingDesktop src/town.cjs on 2026-09-16; the draft half rewritten
+// for the native composer by integration unit I7 on the same day.
 //
-// IPC surface registered by BeingDesktop main.cjs boot() (registration itself belongs to the
-// integration stage, see docs/interfaces.md section 1):
+// IPC surface registered by BeingDesktop main.cjs boot() (registration lives in
+// ./ipc.ts, see docs/interfaces.md section 1):
 //   getTownCatalog()                      -> { features, sourceUrl, checkedAt }
-//   openTownPage(id: string)              -> opens townPageUrl(id) in the external browser
-//   prepareTownFeature(id: string)        -> { prepared: true }
-//   prepareTownAssistance({ operation })  -> { prepared: true }
-//   prepareFiresideDraft({ draft, connectionRevision }) -> { prepared: true }
-//   prepareTownPairing()                  -> prepareLoomDraft(<fixed pairing prompt>)
-// Every handler receives the same context closure:
-//   () => ({ connection, generation, revision: viewRevision, view, configured, status, exiting })
+//   openTownPage(id: string)              -> opens townPageUrl(id) in the tool browser
+//   prepareTownFeature(id)                -> featureDraft(id)      + prepareNativeDraft
+//   prepareTownAssistance({operation})    -> assistanceDraft(op)   + prepareNativeDraft
+//   prepareFiresideDraft({draft,rev})     -> firesideDraft(draft)  + prepareNativeDraft
+//   prepareTownPairing()                  -> the fixed prompt in ./ipc.ts
 //
-// Electron is injected, never imported: the Loom view arrives as WebContentsLike/WebFrameLike.
-import type { LoomDraftContext, WebContentsLike, WebFrameLike } from './types';
+// WHAT CHANGED, AND WHY THIS FILE HAS NO INJECTION LEFT
+//
+// BeingDesktop's three `prepare*` functions each ended in `prepareLoomDraft`,
+// which was 60 lines of `executeJavaScript` against the sandboxed Loom document —
+// finding `#input`, refusing when it already held text, re-checking the frame
+// across every await. P1 removed that document, so all of it addressed nothing
+// (integration plan §1.1). What is left here is what was never about the DOM: the
+// catalogue, the two fixed prompt tables, and the validation of what the renderer
+// asked for. Each `*Draft` function below answers with the prompt STRING; placing
+// it belongs to ./draft.ts, and composing the two belongs to ./ipc.ts. That is
+// why nothing is injected into this file any more — it no longer does anything
+// that touches the outside world.
 
 const SOURCE_URL = 'https://beings.town/';
 const CHECKED_AT = '2026-09-06';
-const DOCUMENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface TownFeature {
   id: string;
@@ -80,123 +88,33 @@ export function townPageUrl(id: unknown): string {
   return url;
 }
 
-function fixedDraft(id: unknown): string {
+/** `prepareTownFeature`'s first half: the fixed prompt for one catalogue feature.
+ * Six of the nine have one; `channel`, `bonfire`, `portal` and `grove` are pages
+ * in this client, so asking the Being about them in prose is refused rather than
+ * answered with a draft. */
+export function featureDraft(id: unknown): string {
   validateId(id);
   if (!DRAFTS.has(id)) throw new Error('此 Town 功能不能填入会话草稿。');
   return DRAFTS.get(id)!;
 }
 
-export type LoomContextReader = () => LoomDraftContext;
-
-export function requireCurrentContext(getContext: LoomContextReader, expected?: LoomDraftContext): LoomDraftContext {
-  const current = getContext();
-  const contents = current.view?.webContents;
-  if (current.exiting || !current.connection || !current.configured || current.status !== 'connected' || !contents || contents.isDestroyed()) {
-    throw new Error('请先连接并等待 Loom 会话加载完成。');
-  }
-  if (expected && (current.generation !== expected.generation || current.revision !== expected.revision || current.view !== expected.view || current.connection !== expected.connection)) {
-    throw new Error('Loom 会话已变化，请重新选择 Town 功能。');
-  }
-  if (contents.isLoadingMainFrame()) throw new Error('Loom 页面正在加载，请稍后重试。');
-  return current;
+/** `prepareTownAssistance`'s first half. The operation must be one of the six in
+ * the table: an arbitrary prompt from the renderer is not an assistance request,
+ * it is a way to make the Being say anything. */
+export function assistanceDraft(operation: unknown): string {
+  if (typeof operation !== 'string' || !ASSISTANCE.has(operation)) throw new Error('请选择有效的 Being 协助操作。');
+  return ASSISTANCE.get(operation)!;
 }
 
-export function requireCurrentFrame(contents: WebContentsLike, frame: WebFrameLike | null | undefined): void {
-  if (!frame || frame.isDestroyed() || frame.detached || contents.mainFrame !== frame) {
-    throw new Error('Loom 页面已变化，请重新选择 Town 功能。');
-  }
+/** `prepareFiresideDraft`'s first half: the user's own message, wrapped in the
+ * preamble that tells the Being to confirm the room, the identity and the final
+ * text before sending anything. The draft is data — it is never parsed, and the
+ * preamble goes in front of it rather than around it. */
+export function firesideDraft(draft: unknown): string {
+  if (typeof draft !== 'string' || !draft.trim() || draft.length > 32000) throw new Error('请填写有效的围炉协助草稿。');
+  return '这是我准备的围炉消息草稿，尚未发送。请先和我确认目标围炉、当前 Being 的发送身份及最终内容，等我明确确认后再发送；不要重试结果未知的消息。下面是待确认的草稿内容：\n\n' + draft;
 }
 
-export async function prepareLoomDraft(prompt: string, getContext: LoomContextReader): Promise<{ prepared: true }> {
-  const initial = requireCurrentContext(getContext);
-  const expected = new URL(initial.connection!.displayUrl);
-  const contents = initial.view!.webContents;
-  const frame = contents.mainFrame;
-  requireCurrentFrame(contents, frame);
-  const currentUrl = new URL(contents.getURL());
-  const normalizedPath = (value: string) => value.replace(/\/+$/, '');
-  if (currentUrl.origin !== expected.origin || normalizedPath(currentUrl.pathname) !== normalizedPath(expected.pathname)) {
-    throw new Error('当前页面不是已连接的 Loom 会话。');
-  }
-  const identity = { origin: expected.origin, path: normalizedPath(expected.pathname) };
-  requireCurrentContext(getContext, initial);
-  requireCurrentFrame(contents, frame);
-  let documentId: unknown;
-  try {
-    // A frame can survive navigation. The marker belongs to this document's root.
-    documentId = await frame!.executeJavaScript(`(() => {
-      const expected = ${JSON.stringify(identity)};
-      if (location.origin !== expected.origin || location.pathname.replace(/\\/+$/, '') !== expected.path || document.readyState !== 'complete' || !document.documentElement) return null;
-      const root = document.documentElement;
-      if (!root.dataset.beingDesktopTownDocument) root.dataset.beingDesktopTownDocument = crypto.randomUUID();
-      return root.dataset.beingDesktopTownDocument;
-    })()`);
-  } catch {
-    throw new Error('无法确认 Loom 当前文档，请检查会话后重试。');
-  }
-  requireCurrentContext(getContext, initial);
-  requireCurrentFrame(contents, frame);
-  if (typeof documentId !== 'string' || !DOCUMENT_ID_PATTERN.test(documentId)) {
-    throw new Error('无法确认 Loom 当前文档，请检查会话后重试。');
-  }
-  // Serialize draft text as data and bind insertion to the current document.
-  const input = JSON.stringify({ prompt, ...identity, documentId });
-  let result: unknown;
-  try {
-    // Check the document marker and fill synchronously, without an intervening await.
-    result = await frame!.executeJavaScript(`(() => {
-      const request = ${input};
-      if (location.origin !== request.origin || location.pathname.replace(/\\/+$/, '') !== request.path || document.readyState !== 'complete' || document.documentElement?.dataset.beingDesktopTownDocument !== request.documentId) return 'wrong_document';
-      const app = document.getElementById('app');
-      const messages = document.getElementById('messages');
-      const row = document.getElementById('input-row');
-      const field = document.getElementById('input');
-      const send = document.getElementById('send-btn');
-      if (!app || !messages || !app.contains(messages) || !row || !app.contains(row) || !field || field.tagName !== 'TEXTAREA' || !row.contains(field) || !send || !row.contains(send) || field.disabled || field.readOnly) return 'missing_input';
-      if (field.value !== '') return 'existing_draft';
-      field.value = request.prompt;
-      field.dispatchEvent(new Event('input', {bubbles:true}));
-      field.focus();
-      return 'prepared';
-    })()`);
-  } catch {
-    throw new Error('无法填入 Loom 草稿，请检查会话后重试。');
-  }
-  requireCurrentContext(getContext, initial);
-  requireCurrentFrame(contents, frame);
-  if (result === 'existing_draft') throw new Error('Loom 中已有草稿，已保留原文；请先发送或清空后再选择此功能。');
-  if (result !== 'prepared') throw new Error('未找到可用的 Loom 输入框，草稿未填入。');
-  return { prepared: true };
-}
-
-export async function prepareTownFeature(id: unknown, getContext: LoomContextReader): Promise<{ prepared: true }> {
-  return prepareLoomDraft(fixedDraft(id), getContext);
-}
-
-export async function prepareTownAssistance(value: unknown, getContext: LoomContextReader): Promise<{ prepared: true }> {
-  let operation: unknown;
-  try {
-    if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) throw new Error('invalid');
-    const properties = Object.getOwnPropertyDescriptors(value);
-    if (Reflect.ownKeys(properties).length !== 1 || !Object.hasOwn(properties, 'operation') || !Object.hasOwn(properties.operation, 'value')) throw new Error('invalid');
-    operation = properties.operation.value;
-    if (typeof operation !== 'string' || !ASSISTANCE.has(operation)) throw new Error('invalid');
-  } catch { throw new Error('请选择有效的 Being 协助操作。'); }
-  return prepareLoomDraft(ASSISTANCE.get(operation as string)!, getContext);
-}
-
-export async function prepareFiresideDraft(value: unknown, getContext: LoomContextReader): Promise<{ prepared: true }> {
-  let draft: unknown, connectionRevision: unknown;
-  try {
-    if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) throw new Error('invalid');
-    const properties = Object.getOwnPropertyDescriptors(value);
-    if (Reflect.ownKeys(properties).length !== 2 || !['draft', 'connectionRevision'].every((key) => Object.hasOwn(properties, key) && Object.hasOwn(properties[key], 'value'))) throw new Error('invalid');
-    draft = properties.draft.value;
-    connectionRevision = properties.connectionRevision.value;
-    if (typeof draft !== 'string' || !draft.trim() || draft.length > 32000 || !Number.isSafeInteger(connectionRevision) || (connectionRevision as number) < 0) throw new Error('invalid');
-  } catch { throw new Error('请填写有效的围炉协助草稿。'); }
-  const context = requireCurrentContext(getContext);
-  if (context.generation !== connectionRevision) throw new Error('连接身份已变化，草稿未转交，请在当前身份下重新确认。');
-  const prompt = '这是我准备的围炉消息草稿，尚未发送。请先和我确认目标围炉、当前 Being 的发送身份及最终内容，等我明确确认后再发送；不要重试结果未知的消息。下面是待确认的草稿内容：\n\n' + draft;
-  return prepareLoomDraft(prompt, getContext);
-}
+/** BeingDesktop src/town.cjs, verbatim: the fireside handoff refuses when the
+ * epoch the draft was written under is not the current one. */
+export const FIRESIDE_EPOCH_CHANGED = '连接身份已变化，草稿未转交，请在当前身份下重新确认。';
