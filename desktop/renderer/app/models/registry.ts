@@ -17,6 +17,8 @@
 // return a `Store` — optionally one with a `start()` — never a component.
 import type { DesktopAPI } from '../../../shared/types';
 import type { Store } from '../../shared/models/store';
+import { terminalModelFactory } from '../../terminal/models/terminal';
+import { toolBrowserModelFactory } from '../../tool-browser/models/tool-browser';
 
 /** Each feature adds its key with a `declare module '.../models/registry'` block
  * in its own file, so landing a feature never edits this one. */
@@ -44,5 +46,7 @@ export interface FeatureModelFactory {
 }
 
 export const FEATURE_MODELS: FeatureModelFactory[] = [
+  terminalModelFactory,
+  toolBrowserModelFactory,
 ];
 // ──────────────────────────────────────────────────────────────────────────────

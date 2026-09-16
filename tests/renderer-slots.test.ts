@@ -26,6 +26,16 @@ import type { DesktopAPI } from "../desktop/shared/types";
 const Nothing = () => null;
 const app = {} as AppModel;
 
+/** What the modules under test registered at import time, captured before the
+ * `afterEach` below empties the shared arrays for the fixture cases. */
+const LANDED = {
+  panels: PANEL_SLOTS.map(slot => slot.key).sort(),
+  sidebar: SIDEBAR_SLOTS.map(slot => slot.key).sort(),
+  topbar: TOPBAR_SLOTS.map(slot => slot.key).sort(),
+  sheets: SHEET_SLOTS.map(slot => slot.key).sort(),
+  models: [...FEATURE_MODELS],
+};
+
 afterEach(() => {
   PANEL_SLOTS.length = 0;
   SIDEBAR_SLOTS.length = 0;
@@ -42,8 +52,16 @@ const action = (key: string, order: number): TopbarSlot => ({ key, order, Action
 const sheet = (key: string, view: string): SheetSlot => ({ key, view, Sheet: Nothing });
 
 describe("the renderer slot registry", () => {
-  it("ships empty, so the shell renders exactly what it did before any unit landed", () => {
-    expect([PANEL_SLOTS, SIDEBAR_SLOTS, TOPBAR_SLOTS, SHEET_SLOTS].map(list => list.length)).toEqual([0, 0, 0, 0]);
+  // Was「ships empty」until the first integration unit landed (I3, 2026-09-16).
+  // The claim is the same one, stated against what is actually registered: the
+  // shell renders the surfaces the landed units appended and nothing else, and a
+  // slot that appears here without a line in slots.tsx — or disappears from it —
+  // fails this first.
+  it("carries exactly the surfaces the landed units registered", () => {
+    expect(LANDED.panels).toEqual(["terminal", "tool-browser"]);
+    expect(LANDED.sidebar).toEqual([]);
+    expect(LANDED.topbar).toEqual(["terminal", "tool-browser"]);
+    expect(LANDED.sheets).toEqual([]);
   });
 
   it("orders by `order` then `key`, whichever order the branches appended in", () => {
@@ -119,9 +137,13 @@ const register = <K extends keyof AppFeatureModels>(key: K, model: AppFeatureMod
 };
 
 describe("the renderer feature-model registry", () => {
-  it("ships empty, so the shell builds exactly the models it did before any unit landed", () => {
-    expect(FEATURE_MODELS).toEqual([]);
-    expect(new AppModel(desktop()).features).toEqual({});
+  // Same rewrite as the slot case above: the landed units' models, and only
+  // those. `AppModel` builds every registered factory in its constructor, so this
+  // also proves none of them needs a live shell to be constructed.
+  it("builds exactly the models the landed units registered", () => {
+    expect(LANDED.models.map(factory => factory.key).sort()).toEqual(["terminal", "toolBrowser"]);
+    FEATURE_MODELS.push(...LANDED.models);
+    expect(Object.keys(new AppModel(desktop()).features).sort()).toEqual(["terminal", "toolBrowser"]);
   });
 
   // The point of the whole case: a model registered here gets the same lifecycle

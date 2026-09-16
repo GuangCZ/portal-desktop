@@ -1,0 +1,93 @@
+/* The terminal panel; 2026-09-16.
+ *
+ * Class names are BeingDesktop 0.8.26's (renderer/terminal-panel.js builds
+ * `.terminal-panel`, `.terminal-toolbar`, `.terminal-tabs`, `.terminal-tab`,
+ * `.terminal-stage`, `.terminal-session`, `.terminal-mount`, `.terminal-empty`),
+ * so its stylesheet stays readable beside this one. The panel is a column in
+ * `.workspace-body`, next to the shell browser, because the shell lays that row
+ * out and app/page.tsx is not a file this unit may edit.
+ *
+ * `--font-mono` and `--text-code` are BeingDesktop variables this shell does not
+ * define; the fallbacks in components/stage.tsx `typography()` are what run here,
+ * which is why the terminal's own font is set in JS rather than in this file. */
+#terminal-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 42%;
+  min-width: 260px;
+  min-height: 0;
+  background: var(--bg, #181818);
+  border-left: 1px solid var(--line);
+  overflow: hidden;
+}
+.terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
+}
+.terminal-toolbar button { -webkit-app-region: no-drag; }
+.terminal-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.terminal-tabs::-webkit-scrollbar { display: none; }
+.terminal-tab {
+  display: flex;
+  align-items: center;
+  border-radius: 7px;
+  flex-shrink: 0;
+  max-width: 190px;
+}
+.terminal-tab.active { background: var(--selected); }
+.terminal-tab-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 4px 5px 9px;
+  font-size: 12px;
+  color: var(--secondary);
+}
+.terminal-tab.active .terminal-tab-select { color: var(--text); }
+.terminal-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-tab-ended { font-size: 10px; color: var(--muted); flex-shrink: 0; }
+.terminal-toolbar-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.terminal-icon-button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: 15px;
+  line-height: 1;
+}
+.terminal-icon-button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.terminal-icon-button:disabled { opacity: .45; }
+.terminal-stage { position: relative; flex: 1; min-height: 0; }
+.terminal-session { position: absolute; inset: 0; }
+.terminal-session[hidden] { display: none; }
+.terminal-mount { position: absolute; inset: 0; padding: 6px 0 6px 8px; }
+.terminal-mount .xterm { height: 100%; }
+.terminal-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.terminal-empty[hidden] { display: none; }

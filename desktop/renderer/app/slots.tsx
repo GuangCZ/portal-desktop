@@ -20,6 +20,8 @@
 // a title bar or a placeholder for it.
 import type { ComponentType, ReactNode } from 'react';
 import type { AppModel } from './models/app';
+import { terminalPanelSlot, terminalTopbarSlot } from '../terminal/slot';
+import { toolBrowserPanelSlot, toolBrowserTopbarSlot } from '../tool-browser/slot';
 
 /** A dockable panel in the workspace body, after the tool browser. */
 export interface PanelSlot {
@@ -59,12 +61,16 @@ export interface SheetSlot {
 }
 
 export const PANEL_SLOTS: PanelSlot[] = [
+  terminalPanelSlot,
+  toolBrowserPanelSlot,
 ];
 
 export const SIDEBAR_SLOTS: SidebarSlot[] = [
 ];
 
 export const TOPBAR_SLOTS: TopbarSlot[] = [
+  terminalTopbarSlot,
+  toolBrowserTopbarSlot,
 ];
 
 export const SHEET_SLOTS: SheetSlot[] = [
