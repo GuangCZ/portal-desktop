@@ -14,6 +14,25 @@
 // tests/town-session-client.test.ts; this is the packaged path, including the
 // preload envelope that carries a `code` across IPC.
 //
+// FIRST EXECUTED 2026-09-16 by integration unit IM. Three things this script
+// had never been able to learn about itself came out of that run; two were its
+// own and are fixed above and below (the speak receipt it answered with, and the
+// key order it demanded). The third is not this script's and is left failing on
+// purpose: the four checks that read `error.code` cannot pass today, because
+// `contextBridge` drops every custom property of a thrown Error before it
+// reaches the renderer. Measured on this exact Electron (44.2.0), with a
+// standalone two-file fixture: a preload that rejects with
+// `Object.assign(new Error(m), {code})` arrives in the page as an Error whose
+// own properties are `["stack","message"]` — while the same value passed as a
+// plain object keeps its `code`. So `preload/channels/{bridge,town}.ts` rebuild
+// the Error on the wrong side of the bridge, and the codes die there.
+// BeingDesktop 0.8.26 has the same shape and the same hole (src/preload.cjs
+// lines 60-76, whose own comment says「Electron strips custom Error fields」);
+// its renderer/town-app.js lines 308 and 1027 branch on codes that never arrive.
+// This is therefore inherited, not introduced by the port — and it is not this
+// unit's to fix, because the repair changes what every Town and conversation
+// call site receives. See docs/migration/im-integration.md §4.4.
+//
 // SDK contract fixtures only: no real Town pairing, messages or credentials.
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -39,6 +58,17 @@ const check = (name, condition) => {
   checks.push(name);
   process.stdout.write(`${name}: passed\n`);
 };
+
+/** Compare bodies by field and value, not by key insertion order: a JSON object
+ * has no ordering on the wire, and `town-client.cjs` line 298 builds a fireside
+ * body as `{message, fireside_id}` while docs/interfaces.md lists the fields the
+ * other way round. Asserting `JSON.stringify` equality made this script demand
+ * an order neither Town nor the client promises (IM, 2026-09-16: first run). The
+ * field set and every value are still asserted exactly. */
+const canonical = value => JSON.stringify(value, (_key, item) =>
+  item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]]))
+    : item);
 
 let app;
 try {
@@ -80,7 +110,12 @@ try {
       if (!globalThis.sdk.paired || headers.authorization !== `Bearer ${token}`) return Response.json({ error: 'unauthorized' }, { status: 401 });
       if (request.method === 'POST') {
         globalThis.sdk.writes.push({ path: url.pathname, body: await request.json() });
-        return Response.json({ ok: true, seq: 12, id: 'sent-1', via: 'client:desktop' });
+        // A speak receipt has to carry the identity Town wrote under and, for a
+        // direct message, `message_id` — `town-client.cjs` line 301/326 reads
+        // exactly these, and its port does too (session/client.ts:458/485).
+        // Answering without them is not「Town said yes」but RESULT_UNKNOWN, which
+        // is what this fixture used to produce (IM, 2026-09-16: first execution).
+        return Response.json({ ok: true, seq: 12, message_id: 'sent-1', town_id: 't_Willow', via: 'client:desktop' });
       }
       if (url.pathname === '/api/bonfire/hear') {
         return Response.json({ ok: true, town_id: 't_Willow', global_latest_seq: 4, messages: [
@@ -144,7 +179,7 @@ try {
   await page.evaluate(connectionRevision => window.beings.townDesktop.speak({ kind: 'fireside', firesideId: '10', content: '围炉', connectionRevision }), revision);
   await page.evaluate(connectionRevision => window.beings.townDesktop.speak({ kind: 'dm', recipient: 't_River', content: '私信', connectionRevision }), revision);
   const writes = await app.evaluate(() => globalThis.sdk.writes);
-  check('the three speak bodies are the documented ones', JSON.stringify(writes) === JSON.stringify([
+  check('the three speak bodies are the documented ones', canonical(writes) === canonical([
     { path: '/api/bonfire/speak', body: { message: '篝火' } },
     { path: '/api/fireside/speak', body: { fireside_id: 10, message: '围炉' } },
     { path: '/api/messages', body: { recipient: 't_River', content: '私信' } },

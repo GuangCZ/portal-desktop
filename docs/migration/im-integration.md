@@ -413,3 +413,58 @@ asar 里 `/.vite/renderer/main_window/index.html` 与 `/node_modules/node-pty/bi
 注释写的正是这件事（"Ad-hoc macOS builds change their signature on every rebuild"），
 但 `tools-e2e` / `browser-e2e` / `terminal-e2e` **都没有设这个环境变量**，所以刚重签之后的第一次跑必然撞上。
 → 记进 openIssues（本单元不改这三个脚本的环境变量：那会把「真钥匙串」这条覆盖悄悄换成假的，属于产品判断，不该由整合单元替 I5/I2/I3 拍板）。
+
+### 4.3 打包产物上的 E2E（逐条命令与结果）
+
+全部在 `out/Being Desktop-darwin-arm64/Being Desktop.app` 上跑，一次一个（四个 worktree 共用 `os.tmpdir()` 下的 E2E 锁）。
+
+| # | 命令 | 结果 |
+| --- | --- | --- |
+| 1 | `node tests/tools-e2e.mjs` | **PASS**：握手 1 次，`tools/list` **15** 个工具（i2 记录当时是 9——I4/I1/I6 合入后工具桥多了 6 个），允许 1 次、拒绝 1 次，收起面板后原生视图已分离。 |
+| 2 | `node tests/terminal-e2e.mjs` | **PASS**：打包客户端能启动 PTY、回显命令并关闭会话（node-pty 的 native rebuild + asar unpack 在产物里是对的）。 |
+| 3 | `node tests/sidebar-e2e.mjs` | **PASS**，14 条 check 全绿，含本单元第 13 条新加的 4 条。 |
+| 4 | `node tests/browser-e2e.mjs` | **PASS**：原生页面、地址栏、历史、弹窗、模态层叠、会话保持、隔离、关闭清理。 |
+| 5 | `node tests/town-sdk.mjs` | **FAIL**（9 过 4 挂，见 §4.4）——**这是它第一次被执行**。 |
+| 6 | `node tests/town-ui.mjs` | 见 §4.5 |
+| 7 | `node tests/menu-keyboard.mjs` | 见 §4.6 |
+| 8 | `node tests/update-progress.mjs` | 见 §4.6 |
+
+### 4.4 `tests/town-sdk.mjs` 首次执行：两个脚本缺陷（已修）+ 一个继承自 0.8.26 的真缺陷（未修，见 openIssues）
+
+**脚本自己的两处（已就地修，属本单元可改范围）**：
+
+1. **发送回执少了身份字段**。夹具对所有 POST 回 `{ok:true, seq:12, id:'sent-1', via:'client:desktop'}`。
+   但 `session/client.ts:458` 是 `this._identity(result, ctx, 'being')`，`_identity` 在没有 `town_id` 也没有 `being` 时抛 `INVALID_RESPONSE`，
+   被外面的 `catch` 转成 `RESULT_UNKNOWN`——所以 `speak` 直接以「发送结果未确认…」中断，后面 5 条 check 根本没跑到。
+   私信那条还要 `result.message_id` 是字符串（`client.ts:485`），夹具给的是 `id`。
+   **逐行核对过上游**：`BeingDesktop/src/town-client.cjs:301` 与 `:326` 是同两行，**客户端是对的，夹具是错的**。
+   夹具改成回 `{ok:true, seq:12, message_id:'sent-1', town_id:'t_Willow', via:'client:desktop'}`。
+2. **按键序比较请求体**。`check('the three speak bodies…')` 用 `JSON.stringify` 全等比较，
+   而实际围炉体是 `{message, fireside_id}`（`client.ts:456` 的展开顺序，与 `town-client.cjs:298` 一致），
+   期望写的是 `{fireside_id, message}`——**内容完全正确，只有键的插入顺序不同**。
+   JSON 对象在线上没有顺序，这条断言等于要求一个谁都没承诺的东西。改成递归按键排序后比较（`canonical()`），
+   **字段集合与每个值仍然逐个断言，没有放宽**。
+
+**第三处不是脚本的问题，也不是本单元该改的**（→ openIssues）：4 条读 `error.code` 的 check 现在**必然挂**。
+
+- 现象：`window.beings.townDesktop.bonfire()` 在未配对时 reject 出来的 Error，
+  `Object.getOwnPropertyNames(e)` 只有 `["stack","message"]`，**没有 `code`**；
+  同一时刻 `townDesktop.appState()` 里 `sync.bonfire.errorCode` 是 `"AUTH_REQUIRED"`——主进程知道，渲染层拿不到。
+  「旧连接」那条也一样：消息是对的（`Being 连接已变化。`，说明 `SESSION_CHANGED` 的守卫真的拦住了，没有多发第 4 条），只是 `code` 没了。
+- 根因（**实测，两个文件的独立夹具，不是推断**）：`/tmp/im-cb/fixture` 一个 preload + 一个空白页，
+  `contextBridge.exposeInMainWorld` 暴露 `reject: async () => { throw Object.assign(new Error(m), {code:'AUTH_REQUIRED'}) }`。
+  在**本仓库这一版 Electron（44.2.0）**下，页面收到的 Error 的自有属性是 `["stack","message"]`（同步抛是 `["stack","message"]`，`Object.keys` 只有 `message`）；
+  而把同一个值当**普通对象**返回，`{__townError:true, code:'AUTH_REQUIRED', message:…}` **原样到达**。
+  → `contextBridge` 会剥掉 Error 上的自定义属性，普通对象不会。
+- 所以 `preload/channels/bridge.ts` 的 `enveloped` 与 `preload/channels/town.ts` 的 `townEnveloped`
+  **把包络还原成 Error 的位置错了一侧**：还原发生在 preload，而 preload 到页面之间还隔着 contextBridge。
+  两个文件的注释都写着「a failure arrives as data and is turned back into an Error carrying its `code`,
+  which is the only way a code survives the trip」——前半句对，后半句在这一版 Electron 上不成立。
+- **这是从 0.8.26 继承的，不是移植引入的**：`BeingDesktop/src/preload.cjs` 第 60-76 行是同一套做法，
+  它自己的注释就写着「Electron strips custom Error fields. Preserve only known Town error categories.」，
+  而 `renderer/town-app.js:308`（`error.code`）与 `:1027`（`error?.code === 'AUTH_REQUIRED'`）两处分支在 0.8.26 里同样永远走不到。
+  0.8.26 的 `package.json` 也是 `electron 44.2.0`。
+- **本单元不修**：正确的修法是把包络当数据交给渲染层、在渲染层还原（或由渲染层统一包一层），
+  这会改变 Town 与对话两族通道**每一个调用点**收到的东西——跨 I1/I5/I7/I6b 四个单元的文件，
+  其中三个正在并行改这些文件。属于「应用层缺陷，附证据进 openIssues，不顺手重构」。
+  脚本里的 4 条断言**原样保留**（它们断的是正确契约），只在文件头写清楚原因与证据出处。
