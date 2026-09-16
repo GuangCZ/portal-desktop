@@ -215,10 +215,13 @@ test("discussing a task refuses until a composer is installed, then prepares one
       f.extensions.connectionVerified(SECOND);
       await settle();
     });
-    // The ledger is swapped before the epoch is re-read, so this is the first of
-    // `discussFeatureTask`'s two guards that fires — both mean the same thing to
-    // the user, and neither delivers a draft built under the previous Being.
-    await expect(f.invoke("beings:feature-task-discuss", task.id)).rejects.toThrow("连接身份已变化，任务内容未转交。");
+    // Whichever of `discussFeatureTask`'s two guards notices first — the ledger
+    // identity or the connection epoch — depends on how far the swap got while
+    // the draft was being prepared. Both mean the same thing to the user, and
+    // neither delivers a draft built under the previous Being.
+    await expect(f.invoke("beings:feature-task-discuss", task.id))
+      .rejects.toThrow(/连接身份已变化，任务内容未转交。|连接已变化，请重新选择任务。/);
+    await settle();
     // The swap has completed by now, so the channel works again — for the NEW
     // Being's ledger, which has never heard of this task.
     expect(f.subsystem().histories.currentIdentity()).toBe(true);

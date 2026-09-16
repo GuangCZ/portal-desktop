@@ -49,6 +49,16 @@ export const ACTIVE = ["starting", "running", "queued", "stopping"];
 export const isActive = (worker: { status: string }): boolean => ACTIVE.includes(worker.status);
 
 const COLLAPSED_KEY = "beings:worker-groups-collapsed";
+
+/** The two methods the collapse state needs of `localStorage`. */
+export interface CollapseStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
+const defaultStorage = (): CollapseStorage => {
+  // node's `localStorage` exists but throws on write without a backing file, so
+  // the fallback has to behave like a storage that simply keeps nothing.
+  const none: CollapseStorage = { getItem: () => null, setItem: () => {} };
+  try { return typeof localStorage?.getItem === "function" ? localStorage : none; }
+  catch { return none; }
+};
 const EMPTY: OrchestrationSnapshotState = {
   mode: { enabled: false, defaultAgent: "codex", paths: {} },
   enforcement: { status: "unchecked" }, agents: [], workers: [], error: "", linkRequired: true,
@@ -70,11 +80,14 @@ export class OrchestrationModel extends Store {
   private ticket = 0;
   private refresh?: ReturnType<typeof setTimeout>;
 
-  constructor(private readonly api: DesktopAPI) {
+  /** `storage` is the browser's own in the client. It is a parameter because a
+   * test process has no working `localStorage` (node's stub throws on write), and
+   * "the collapse state survives a restart" is exactly the claim worth pinning. */
+  constructor(private readonly api: DesktopAPI, private readonly storage: CollapseStorage = defaultStorage()) {
     super();
     this.settings = new OrchestrationSettingsModel(api, snapshot => this.receive(snapshot));
     try {
-      const saved: unknown = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]");
+      const saved: unknown = JSON.parse(this.storage.getItem(COLLAPSED_KEY) || "[]");
       if (Array.isArray(saved)) for (const id of saved) if (typeof id === "string") this.collapsed.add(id);
     } catch { /* Keep the toggles usable when local storage is unavailable. */ }
   }
@@ -118,7 +131,7 @@ export class OrchestrationModel extends Store {
   isCollapsed(sessionId: string): boolean { return this.collapsed.has(sessionId); }
   toggleGroup(sessionId: string) {
     if (this.collapsed.has(sessionId)) this.collapsed.delete(sessionId); else this.collapsed.add(sessionId);
-    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...this.collapsed])); }
+    try { this.storage.setItem(COLLAPSED_KEY, JSON.stringify([...this.collapsed])); }
     catch { /* In-memory state still works without storage. */ }
     this.changed();
   }
