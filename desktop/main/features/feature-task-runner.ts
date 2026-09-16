@@ -16,7 +16,7 @@ interface RequestHints { kind: unknown; firesideId: unknown; channel: unknown }
 const context = new AsyncLocalStorage<TaskStore>();
 const WAITING_CODES = new Set<unknown>(['REQUEST_ACCEPTED', 'RESULT_UNKNOWN', 'WAITING_SBS', 'SBS_NOT_CONFIGURED']);
 const WAITING_DETAIL = '请求结果尚待确认；不会自动重发。';
-export const OPERATIONS: Readonly<Record<string, readonly [string, string, string, 'being' | 'local']>> = Object.freeze({
+const OPERATIONS: Readonly<Record<string, readonly [string, string, string, 'being' | 'local']>> = Object.freeze({
   listScrolls: ['scroll', 'list', '读取卷轴目录', 'being'],
   getScroll: ['scroll', 'read', '读取卷轴正文', 'being'],
   getGroveCatalog: ['grove', 'list', '读取工具包目录', 'local'],

@@ -7,6 +7,21 @@ portal-desktop 的 TypeScript（`desktop/main/features/*.ts` + `tests/features-*
 
 来源工作树（只读）：`/Users/d5c/Documents/ChatGPT/BeingDesktop`，移植日期 2026-09-16。
 
+**完成状态（2026-09-16）**：四个模块与全部测试已移植，门槛全绿。
+
+| 产出 | 路径 |
+| --- | --- |
+| 共享类型与注入接口 | `desktop/main/features/types.ts` |
+| 功能任务账本 | `desktop/main/features/feature-tasks.ts` |
+| 任务归属与结果判定 | `desktop/main/features/feature-task-runner.ts` |
+| 加密持久化与 Town 请求记录 | `desktop/main/features/feature-task-history.ts` |
+| 把任务带进聊天讨论 | `desktop/main/features/feature-task-discussion.ts` |
+| 测试（52 例） | `tests/features-feature-tasks.test.ts`、`tests/features-feature-task-runner.test.ts`、`tests/features-feature-task-history.test.ts`、`tests/features-feature-task-discussion.test.ts` |
+
+门槛：`npm run typecheck` 退出码 0；`npx vitest run` →
+`Test Files  48 passed | 7 skipped (55)` / `Tests  361 passed | 16 skipped (377)`。
+未做集成：IPC、renderer、`main.ts` 挂钩留给后续阶段（见文末「注入点」表）。
+
 ---
 
 ## 阅读摘要
@@ -703,5 +718,7 @@ const taskRunner=new FeatureTaskRunner({getLedger:()=>featureHistory.ledger});
    对普通对象结果一致。
 6. 测试目录从仓库内 `.local/` 改为 `os.tmpdir()`（不能往 portal-desktop 仓库写文件），前缀保持
    `feature-task-history-test-`，清理逻辑改为 `afterEach`。
-7. 新增两条用例：`tests/features-feature-tasks.test.ts` 末尾的 Town 传输错误码账本半（来自 town-error-ipc），
+7. `ERROR_DETAILS`（feature-tasks）与 `OPERATIONS`（feature-task-runner）保持模块私有，与 BeingDesktop 的导出面一致
+   （两者在源码里也未导出；`main.cjs` 的 `featureMethods` 是自己维护的字面量集合，不从 `OPERATIONS` 读取）。
+8. 新增两条用例：`tests/features-feature-tasks.test.ts` 末尾的 Town 传输错误码账本半（来自 town-error-ipc），
    以及 `tests/features-feature-task-history.test.ts` 末尾的 0.8.x 旧格式读写兼容用例。原有用例一条未减。

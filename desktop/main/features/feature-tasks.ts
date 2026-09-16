@@ -17,7 +17,7 @@ import type {
 const STATUSES = new Set<string>(['running', 'waiting', 'succeeded', 'failed', 'cancelled', 'needs_input']);
 const TERMINAL = new Set<string>(['succeeded', 'failed', 'cancelled']);
 const RESTART_DETAIL = '应用已重新启动，执行状态待核对；不会自动重发。';
-export const ERROR_DETAILS: Readonly<Record<string, string>> = Object.freeze({
+const ERROR_DETAILS: Readonly<Record<string, string>> = Object.freeze({
   AUTH_REQUIRED: '此功能需要授权，请在对应功能页面完成连接。',
   IDENTITY_MISMATCH: '连接身份不一致，请检查 Being 连接后重试。',
   NOT_CONNECTED: '请先连接 Being。',
