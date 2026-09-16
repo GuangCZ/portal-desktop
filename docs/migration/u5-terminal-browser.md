@@ -198,3 +198,47 @@
 - `_syncView()` — `tab = tabs.get(activeTabId)`，`window = getWindow()`；不可见 / 无 tab.url / webContents 已销毁 / 无窗口 / 窗口已销毁 → `_detach()`；`const [width, height] = window.getContentSize()`；`x = min(bounds.x, width)`、`y = min(bounds.y, height)`，宽高按窗口剩余空间截断；任一 ≤ 0 → `_detach()`；attached 的 tab 或 window 变了则先 `_detach()` 再 `window.contentView.addChildView(view)` 并记录 attached；最后 `view.setBounds(bounds)`、`view.setVisible(true)`。
 
 移植注意：所有 electron 触点（WebContentsView 构造器、session.fromPartition 及其 handler、webContents.*、view.*、window.contentView.*、window.getContentSize()、window.isDestroyed()、capturePage 返回的 NativeImage）都要在 tools/browser/host.ts 里声明成接口，browser.ts 只依赖接口。
+
+### test/desktop-browser.test.cjs（371 行，17 个用例）
+
+全部用假 electron 对象驱动，无需真 electron。
+
+`class Contents extends EventEmitter`（假 webContents）：
+- 字段 `url=''`、`history=[]`、`index=-1`、`loading=false`、`destroyed=false`、`pending=[]`
+- `navigationHistory = {canGoBack:() => index > 0, canGoForward:() => index < history.length - 1, goBack:() => { url = history[--index]; emit('did-navigate') }, goForward:() => { url = history[++index]; emit('did-navigate') }}`
+- `loadURL(url)`：先 `emit('did-start-navigation', {url,isMainFrame:true,isSameDocument:false})`；设 url；`history.splice(index+1)`；push；`index++`；`loading = true`；`emit('did-start-loading')`；返回一个把 `{resolve,reject}` 压进 `pending` 的 Promise（永不自动结束）
+- `finish(title = 'Fixture page')`：`loading=false`；`emit('did-navigate')`；`emit('page-title-updated', {}, title)`；`emit('did-stop-loading')`；`pending.at(-1)?.resolve()`
+- `getURL()`、`executeJavaScriptInIsolatedWorld()` → `Promise.resolve(true)`、`isLoading()`、`isDestroyed()`
+- `setWindowOpenHandler(handler)` → 存到 `this.popup`
+- `stop()` → `stopped = true; loading = false; emit('did-stop-loading')`
+- `reload()` → `reloaded = true; loading = true`
+- `close(options)` → `closeOptions = options; destroyed = true`
+
+`fixture()` → `{browser, views, changes, attached, ses, window}`：
+- `ses` 是 EventEmitter，另有 `setPermissionRequestHandler/​setPermissionCheckHandler/​setDevicePermissionHandler`（分别存成 `requestPermission`/`checkPermission`/`devicePermission`）与 `webRequest:{onBeforeRequest(handler) { this.before = handler }}`
+- `window = {isDestroyed:() => false, getContentSize:() => [1000, 700], contentView:{addChildView(view){attached.push(view)}, removeChildView(view){attached.splice(indexOf,1)}}}`
+- `class View { constructor(options){ this.options = options; this.webContents = new Contents(); views.push(this) } setBounds(b){this.bounds=b} getBounds(){return this.bounds || {x:0,y:0,width:0,height:0}} setVisible(v){this.visible=v} setBackgroundColor(c){this.color=c} }`
+- `new DesktopBrowser({WebContentsView:View, session:{fromPartition(name){ assert.equal(name, BROWSER_PARTITION); return ses }}, getWindow:() => window, onChange:value => changes.push(value)})`
+
+`event(url, isMainFrame = true)` → `{url, isMainFrame, prevented:false, preventDefault(){ this.prevented = true }}`
+
+用例清单（顺序即原文件顺序，共 16 条）：
+1. `browser address input supports real web URLs and local developer previews` — `example.com/docs` → `https://example.com/docs`；`' https://example.com:443/a?q=1 '` → `https://example.com/a?q=1`；`localhost:3000` → `http://localhost:3000/`；`127.0.0.1:8317/management.html` → `http://127.0.0.1:8317/management.html`；`[::1]:8080` → `http://[::1]:8080/`；`http://192.168.1.20:8080` → `http://192.168.1.20:8080/`
+2. `address parser rejects executable and privileged schemes, credentials and malformed values` — 逐个 throws：`javascript:alert(1)`、`file:///C:/secret`、`data:text/html,hello`、`being://app/`、`about:blank`、`chrome://settings`、`devtools://a`、`//evil.test/`、`https://user:password@example.com`、`https://user@example.com`、`https:example.com`、`example.com\n.evil.test`、`search some text`、`localhost:999999`、`''`、`null`、`{}`、`4`、`'x'.repeat(9000)`
+3. `browser creates an isolated sandboxed page without privileged preload or homepage requests` — `newTab()` 无 url 时不发起加载（`pending.length === 0`）；`sandbox/contextIsolation/webSecurity` 为 true；`nodeIntegration/nodeIntegrationInSubFrames/nodeIntegrationInWorker/webviewTag/navigateOnDragDrop/allowRunningInsecureContent` 为 false；`Object.hasOwn(preferences,'preload') === false`
+4. `viewport attaches only the active page and clips dimensions to the host window` — 先 `setViewport({visible:true, bounds:{x:200.9,y:100.9,width:9999,height:9999}})`；两个标签页后只有 `views[1]` 被 attach、`views[0].visible === false`、`views[1].bounds === {x:200,y:100,width:800,height:600}`（窗口 1000x700 裁剪）；`activateTab(first)` 后 attached 变成 `[views[0]]`；`setViewport({visible:false})` 后 attached 为空；`closeTab(second)` → `views[1].webContents.destroyed === true`；两个都关掉后 tabs 为空、activeTabId 为 null
+5. `history, loading, title, reload and stop reflect the active browser tab` — `newTab({url:'example.com'})` 后 isLoading true；`finish('First page')` 后 title 与 isLoading；`navigate({url:'example.org'})` + finish 后 canGoBack true；`goBack()` 后 url 为 `https://example.com/`、canGoForward true；`goForward()` 后 `https://example.org/`；`reload()` → `wc.reloaded`；`stop()` → `wc.stopped` 且 isLoading false
+6. `all frame navigations and redirects enforce the protocol boundary` — 三个事件名各测一次阻止 `being://app/index.html`、放行 `http://localhost:3000`；子框架 `file:///C:/secret`（isMainFrame false）也被 preventDefault；`ses.webRequest.before({url:'being://app/', resourceType:'mainFrame'}, cb)` → `{cancel:true}`；`{url:'https://example.com/script.js', resourceType:'script'}` → `{cancel:false}`；`will-attach-webview` 被 preventDefault
+7. `website popups become safe internal tabs and never native windows` — `popup({url:'https://example.org', disposition:'background-tab'})` 返回 `{action:'deny'}`，`await Promise.resolve()` 后新增一个标签页且 activeTabId 仍是第一个；`javascript:alert(1)` 与 `file:///C:/secret` 的 popup 同样 deny 且不新增标签页
+8. `browser pages cannot request native permissions, devices or downloads` — `ses.requestPermission(wc,'media',cb)` → false；`ses.checkPermission()` → false；`ses.devicePermission()` → false；`ses.emit('will-download', download, {}, wc)` → `download.prevented === true`，notice 匹配 `/下载/`，error 为空
+9. `UI snapshots redact credentials and contain no contents objects or page body` — url 带 `token=private-fixture&query=visible&api_key=secret-fixture#access_token=hidden-fixture`；snapshot 序列化后不含三个敏感值、包含 `query=visible`；`Object.keys(snapshot().tabs[0])` 恰为 `['id','title','url','isLoading','canGoBack','canGoForward','error','notice','revision']`；底层 `getURL()` 仍含 token；把标题设成一个带 token 的 URL 后 snapshot 依然不含 `private-fixture`
+10. `stale page failures and closed-tab failures cannot overwrite a newer navigation` — 旧 pending reject 不写 error（requestRevision 已变）；关闭标签页后再 reject 也不复活标签页
+11. `failed main frames show a sanitized error while aborted loads and subframes stay quiet` — `did-fail-load` code `-3` 忽略；`isMainFrame === false` 忽略；`-105` 主框架 → error 匹配 `/找不到/`；快照不含 `secret-fixture`（description 不进快照）
+12. `invalid commands and viewport values leave the browser unchanged` — 九个操作全 throws：`newTab({active:'yes'})`、`newTab(null)`、`activateTab({})`、`closeTab('missing')`、`navigate({url:'file:///secret'})`、`setViewport({visible:1,...})`、bounds `y:-1`、`width:NaN`、`width:100001`；之后 snapshot 与之前深度相等
+13. `tab limits and disposal release all page resources without beforeunload prompts` — 开满 `MAX_BROWSER_TABS` 个后再 newTab throws `/最多/`；`destroy()` 调用两次（幂等）；`ses.listenerCount('will-download') === 0`；`ses.webRequest.before === null`；每个 view 的 webContents `destroyed === true`、`closeOptions === {waitForBeforeUnload:false}`、`eventNames().length === 0`；destroy 后 newTab throws `/已经关闭/`
+14. `structured operations reject stale revisions, loading pages and invalid parameters before execution` — 首个快照 `revision === 1`；加载中 readPage rejects `/加载/`；`finish()` 后手动设 `browser.tabs.get(first.id).documentToken = 'synthetic-fixture-context'`；`navigate` 后 revision 变 2；`readPage(first.id, 1)`、`click({...expectedRevision:1})`、`fill({...expectedRevision:1})`、`screenshot(first.id, 1)` 全 rejects `/页面已变化/`；`click({selector:'x'.repeat(513)})` rejects `/选择器/`；`fill({selector:'#note',text:'x'.repeat(8001)})` rejects `/8000/`；`fill({selector:'#note',text:42})` rejects `/填写内容/`
+15. `screenshots bound the native bitmap and discard an image captured across navigation` — 假 bitmap 递归 resize；`capturePage` 断言 `options.stayHidden === true` 并返回 3200x2000；截图结果被缩到 1600x1000、mimeType `image/png`、data 为 png 的 base64；随后让 `capturePage` 在返回前触发 `navigate`，`screenshot` rejects `/页面已变化/`
+16. `blocked navigation, downloads and popups keep a committed page visible and usable` — 已提交页面上 `did-start-navigation` 到 `mailto:` 再 `will-navigate` 被阻止后：error 为空、notice 匹配 `/已阻止/`、`browser.tabs.get(id).documentToken` 为真（`_notice` 重新注入）、view 仍 attached 且 visible；`will-download` 后 notice 匹配 `/下载/`；`popup({url:'javascript:alert(1)'})` 后 notice 匹配 `/弹出窗口/`、view 仍 visible；`navigate` 到新地址后 notice 清空
+17. `a blocked redirect with no committed page remains a fatal load error` — 未提交页面上 `will-redirect` 到 `being://app/index.html` → error 匹配 `/已阻止/`、notice 为空
+
+（`test(` 出现次数 = 17，与上表一一对应；移植后 vitest 用例数必须 ≥ 17。）
