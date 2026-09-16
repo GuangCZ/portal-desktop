@@ -267,7 +267,7 @@ ToolLink=DesktopToolLink}`。
 | tool-link | src/desktop-tool-link.cjs | desktop/main/tools/tool-link.ts | 已移植 |
 | types（注入接口） | — | desktop/main/tools/types.ts | 已移植 |
 | desktop-tools | src/desktop-tools.cjs | desktop/main/tools/desktop-tools.ts | 未开始 |
-| terminal-tools | src/desktop-terminal-tools.cjs | desktop/main/tools/terminal-tools.ts | 未开始 |
+| terminal-tools | src/desktop-terminal-tools.cjs | desktop/main/tools/terminal-tools.ts | 测试通过 |
 | worker-presentation | src/worker-presentation.cjs | desktop/main/tools/worker-presentation.ts | 未开始 |
 
 | 测试 | 源文件 | 目标 | 状态 |
@@ -278,6 +278,6 @@ ToolLink=DesktopToolLink}`。
 | console | test/desktop-console.test.cjs | tests/tools-console.test.ts | 未开始 |
 | tool-link | test/desktop-tool-link.test.cjs | tests/tools-tool-link.test.ts | 未开始 |
 | desktop-tools | test/desktop-tools.test.cjs | tests/tools-desktop-tools.test.ts | 未开始 |
-| terminal-tools | test/desktop-terminal-tools.test.cjs | tests/tools-terminal-tools.test.ts | 未开始 |
+| terminal-tools | test/desktop-terminal-tools.test.cjs | tests/tools-terminal-tools.test.ts | 测试通过（4/4） |
 | worker-presentation | test/worker-presentation.test.cjs | tests/tools-worker-presentation.test.ts | 未开始 |
 | console 集成 | test/desktop-console-integration.cjs | tests/tools-console-integration.test.ts | 未开始 |
