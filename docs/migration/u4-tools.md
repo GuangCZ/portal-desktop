@@ -275,7 +275,7 @@ ToolLink=DesktopToolLink}`。
 | security | test/security.test.cjs | tests/tools-security.test.ts | 测试通过（7/7） |
 | browser-links | test/browser-links.test.cjs | tests/tools-browser-links.test.ts | 测试通过（5/5） |
 | network | test/desktop-network.test.cjs | tests/tools-network.test.ts | 测试通过（13/13） |
-| console | test/desktop-console.test.cjs | tests/tools-console.test.ts | 未开始 |
+| console | test/desktop-console.test.cjs | tests/tools-console.test.ts | 测试通过（12/12） |
 | tool-link | test/desktop-tool-link.test.cjs | tests/tools-tool-link.test.ts | 未开始 |
 | desktop-tools | test/desktop-tools.test.cjs | tests/tools-desktop-tools.test.ts | 测试通过（16/16） |
 | terminal-tools | test/desktop-terminal-tools.test.cjs | tests/tools-terminal-tools.test.ts | 测试通过（4/4） |
@@ -299,3 +299,4 @@ ToolLink=DesktopToolLink}`。
   运行期取值与 BeingDesktop 一致。
 - `desktop-tools` 测试里的 `desktopPortalName` 夹具逐行抄自 `src/desktop-identity.cjs` 5..10 行。
 - `browser-links` 测试同样内联 `normalizeBrowserUrl` + `navigationUrl` 夹具（src/desktop-browser.cjs 16..34 行）。
+- console 测试里的 `__dirname`/`__filename` 换成 `path.resolve("tests")` 与本测试文件路径（vitest 的 cwd 是仓库根）。
