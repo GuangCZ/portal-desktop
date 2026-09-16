@@ -376,6 +376,74 @@ fields `pending=null, timer=null, disposed=false`.
   returns `{recorded:true,review,instruction:'验收结论已持久保存，桌面会投递到 Worker 所属原会话。不要再次发送相同结论；需要补验证时按原任务范围委派并填写 parentWorkerId。'}`.
 - `dispose()` — `disposed=true`, `invalidate()`, `clearInterval(timer)`, `timer=null`.
 
+### test/orchestration.test.cjs (326 lines, 18 cases)
+
+Imports `Orchestration`, `normalizeEvent`, `detectAgents`, plus `toolDefinitions`/`validArguments` (desktop-tool-link) and `DesktopTools` (desktop-tools) — the last two are outside this unit.
+`tick = () => new Promise(resolve => setImmediate(resolve))`.
+
+`fixture(t)`: mkdtemp `being-workers-` under `os.tmpdir()`; `sessionId`/`otherId` random UUIDs; `children=[]`;
+`agents=[{id:'codex',name:'Codex CLI',path:'fixture',status:'ready'}]`;
+`new Orchestration({directory, getWorkspace:()=>directory, getSessionIds:()=>[sessionId,otherId], detect:async()=>agents,
+ launch: options => { let finish; const child={...options, done:new Promise(r=>{finish=r;}), finish:result=>finish(result), stop:async()=>{finish({code:null,stopped:true});}}; children.push(child); return child; }})`;
+then `selectOwner('owner-one')`, `configure({enabled:true}, async()=>{})`;
+`args = {...manager.context(sessionId), requestId:randomUUID(), title:'Test worker', prompt:'Inspect only the fixture.'}`.
+Teardown disposes the manager and removes the temp directory.
+
+Cases (names preserved):
+1. `result presentation is bound to a completed worker and preserves its review and CLI execution count` — fake `manager.presentation`
+   `{open, describe:v=>v, dispose}`; present before completion rejects `/完成/`; after `{"type":"turn.completed"}` + exit 0 (awaits `manager.finalizing.get(id)`),
+   presenting from the other session rejects `/本会话/`; `tool('desktop_worker_status',{action:'present',artifactPath:'game/index.html'})` returns `presentation.state==='loading'`;
+   review unchanged; only one child ever launched; history file records `presentation.artifactPath`;
+   an aborted present rejects `/取消/` without re-opening; `openResult(id, otherId)` rejects `/没有可打开/`;
+   with `mode.enabled=false`, `openResult(id, args.sessionId)` still re-opens (presentations===2) and launches no CLI.
+2. `presentation schema accepts one nullable target only for the presentation action` — pure `validArguments` schema test (desktop-tool-link). **Out of unit.**
+3. `enabling requires an executable default agent and persistence succeeds before changing mode` — with `detect` returning `[]`,
+   enabling rejects `/没有可执行/` and never calls persist; a persist that throws (`disk failed`) leaves the mode unchanged.
+4. `an unavailable bridge still prevents worker launch after chat readiness is inspected` — `OrchestrationPolicy` with a disconnected bridge;
+   `inspectForMessage().status === 'blocked'`; `manager.run(args)` rejects with `{code:'ORCHESTRATION_NOT_ENFORCED'}`; no child, no worker record.
+5. `worker dispatch is session bound, deduplicated, and serializes the shared checkout` — bad `sessionToken` rejects `/有效会话/`;
+   a duplicate `requestId` returns the same worker without launching again; another session's status call rejects `/其他会话/`;
+   a second `requestId` in the same workspace rejects `/工作区已有/`; child input ends with `'\n\n'+prompt`; the 2nd input line JSON has `workspace===child.cwd`;
+   args include `--skip-git-repo-check`, `--sandbox workspace-write`, and no `dangerously*` flag; split-across-chunks codex JSON lines are parsed
+   (item.started/item.completed/agent_message/turn.completed) -> status completed, `result==='Verified fixture'`, two tool events, session preserved.
+6. `exit zero without a success event fails; cancel and process errors are terminal` — exit 0 with no result -> `failed`; `stop()` -> `cancelled`;
+   `turn.failed` + exit 1 -> `failed`.
+7. `Codex reconnection progress does not mark a subsequently completed worker failed` — `Reconnecting... 2/5 (request timed out)` becomes a status event,
+   no error event, worker completed; a plain codex `error` still maps to kind `error`.
+8. `wait returns final evidence and changing identity prevents cross-owner access` — `desktop_worker_wait` resolves with the completed worker;
+   after `selectOwner('owner-two')` the snapshot has no workers and status calls reject `/有效会话/`; switching back restores the completed record.
+9. `restart marks running records interrupted without relaunch` — writes back the saved ledger with a running worker; after re-selecting the owner
+   the record is `interrupted` and no second child was launched. (Note the comment: switching away persists the live ledger, so the file is restored twice.)
+10. `mode cannot switch during a worker and cancelled acquisition cannot launch` — a `detect` that never resolves blocks `configure` (`/停止/`);
+    aborting the run rejects `/取消/` and launches nothing.
+11. `Codex, Cursor and Grok events preserve call IDs and redact credential-shaped text` — cursor tool_call keeps `call_id`, output redacts `secret=PRIVATE`;
+    grok `tool_call_update` keeps `toolCallId`/`status`; grok `end` with `stopReason:'max_tokens'` -> `success:false`; unknown codex type -> `null`.
+12. `detection distinguishes missing, incompatible and unauthenticated agents` — injected `find`/`run`, expects
+    `['needs_auth','ready','incompatible','missing']` and `auth==='configured'` for claude; a signed-out claude (`auth status` exit 1) is `needs_auth`
+    with a hint containing `claude auth login`.
+13. `Claude Code events map sessions, tool calls, refusals and failed results` — full claude mapping table, including `is_error:true` with `subtype:'success'` -> `success:false`.
+14. `a Claude Code worker runs unattended inside its sandbox and recalls tool names for results` — verifies the claude CLI argv prefix,
+    `--permission-mode acceptEdits`, the `--settings` JSON, the prompt frame, `agentSessionId`, and that the tool_result event reuses the remembered name
+    (`['Bash · running','Bash · completed']`).
+15. `a Claude Code run that ends in error is a failed worker even at exit code 0`.
+16. `desktop execution is denied in orchestrator mode and worker schemas require session binding` — DesktopTools/desktop-tool-link. **Out of unit.**
+17. `title generation uses an isolated CLI, ignores duplicate requests and cleans up` — second concurrent call returns `''`; the child runs in a temp
+    directory different from the workspace with `read-only` in its args and the input containing the text; agent_message + turn.completed -> the title;
+    no worker record; the temp directory is removed.
+18. `Claude Code titles run with no tools, one turn and no saved session` — last five args are `['--tools','','--max-turns','1','--no-session-persistence']`.
+19. `failed CLI naming keeps the default title and missing workers never launch` — exit 1 -> `''`; with mode disabled and no agents, a further call returns `''` without launching.
+20. `separate Desktops reject each other capabilities and keep tasks and execution targets local` — two managers with distinct `desktopId`/`place`;
+    identical session ids do not make tokens interchangeable; each worker records its own workspace/place/desktopId; `apiKey` never reaches the prompt;
+    cross-manager `get` throws `/不存在/`; stopping one does not affect the other; disabling one leaves the other enabled.
+21. `copied foreign Desktop worker history cannot be read or resume callbacks` — a ledger copied from another Desktop is filtered out and
+    `callbacks.receive(randomUUID())` rejects `/有效任务/`.
+22. `titles work without orchestration mode and serialize separate sessions` — two sessions queue behind one another (only one child at a time).
+23. `stopping title jobs cancels running and queued work without launching another CLI` — `stopAll()` -> both resolve `''`, one child total.
+24. `title generation falls back to another installed worker and cools down a failed provider` — after codex exits 1, claude is tried;
+    the next session goes straight to `claude-fixture` (codex is cooling down), three children total.
+
+(24 `test(...)` blocks; two of them — #2 and #16 — belong to the desktop-tool-link/desktop-tools unit.)
+
 ---
 
 ## 进度
