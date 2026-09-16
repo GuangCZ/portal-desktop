@@ -189,8 +189,32 @@ try {
   assert.equal(refusal.isError, true);
   assert.equal(await tabs.count(), tabsBefore);
 
+  // 7. CLOSING THE PANEL RELEASES THE NATIVE VIEW.
+  //    The page the Being opened is a WebContentsView the main process attaches
+  //    over this panel; it is not in this document, so a panel that unmounts
+  //    without saying so leaves the page pinned over the conversation for the
+  //    rest of the run, with no way back. `browser.visible` is the main process's
+  //    own answer about whether the view is attached, which is why the assertion
+  //    reads it through the bridge rather than looking at the DOM.
+  const attached = async () => (await page.evaluate(() => window.beings.tools.state())).browser.visible;
+  const waitForView = async want => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await attached() === want) return;
+      await page.waitForTimeout(100);
+    }
+    throw new Error(`原生视图未在 10 秒内${want ? '附着到窗口' : '从窗口分离'}`);
+  };
+  await waitForView(true);
+  await page.locator('#tools-close').click();
+  await page.waitForFunction(() => !document.querySelector('#desktop-tools'));
+  await waitForView(false);
+  // …and re-opening puts it back, so the release is not a one-way door.
+  await page.locator('#open-tools').click();
+  await page.locator('#desktop-tools').waitFor();
+  await waitForView(true);
+
   assert.deepEqual(errors, [], `渲染层报错：${errors.join(' | ')}`);
-  console.log(`PASS: tools-e2e（握手 1 次，tools/list ${toolNames.length} 个工具，允许 1 次、拒绝 1 次）`);
+  console.log(`PASS: tools-e2e（握手 1 次，tools/list ${toolNames.length} 个工具，允许 1 次、拒绝 1 次，收起面板后原生视图已分离）`);
 } catch (error) {
   failure = error;
 } finally {
