@@ -133,3 +133,16 @@
 - `src/services.cjs` → `sanitizeText(value, secrets=[])`：去 ANSI、redact secrets（≥4 字符）、URL 去凭据与查询、header/Bearer/token=… redact、sk-/JWT/长 hex/长 base64 redact、去控制字符、截断 2000。
 - `src/being-chat.cjs` → `consumeEvents(body, onEvent)`：SSE 行解析，`MAX_BYTES = 4*1024*1024`，超限 `INVALID_RESPONSE`；截断尾事件丢弃；finally cancel reader。
 - `extensions/being-anywhere/being-client.mjs` → `parseConnection`（更严格版本）、`consumeSSE`、`BeingClient.request/send`。`send` 的 202 → `{accepted:true}`；非 SSE → `response`；结束时必须见过 `message_stop` 且无未完成回复，否则 `stream` 错误（文案 `'Being 的回复中断，请查看已有内容后再决定是否重试。'`）。auth 文案 `'连接凭据无效或已过期，请更新 Loom 连接地址。'`。
+
+### portal-desktop 既有 `desktop/main/town/pairing.ts`（目标侧，只读参考）
+- 导出 `requestTownPairCode(connection, requestId, signal, fetcher = fetch): Promise<string>`。
+- 自己解析 SSE（CR/LF/CRLF、event:/data:）；POST `${connection.endpoint}/api/chat/stream?token=…`，body `{message: townPairPrompt, session_id:'town-pair-<id>', scene_id:'town-pair-<id>', scene_meta:{client:'portal-desktop', scene_label:'Town 配对'}}`。
+- 与 BeingDesktop 不同：无探活（readiness probe）、无 `client.pair`、错误文案统一以「请使用手动配对。」结尾、上限 8192 字符 / 1MB、要求回复里恰好一个 6 位码。
+- 结论：**不修改它**。BeingDesktop `town-pairing.cjs` 的探活与状态判定移植为 `channel/pairing-probe.ts` 的纯函数。
+
+### portal-desktop 既有 `desktop/main/town/live.ts`（目标侧，只读参考）
+- `class TownLive`，构造为位置参数注入：`(getToken, getExpectedBeing, publish, fetcher = fetch, origin = TOWN_ORIGIN, getDisplay = () => '')`。
+- 风格样本：`private` 字段、构造函数参数属性、`Data = Record<string, unknown>`、`object()` 守卫、中文面向用户文案、英文注释、单引号 2 空格。
+
+### portal-desktop 既有 `desktop/shared/town-pairing.ts`
+- 只导出 `townPairPrompt`（措辞与 BeingDesktop `PAIR_PROMPT` 不同，**不要改它**；本单元用自己的常量）。
