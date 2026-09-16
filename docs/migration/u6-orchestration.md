@@ -698,11 +698,20 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 | --- | --- | --- | --- |
 | tests/orchestration-policy.test.ts | test/orchestration-policy.test.cjs | 7 / 7 | 通过 |
 | tests/orchestration-agent-process.test.ts | test/agent-process.test.cjs | 4 / 4 | 通过 |
-| tests/orchestration-worker-events.test.ts | test/orchestration.test.cjs 的事件映射用例 | — | 未开始 |
-| tests/orchestration-agent-kits.test.ts | test/orchestration.test.cjs 的检测用例 | — | 未开始 |
-| tests/orchestration-manager.test.ts | test/orchestration.test.cjs 其余用例 | — | 未开始 |
+| tests/orchestration-manager.test.ts | test/orchestration.test.cjs | 24 / 24（2 skip） | 通过 |
 | tests/orchestration-worker-callbacks.test.ts | test/worker-callbacks.test.cjs | — | 未开始 |
 | tests/orchestration-native-results.test.ts | test/native-orchestration.test.cjs | — | 未开始 |
+
+测试文件按 BeingDesktop 的测试文件一对一映射（不按模块拆），这样用例数可以直接对账。
+`tests/orchestration-manager.test.ts` 里 skip 的两条（原文件第 2、16 条）属于 desktop-tool-link / desktop-tools 单元：
+`presentation schema accepts one nullable target only for the presentation action`、
+`desktop execution is denied in orchestrator mode and worker schemas require session binding`。
+
+移植测试时遇到的 TS 收敛（不改行为）：
+- `manager.context(id)` 返回 `OrchestrationContext`，测试里用 `as WorkerToolArgs` / `as Args` 断言后再展开，
+  运行时对象与 BeingDesktop 完全一致（仍带 enabled/execution/agents/defaultAgent 这些多余字段）。
+- node:test 的 `t.after` 换成模块级 cleanup 栈 + vitest `afterEach`。
+- `assert.fail('must not save')` 换成 `throw new Error('must not save')`，断言仍靠错误信息正则区分。
 
 ### 保真度复核（2026-09-16，逐行对照源文件重读一遍）
 

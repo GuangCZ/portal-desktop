@@ -25,7 +25,7 @@ interface Fixture {
 }
 
 function fixture(): Fixture {
-  let id = randomUUID(), identity = "shared-being";
+  let id: string = randomUUID(), identity = "shared-being";
   const mode = { enabled: false };
   const bridge: BridgeCapabilities = { place: desktopPortalName(id), status: "connected", tools: ["desktop_worker_start", "desktop_worker_status"] };
   // readConfig/saveConfig/fetchImpl are the point of the fixture: the policy must never read or
