@@ -383,3 +383,14 @@ export const NATIVE_UNPACK = '**/node_modules/node-pty/{build/*,prebuilds/*}/spa
 
 给 I2 的写法（§3.4 的 `orchestration.presentation`）：tools 子系统在自己的 `linked()` 里
 `ctx.registry.get('orchestration')?.orchestration.presentation = new WorkerPresentation(...)`，不要在 install 同步体里赋值。
+
+**修法**（finding 3）：`registry.ts` 新增 `export type FeatureModel = Store & { start?(): () => void }`，`create` 的返回类型改成它；
+`AppModel.start()` 先 `subscribe`（改变仍然驱动重渲染），再 `startFeature(model)`，把 `start()` 返回的 cleanup 放进同一个 `cleanups` 数组——
+与 `this.town.start()` 完全同一条路径。两端都有守卫：**start 抛错 → toast 并继续**（与构造期同规则）；
+**cleanup 抛错 → 吞掉**（那时 `clearTimeout(this.toastTimer)` 已经执行过，toast 只会留下悬空定时器，而且清理必须走完整个列表）。
+
+**顺带修掉一个潜伏雷（复审没提，是我这次改动逼出来的）**：`models/app.ts` 原来写的是 `this.features as Record<string, unknown>`。
+`AppFeatureModels` 是个各单元 `declare module` 增补的空接口，**一旦有了第一个键就不再能直接 cast 成 `Record<string, …>`**
+（TS2352：缺索引签名）。也就是说 I1 落地的那一刻，`models/app.ts`——一个任何单元都不许改的文件——会直接编译不过。
+现在收敛成一个 `private get featureModels(): Record<string, FeatureModel>`，内部 `as unknown as`，注释写明原因。
+这条是实测出来的：加完测试里的 `declare module` 块，`npm run typecheck` 立刻报了这两处。

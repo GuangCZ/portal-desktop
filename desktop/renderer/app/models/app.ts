@@ -10,7 +10,7 @@ import { Store, errorText } from "../../shared/models/store";
 import { WorkspaceModel } from "./workspace";
 import { TownModel } from "../../town/models/town";
 import { ConversationModel } from "../../conversation/models/conversation";
-import { FEATURE_MODELS, type AppFeatureModels } from "./registry";
+import { FEATURE_MODELS, type AppFeatureModels, type FeatureModel } from "./registry";
 
 export class AppModel extends Store {
   snapshot?: Snapshot;
@@ -87,11 +87,21 @@ export class AppModel extends Store {
       // A broken feature model must not stop the conversation opening, which is
       // the same rule the main-process registry follows.
       try {
-        (this.features as Record<string, unknown>)[feature.key as string] = feature.create(api, this);
+        this.featureModels[feature.key as string] = feature.create(api, this);
       } catch (error) {
         this.toast(error);
       }
     }
+  }
+  /** The registered models as a plain record.
+   *
+   * `AppFeatureModels` is an interface each unit augments with its own key, so it
+   * never carries an index signature, and a direct `as Record<string, …>` stops
+   * compiling the moment the first unit lands one. Going through `unknown` is what
+   * keeps this file — which no integration unit may edit — compiling as keys
+   * arrive. */
+  private get featureModels(): Record<string, FeatureModel> {
+    return this.features as unknown as Record<string, FeatureModel>;
   }
   start() {
     let active = true;
@@ -112,12 +122,16 @@ export class AppModel extends Store {
     } catch {
       /* Optional preference. */
     }
+    // A registered model publishes through the same Store contract the built-in
+    // ones use, so the shell re-renders on its changes without knowing it exists —
+    // and anything it has to open (an IPC subscription, a timer) it opens in
+    // `start()`, whose cleanup joins this list exactly as `this.town.start()`
+    // below does. Subscribing first, so a change made while starting still lands.
+    const features = Object.values(this.featureModels);
     const cleanups = [
       cleanupWorkspace,
-      // A registered model publishes through the same Store contract the built-in
-      // ones use, so the shell re-renders on its changes without knowing it exists.
-      ...Object.values(this.features as Record<string, { subscribe(listener: () => void): () => void }>)
-        .map((model) => model.subscribe(() => this.changed())),
+      ...features.map((model) => model.subscribe(() => this.changed())),
+      ...features.flatMap((model) => this.startFeature(model)),
       this.town.start(),
       this.api.onPortal((state) => {
         if (this.snapshot) {
@@ -156,6 +170,29 @@ export class AppModel extends Store {
       this.logsLoading = false;
       cleanups.forEach((cleanup) => cleanup());
     };
+  }
+  /** Starts one registered model, answering with its cleanup or with nothing.
+   *
+   * Both halves are guarded, because a feature model is another unit's code and
+   * the shell has to open and close either way: a failure to start is toasted, the
+   * same rule the constructor follows, and a failure to stop is swallowed — by
+   * then the toast timer has already been cleared and the shell is on its way
+   * out. */
+  private startFeature(model: FeatureModel): (() => void)[] {
+    try {
+      const stop = model.start?.();
+      if (!stop) return [];
+      return [() => {
+        try {
+          stop();
+        } catch {
+          /* Teardown must reach the rest of the list. */
+        }
+      }];
+    } catch (error) {
+      this.toast(error);
+      return [];
+    }
   }
   async initialize() {
     const revision = ++this.initializeRevision;
