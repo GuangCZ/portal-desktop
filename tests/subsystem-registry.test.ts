@@ -15,7 +15,9 @@ import { installSubsystems, type DesktopExtensionsContext } from "../desktop/mai
 import type { DesktopSubsystem, SubsystemContext, SubsystemInstaller } from "../desktop/main/subsystems/types";
 
 interface AlphaSubsystem extends DesktopSubsystem { greet(): string }
-interface BetaSubsystem extends DesktopSubsystem { throughAlpha(): string }
+/** `presentation` stands in for the real one: a field a PEER assigns after both
+ * are installed (integration plan §3.4, the tool bridge's `WorkerPresentation`). */
+interface BetaSubsystem extends DesktopSubsystem { throughAlpha(): string; presentation?: string }
 declare module "../desktop/main/subsystems/types" {
   interface SubsystemMap {
     "test-alpha": AlphaSubsystem;
@@ -100,6 +102,39 @@ describe("the subsystem registry", () => {
     // The two healthy subsystems installed, and the client is still usable.
     expect(f.contexts[0]!.registry.require("test-beta").throughAlpha()).toBe(`alpha:${DESKTOP_ID.slice(0, 8)}`);
     expect(extensions.chat).toBeNull();
+  });
+
+  // `linked` is the lazy rule's one escape hatch: a lazy getter reads, and
+  // `orchestration.presentation = …` writes. Assigning during install would hit
+  // whichever half installed second, so the write waits until every installer has
+  // run — which is exactly what this asserts, from the subsystem that installs
+  // FIRST and therefore cannot see its peer while its own body runs.
+  it("links every subsystem once all of them are installed, so a peer can be assigned into", () => {
+    const f = fixture();
+    let duringInstall: BetaSubsystem | null = null;
+    const installAssigningAlpha = (ctx: SubsystemContext): AlphaSubsystem => {
+      duringInstall = ctx.registry.get("test-beta");
+      return {
+        key: "test-alpha",
+        greet: () => "alpha",
+        linked: () => { ctx.registry.require("test-beta").presentation = "assigned by alpha"; },
+      };
+    };
+    f.install([installAssigningAlpha, installTestBetaSubsystem]);
+    expect(f.errors).toEqual([]);
+    expect(duringInstall).toBeNull();
+    expect(f.contexts[0]!.registry.require("test-beta").presentation).toBe("assigned by alpha");
+  });
+
+  it("reports a failing `linked` and links the rest anyway", () => {
+    const f = fixture();
+    const linked: string[] = [];
+    const failure = new Error("link failed");
+    const first = (): DesktopSubsystem => ({ key: "test-alpha", linked: () => { linked.push("alpha"); throw failure; } });
+    const second = (): DesktopSubsystem => ({ key: "test-beta", linked: () => { linked.push("beta"); } });
+    f.install([first, second]);
+    expect(linked).toEqual(["alpha", "beta"]);
+    expect(f.errors).toEqual([{ scope: "test-alpha-linked", error: failure }]);
   });
 
   it("shuts down in reverse order and finishes the list even when one subsystem fails", async () => {

@@ -20,6 +20,11 @@
 //   Obey the rule and the order of `INSTALLERS` carries no meaning at all, which
 //   is what makes merging five branches into it a three-line conflict.
 //
+//   When a reference has to be ASSIGNED rather than read through a getter — the
+//   tool bridge putting its `WorkerPresentation` on the orchestration subsystem,
+//   integration plan §3.4 — implement `linked()` instead: it runs once every
+//   installer has, with the registry complete.
+//
 // A subsystem file's header is always this shape:
 //
 //   import type { DesktopSubsystem, SubsystemContext } from './types';
@@ -110,6 +115,16 @@ export interface SubsystemContext {
 
 export interface DesktopSubsystem {
   readonly key: keyof SubsystemMap;
+  /** Every installer in `INSTALLERS` has run and the registry is complete. The
+   * escape hatch for the one thing a lazy getter cannot express: a reference that
+   * must be ASSIGNED onto a peer rather than read from it — `orchestration
+   * .presentation = new WorkerPresentation(...)` from the tool bridge, which owns
+   * the browser the presentation needs (integration plan §3.4).
+   *
+   * Runs in installation order; a failure is reported and the remaining
+   * subsystems still link. It is not a place to start work — `connectionVerified`
+   * is — and it must stay synchronous, because installation is. */
+  linked?(): void;
   /** The Being at `store.connectionAddress` answered `/api/status`. Called from
    * inside main.ts's `verifyConnection`, which itself runs inside `exclusive`, so
    * this must neither await the queue (that would deadlock on the operation

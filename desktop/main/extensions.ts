@@ -4,7 +4,8 @@
 // It exists so `main.ts` grows one line rather than fifty per subsystem.
 // Everything a subsystem needs arrives as one context, and everything it needs to
 // be told about goes back as three lifecycle notifications — mirroring the three
-// points BeingDesktop itself acts on (see subsystems/chat.ts).
+// points BeingDesktop itself acts on (see subsystems/chat.ts) — plus `linked()`,
+// which this file fires itself once every installer has run.
 //
 // Nothing here imports electron: the window, the electron façade, the fetcher and
 // the queue are all passed in, which is what lets the whole hook be exercised from
@@ -155,6 +156,15 @@ export function installSubsystems(ctx: DesktopExtensionsContext, installers: rea
     catch (error) { report(`subsystem-install:${install.name}`, error); }
   }
   const order = [...built.values()];
+  // The fourth fan-out, and the only one main.ts does not drive: every installer
+  // has run, so a subsystem may now reach a peer that did not exist while its own
+  // body ran. It is what lets the tool bridge assign orchestration its
+  // `presentation` (integration plan §3.4) — an assignment, which no lazy getter
+  // can express. Same rule as the other three: report, never throw.
+  for (const subsystem of order) {
+    try { subsystem.linked?.(); }
+    catch (error) { report(`${String(subsystem.key)}-linked`, error); }
+  }
 
   return {
     get chat() { return registry.get('chat')?.sessions ?? null; },

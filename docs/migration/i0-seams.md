@@ -375,3 +375,11 @@ export const NATIVE_UNPACK = '**/node_modules/node-pty/{build/*,prebuilds/*}/spa
 所以 unpack 之后它会被 osx-sign 正常签名——这也是它必须在 asar 外的第二个理由（asar 内的可执行文件既签不了也 spawn 不了）。
 另外修掉一个测试自身的隐患：插件的 `resolveForgeConfig` 是**原地改写** `packagerConfig.asar`，
 原来的浅拷贝会让它污染导出的真实 config，`asar` 变成对象后重复调用就会把 glob 叠两遍。现在 `resolvedUnpack()` 把 `asar` 也拷了一层。
+
+**修法**（finding 2）：`DesktopSubsystem` 加 `linked?(): void`，`installSubsystems` 在 install 循环之后、返回之前按安装顺序跑一趟，
+错误按 `${key}-linked` 报给 `onError`，不打断其余——与另外三个扇出同一条规则。**`main.ts` 没有改**（linked 由 `extensions.ts` 自己触发）。
+`tests/subsystem-registry.test.ts` 加两条：一条让先安装的 alpha 在 `linked()` 里给后安装的 beta 赋值（并断言它在 install 同步体里 `get` 到的是 `null`），
+一条让 alpha 的 `linked` 抛错、断言 beta 仍然被 link 且 scope 是 `test-alpha-linked`。
+
+给 I2 的写法（§3.4 的 `orchestration.presentation`）：tools 子系统在自己的 `linked()` 里
+`ctx.registry.get('orchestration')?.orchestration.presentation = new WorkerPresentation(...)`，不要在 install 同步体里赋值。
