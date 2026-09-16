@@ -106,3 +106,43 @@
   - 展示名永不参与身份判定。
 
 移植注意：`Object.hasOwn` 的语义要保留；TS 下用 `Object.prototype.hasOwnProperty.call` 或 `Object.hasOwn`（ES2022 lib 已含）。
+
+### 源码 src/town-library-contract.cjs（80 行，已读完）
+
+导出面：`{scrollId, detailId, libraryRoute, libraryQuery, scrollListDto, scrollDto, beingsDto}`（纯函数）。依赖 `require('./town-wire.cjs').memberId`。
+
+顶部注释：契约核对于 2026-09-07 的 `/api/scrolls/help`、`/api/beings/help` 与一次公开 `/api/scrolls/{id}` 响应；**绝不从 ID 推断人类身份**。
+
+常量与内部 helper：
+- `ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/`
+- `RESERVED_SCROLL_IDS = new Set(['help','search','graph','match'])`
+- `VISIBILITY = new Set(['private','shared','public'])`
+- `record(value)`：**注意这里比 town-wire 更严** —— `value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype`（拒绝 null 原型、类实例、数组）
+- `sequence(value)` = `Number.isSafeInteger(value) && value >= 0`
+- `invalid(message)` = `Object.assign(new Error(message), {code:'INVALID_RESPONSE'})`
+- `badRequest()` = `Object.assign(new Error('Town 阅读参数无效。'), {code:'INVALID_REQUEST'})`
+- `display(value, limit)`：非字符串→`''`；否则剥离控制字符与双向覆写字符 `/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f‪-‮⁦-⁩]/g` 再 `.slice(0, limit)`
+
+函数：
+- `scrollId(value)`：字符串 + `ID.test` + 不在 `RESERVED_SCROLL_IDS`。
+- `detailId(route)`：非字符串或不以 `/api/scrolls/` 开头 → `null`；取后缀，`scrollId` 通过才返回 id，否则 `null`。
+- `libraryRoute(route)`：`route === '/api/beings' || route === '/api/scrolls' || detailId(route) !== null`。
+- `libraryQuery(route, value = {})`：
+  - 非 library route 或非 record → `badRequest()`。
+  - `allowed`：`/api/beings` → `[]`；`/api/scrolls` → `['offset','limit','visibility']`；详情 → `['offset','limit']`。
+  - 用 `Object.getOwnPropertyDescriptors` + `Reflect.ownKeys` 检查：任一 key 非 string、不在 allowed、或描述符没有 `value`（即 getter/setter）→ `badRequest()`。**这是原型污染/取值副作用防护，必须保留。**
+  - 逐项：`visibility` 必须在 `VISIBILITY`，原样放入；否则数字：字符串形如 `/^(0|[1-9]\d*)$/` 先 `Number()`；然后 `!sequence(number)` → bad；`limit` 且（`<1` 或 `> (route==='/api/scrolls' ? 200 : 10000)`）→ bad；`offset` 且 `> 4294967295` → bad。结果存 `String(number)`。
+  - 返回值：**所有数字项都是字符串**。
+- `summaryDto(value)`（**内部，不导出**）：`id = memberId(value)`；校验 `record(value) && scrollId(value.id) && typeof value.title==='string' && typeof id==='string' && ID.test(id) && VISIBILITY.has(value.visibility) && sequence(value.revision) && value.revision>=1`，否则 `invalid('卷轴文档格式发生变化，请刷新后重试。')`。
+  返回 `{id, title: display(title,400), beingId: id, beingName: display(display_name,100) || id, visibility, kind: display(kind,30), lifecycle: display(lifecycle,30), tags: Array.isArray(tags) ? [...new Set(tags.filter(字符串).slice(0,50).map(t=>display(t,100)))] : [], createdAt: display(created_at,64), updatedAt: display(updated_at,64), revision}`。
+  注意 tags 是**先 filter 再 slice(0,50) 再 map 再去重**。
+- `scrollListDto(value, query = {})`：校验 `record && value.ok !== false && !hasOwn 'error' && Array.isArray(scrolls) && sequence(total) && sequence(offset) && sequence(limit) && limit>=1 && limit<=200 && scrolls.length<=limit && scrolls.length<=total && offset === Number(query.offset ?? 0) && limit === Number(query.limit ?? 50)`，否则 `invalid('卷轴列表格式发生变化，请刷新后重试。')`。
+  然后 `scrolls.map(summaryDto)`；若 id 有重复，或 `scrolls.length !== Math.min(limit, Math.max(0, total - offset))` → `invalid('卷轴列表不完整，请刷新后重试。')`。
+  返回 `{scrolls, total, offset, limit, hasMore: offset + value.scrolls.length < total}`。
+- `scrollDto(value, id, query = {})`：先 `summaryDto(value)`；再校验 `scroll.id === id && value.ok !== false && !hasOwn 'error' && typeof content === 'string' && sequence(total_length) && sequence(offset) && sequence(limit) && limit>=1 && limit<=10000 && typeof has_more === 'boolean' && offset === Number(query.offset ?? 0) && limit === Number(query.limit ?? 10000)`，否则 `invalid('卷轴正文格式发生变化，请刷新后重试。')`。
+  `length = [...value.content].length`（**按码点计**）；若 `length > limit || offset+length > total_length || has_more !== (offset+length < total_length) || (has_more && length !== limit)` → `invalid('卷轴正文不完整，请刷新后重试。')`。
+  返回 `{scroll: {...scroll, content: display(content, 20000), totalLength, offset, limit, nextOffset: offset+length, hasMore: has_more}}`。
+- `beingsDto(value)`：`list` 取 `Array.isArray(value) ? value : (record(value) && Array.isArray(value.beings) ? value.beings : null)`。
+  若 `!list || list.length > 2000 || (record(value) && (ok===false || hasOwn 'error' || (has_more !== undefined && has_more !== false) || (hasMore !== undefined && hasMore !== false) || (total !== undefined && (!sequence(total) || total !== list.length)) || (offset !== undefined && offset !== 0)))` → `invalid('Town 居民目录不完整，请刷新后重试。')`。
+  逐项：`id = memberId(item)`；`record(item) && typeof id==='string' && ID.test(id) && typeof display_name==='string' && !seen.has(id)`，否则 `invalid('Town 居民目录格式发生变化，请刷新后重试。')`。
+  返回 `{id, name: display(display_name,100) || id, description: display(about,500), status: display(status,50), human: null}`（**`human` 恒为 null——不从 ID 推断人类身份**）。
