@@ -254,3 +254,15 @@ TownPairing 的 5 个用例（全部移植）：
 17. `an asynchronous result from an old view, generation or document is never accepted`
 18. `page execution errors cannot leak page content or secrets through the native error`
 （实为 18 个 test。）
+
+### src/channel-being.cjs 补充细节（逐行移植必需）
+- `_set(status, detail='', channel='', qrCodeDataUrl='')`：`_state = {channel, status, detail, ...(qr ? {qrCodeDataUrl} : {})}`；`onChange(this.state())` 吞异常。
+- `_context(revision, expected)` 的校验顺序：`!context?.configured || !context.connected || context.exiting || !context.connection?.url || !sequence(context.connectionId) || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(context.beingName || '')` → NOT_CONNECTED `'请先连接 Being 并等待会话加载完成。'`；`revision !== context.connectionId` 或 expected 任一字段不同 → SESSION_CHANGED `'连接身份已变化，请在当前 Being 下重新操作。'`；返回 `{context, snapshot}`。
+- `inspectChannelStatus`：`request(value)` → `_context(revision)` → `readStatus` 非函数则 SERVICE_ERROR `'暂时无法读取渠道状态。'` → `readStatus({signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)])})`；成功与失败路径都先 `_context(revision, snapshot)`；finally 从 `_inspections` 删除并 abort。
+- `_qrImage(url, controller, revision, snapshot)`：首尾各 `_context`；`fetchImpl(url, {method:'GET', headers:{Accept:'image/png,image/jpeg,image/webp'}, credentials:'omit', redirect:'error', referrerPolicy:'no-referrer', cache:'no-store', signal})`；`mime = (content-type||'').split(';')[0].trim().toLowerCase()`；`!ok || redirected || mime 不在三种 || Number(content-length) > MAX_QR_BYTES` → cancel body 返回 ''；无 reader → ''；分块累计超 MAX_QR_BYTES → ''（**直接 return，不再 `_context`**）；finally cancel + releaseLock；成功 `qrImage('data:<mime>;base64,<b64>')`；catch 里先 `_context` 再返回 ''。
+- `_run` catch 的三条 detail：
+  - auth（`error?.message === '连接凭据无效或已过期，请更新 Loom 连接地址。'`）→ code AUTH_REQUIRED，detail 用 error.message；
+  - `sent && operation !== 'status'` → RESULT_UNKNOWN，detail `'请求已尝试发送，渠道操作结果尚未确认。请稍后检查状态，不会自动重发。'`；
+  - 否则 SERVICE_ERROR，detail `'无法取得 Being 的渠道结果，请稍后重新检查。'`。
+  catch 先 `_context(revision, snapshot)`（可能抛 SESSION_CHANGED 覆盖），再 `_set('error', detail, channel)`，最后 `throw fail(code, detail)`。
+- `_run` 里 BeingClient 通过 `await import('../extensions/being-anywhere/being-client.mjs')` 动态载入 → 移植为可注入的 `createClient(url, fetchLike)` 工厂。
