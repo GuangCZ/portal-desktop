@@ -97,3 +97,75 @@ export interface ChannelClient {
 
 /** BeingDesktop loaded extensions/being-anywhere/being-client.mjs lazily; here it is injected. */
 export type ChannelClientFactory = (url: string, fetchImpl: typeof fetch) => ChannelClient;
+
+/* ----------------------------------------- background (town-background.cjs) */
+
+export interface TownIdentity { beingId?: string; connectionRevision?: number; identityRevision?: number; [key: string]: unknown }
+
+/** BeingDesktop src/town-session.cjs (ported by the Town timeline unit). */
+export interface TownSession {
+  getBonfireMessages(page: { limit: number; since?: unknown }, options: { signal: AbortSignal }): Promise<TownSnapshot> | TownSnapshot;
+  getFiresideMessages(page: { firesideId: string; limit: number; since?: unknown }, options: { signal: AbortSignal }): Promise<TownSnapshot> | TownSnapshot;
+}
+
+/** BeingDesktop src/bonfire-cache.cjs (ported by the Town timeline unit). */
+export interface BonfireCache {
+  load(key: string): Promise<unknown> | unknown;
+  save(key: string, value: unknown): Promise<unknown> | unknown;
+}
+
+export interface TownSnapshot {
+  messages: unknown[];
+  latestSeq?: unknown;
+  identity?: TownIdentity | null;
+  [key: string]: unknown;
+}
+
+export interface TownRefreshStatus { running?: boolean; [key: string]: unknown }
+
+export interface TownEnvelope { kind: string; firesideId: string; snapshot: TownSnapshot; status: TownRefreshStatus }
+
+export interface TownReadOptions { signal: AbortSignal; limit: number; since?: unknown }
+
+/** Injected clock; BeingDesktop defaulted every field inside TownRefresh. */
+export interface TownBackgroundClock {
+  now?: () => number;
+  setTimeout?: (callback: () => void, delay: number) => unknown;
+  clearTimeout?: (id: unknown) => void;
+}
+
+/**
+ * BeingDesktop src/town-refresh.cjs (ported by the Town timeline unit). TownBackground also
+ * stores three private bookkeeping fields on each reader to coalesce live-event bursts.
+ */
+export interface TownRefreshLike {
+  status(): TownRefreshStatus;
+  snapshot(): TownSnapshot;
+  restoreCache(value: unknown): unknown;
+  start(): void;
+  stop(): void;
+  pause(reason?: string): void;
+  resume(): void;
+  reset(): void;
+  refresh(): Promise<unknown>;
+  requestRead(readSnapshot: (options: TownReadOptions) => Promise<TownSnapshot> | TownSnapshot): Promise<unknown>;
+  loadOlder(): Promise<unknown>;
+  _townDirty?: boolean;
+  _townEventTimer?: (ReturnType<typeof setTimeout> & { unref?: () => void }) | null;
+  _townEventFlight?: boolean;
+}
+
+export interface TownRefreshOptions {
+  getIdentity: () => TownIdentity | null;
+  clock: TownBackgroundClock;
+  limit: number;
+  automatic: boolean;
+  cached: boolean;
+  pageable: boolean;
+  readSnapshot: (options: TownReadOptions) => Promise<TownSnapshot> | TownSnapshot;
+  onSnapshot: () => void;
+  onSuccess: (value: unknown) => void;
+  onStatus: () => void;
+}
+
+export type TownRefreshFactory = (options: TownRefreshOptions) => TownRefreshLike;

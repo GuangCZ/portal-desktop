@@ -13,7 +13,7 @@
 | 注入接口 | （多处调用面） | `desktop/main/town/channel/types.ts` | 随模块增量补充 |
 | 支撑函数 | `src/security.cjs` `src/services.cjs` `src/being-chat.cjs` | `channel/errors.ts` `loom-connection.ts` `sanitize.ts` `sse.ts` | 已移植（随各模块测试通过） |
 | ChannelBeing | `src/channel-being.cjs` | `channel/channel-being.ts` + `channel/being-client.ts` | 测试通过（tests/town-channel-channel-being.test.ts，26/26） |
-| TownBackground | `src/town-background.cjs` | `channel/town-background.ts` | 未开始 |
+| TownBackground | `src/town-background.cjs` | `channel/town-background.ts` | 测试通过（tests/town-channel-town-background.test.ts，11 通过 + 15 skip，skip 原因见上表） |
 | TownController | `src/town-controller.cjs` | `channel/town-controller.ts` | 未开始 |
 | Town catalog/drafts | `src/town.cjs` | `channel/town-catalog.ts` | 测试通过（tests/town-channel-town-catalog.test.ts，18/18） |
 | TownPairing 探活 | `src/town-pairing.cjs` | `channel/pairing-probe.ts` | 测试通过（tests/town-channel-pairing.test.ts，7 通过 + 8 skip） |
