@@ -33,7 +33,10 @@ export function useConversationBridge(app: AppModel, conversation: ConversationM
         // the request the workspace itself started, and the main process needs to
         // know WHY a draft was refused — an occupied composer asks the user to
         // send or clear what they wrote, an unmounted one asks them to wait.
-        // `workspace.compose()` passes no `ack`, so its path is unchanged.
+        // `workspace.compose()` passes no `ack` and still learns only `ok` — but
+        // it does share the rule below, so a quotation no longer overwrites a
+        // composer holding only whitespace either (it toasts「对话输入框已有草
+        // 稿…」instead). Both draft sources answer to one reading of「已有草稿」.
         //
         // WHICH of the three applies is one rule, owned and tested by the unit
         // that pushes the draft (renderer/channel/draft-target.ts): it keeps the

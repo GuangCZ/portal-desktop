@@ -402,8 +402,9 @@ CSS 由 `renderer/channel/slot.tsx` 自己 `import './styles.css'`，没有动 `
 | `npm run start` | 未单独跑：打包产物冒烟是更强的同一件事（`npm start` 跑的是 Vite dev 产物，打包产物额外覆盖 asar / external / prune） |
 | `npm run test:all` | **未跑，做不了**：`scripts/test-all.mjs` 第 7 行 `requirePortalSource()` 要求本机能构建 `heart-portal`（Rust 工具链），本机没有 `cargo`；它的 summary 里 `skipped` 名单因此无法产生，方案 §6.3 第 4 条（skip 名单只减不增）在本机无法验证。可验证的替代：`npx vitest run` 的 skip 数与基线同为 34，且 `git diff 7b2cef8..HEAD -- tests/ | grep -E '\.skip'` 没有任何增删行，即本单元既没有新增 skip 也没有重新启用 skip |
 
-**冒烟对应的提交**：打包产物由 `ed919f0`（第二轮最后一个代码提交）构建并重签；其后只有 `docs/migration/i7-channel-drafts.md`
-与测试文件头注释的改动，不进产物、也不触及任何冒烟断言。
+**冒烟对应的提交**：打包产物由 `ed919f0`（第二轮最后一个改动可执行代码的提交）构建并重签。其后到 `HEAD` 之间，
+`desktop/` 下只有注释行变动——`git diff ed919f0..HEAD -- desktop/` 的加减行全部以 `//` 开头（`use-conversation-bridge.ts`
+里一段四行注释），其余改动在本记录与 `tests/town-channel-town-catalog.test.ts` 的文件头。冒烟断言一条都没受影响。
 
 打包产物上逐条实测到的：
 
@@ -468,6 +469,11 @@ export function placeChannelDraft(target: DraftTarget, text: string): ChannelDra
 
 `use-conversation-bridge.ts` 只是改成调用它。`conversation.ts:457` 一个字都没动——I5 的目录，
 而且伴随面板的 `trim` 规则本身没有错，错的是让它替主进程的草稿做决定。
+
+**一处顺带的行为变化**：`app.post` 的这条分支同时服务伴随面板的引用（`WorkspaceModel.compose()`），
+所以引用现在也不会盖掉纯空白的输入框，而是走它自己那句「对话输入框已有草稿，请先处理原草稿，再放入引用。」。
+0.8.26 里这条路由 Loom 页面自己判定（页面不在本仓库，判据无法核实），
+两种规则都说得通；选更严的那种：用户打进输入框的任何字符都不被覆盖，且两个草稿来源规则一致。
 用例：`channel-integration-renderer.test.ts`「the three answers a pushed draft can get, decided as the Loom page decided them」，
 `placeDraft` 替身逐字抄了真实模型（含 `trim`），所以钉住的是前面那道栅栏而不是替身。真机冒烟第 11 条。
 
