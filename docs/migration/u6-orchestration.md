@@ -697,7 +697,7 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 | 测试文件 | 来源 | 用例数 | 状态 |
 | --- | --- | --- | --- |
 | tests/orchestration-policy.test.ts | test/orchestration-policy.test.cjs | 7 / 7 | 通过 |
-| tests/orchestration-agent-process.test.ts | test/agent-process.test.cjs | 4 / 4 | 通过 |
+| tests/orchestration-agent-process.test.ts | test/agent-process.test.cjs | 4 / 4 + 1 条 win32 回归 | 通过 |
 | tests/orchestration-manager.test.ts | test/orchestration.test.cjs | 24 / 24（2 skip） | 通过 |
 | tests/orchestration-worker-callbacks.test.ts | test/worker-callbacks.test.cjs | 18 / 18（1 skip） | 通过 |
 | tests/orchestration-native-results.test.ts | test/native-orchestration.test.cjs | 11 / 11（10 skip） | 通过 |
@@ -754,6 +754,10 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 - `npm run typecheck`：通过。
 - `npx vitest run`：`Test Files  49 passed | 7 skipped (56)` / `Tests  360 passed | 29 skipped (389)`。
   基线是 309 通过 / 16 跳过；本单元净增 51 条通过、13 条 skip（全部是跨单元依赖，见上）。
+- 复审修复后重跑（2026-09-16）：`npm run typecheck` 通过；
+  `npx vitest run` → `Test Files  49 passed | 7 skipped (56)` / `Tests  361 passed | 29 skipped (390)`
+  （比上一轮多 1 条，即新增的 win32 回归用例；skip 数不变）。
+  `git diff --name-status 4921932 HEAD` 仍然全为 `A`。
 - `git diff --name-status 4921932 HEAD` 全为 `A`：只新增文件，没有改动任何既有文件。
 
 ## 集成阶段需要接回的注入点
