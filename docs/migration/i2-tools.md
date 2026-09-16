@@ -126,3 +126,26 @@
   `sendBeacon` 标识符；`models/` 不得 import components/hooks/react；`main/common/` 只能 import node 内建；
   `main/subsystems/` 不得 import electron。
 - 渲染层代码风格是 Prettier（双引号、2 空格、尾逗号）；主进程/测试是单引号。**跟随所在目录**。
+
+### 类型对齐实测（2026-09-16，tsc 探针，不是推断）
+
+用一个临时 `probe-i2.ts` 把四条真实赋值喂给 `tsc --noEmit`，**四条全红**：
+
+1. `typeof DesktopBrowser` → `DesktopBrowserConstructor`：`desktop-tools.ts` 的 `DesktopBrowserOptions.WebContentsView`
+   是 `unknown`，构造参数逆变，不能赋给 `browser/types.ts` 的 `BrowserViewConstructor`。
+2. `DesktopBrowser` → `DesktopBrowserLike`：`BrowserTabState`（interface，无隐式索引签名）不能赋给
+   `tools/types.ts` 的 `BrowserTab`（要求 `[key: string]: unknown`）。
+3. `DesktopTerminal` → `DesktopTerminalLike`：同样的索引签名问题（`TerminalSessionState` → `TerminalSession`）。
+4. `WorkerPresentation` → `WorkerPresenter`（`orchestration/types.ts`）：四处不符——
+   `open` 的 `worker` 参数（`WorkerRecord.presentation?: WorkerPresentationValue` 缺 `openedAt`，
+   不能逆变赋给 `PresentationWorker.presentation?: PresentationValue|null`）、
+   `open` 返回 `Promise<PresentationValue|null>` 的 `null`、
+   `describe` 的参数同样缺字段、`describe` 返回 `null` 而契约写的是 `undefined`。
+
+处理：1/2/3 在本单元收敛（§3.2 明确授权动 `desktop-tools.ts`；`tools/types.ts` 的索引签名去掉）。
+4 **不动 `orchestration/`**（I4 的邻域，避免五路并行合并时的非 append 冲突）：
+`subsystems/tools.ts` 用本地结构化 peer 类型做赋值，运行期与 BD 一致
+（`orchestration.ts` 两处都写成 `this.presentation?.describe(x) || x`，null 与 undefined 同样落到 `||` 右边）。
+建议的正式修法写进 openIssues：把 `WorkerPresenter.describe` 的返回放宽成 `| null | undefined`、
+`open` 放宽成 `Promise<WorkerPresentationValue | null>`、`PresentationWorker.presentation` 放宽成
+`Record<string, unknown> | null`。
