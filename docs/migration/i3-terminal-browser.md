@@ -517,3 +517,48 @@ BD 的 `state.workspace.path` 对应的是本仓库的 `projectWorkspace`（`sha
 - **`desktop/renderer/app/styles.css:92` 与 `:204`**——`#browser-panel{flex:0 0 49%}`（portal-desktop 的，本单元不改）、
   `.workspace-body{display:flex;flex:1;min-height:0}`，`.workspace-stage{flex:1;min-width:0}`。
   本单元两个面板都是 `flex:0 0 42%` + `min-width:280/260px` → 三个面板同时打开必然溢出。→ 复审第 5 条成立。
+
+### 6.2 逐条处理
+
+| # | 级别 | 结论 | 处理 |
+|---|---|---|---|
+| 1 | high | **成立** | `ToolBrowserModel` 的视口去重缓存改名 `sent`，并新增私有 `detach()`；`hide()` 与 `start()` 的清理闭包都走它，不再绕过缓存。另外照 BD 的 `lastViewport=''`，发送失败时把缓存置空以便重试。 |
+| 2 | medium | **成立** | 新增 `tests/subsystem-installers.test.ts`：用桩上下文跑真实 `installDesktopExtensions`，断言（a）没有 `subsystem-install:*` / `*-linked` 失败，（b）没有重复通道名，（c）通道非空且全部 `beings:` 前缀。**后续单元不需要改这个文件**。 |
+| 3 | medium | **成立** | `accept()` 改成每次推送都回填地址（除非地址栏有焦点）；新增 `setEditing()`，面板在 `onFocus`/`onBlur` 里设置，`onFocus` 同时 `select()`（BD 的 `onfocus=event=>event.target.select()`）。描述不存在机制的注释已重写。顺带补齐 BD 的 `if(active?.url===url)return;` 与 `navigate({id, url})`。 |
+| 4 | medium | **成立** | 新增 `tests/tool-browser-panel-model.test.ts`（10 例）。 |
+| 5 | low | **成立** | 两个面板 `flex: 0 0 42%` → `flex: 0 1 42%`，`min-width` 统一降到 240px。 |
+
+**回归证明（实测，不是推断）**：把 `tool-browser.ts` 临时换回 e9e106c 的版本再跑新测试 →
+**5 failed / 4 passed**，失败的正是第 1 条（重开面板）、失败重试、第 3 条（跟随导航 / 焦点 / 提交）四类。
+重复通道名的断言也实测过：在 `tools/browser/ipc.ts` 里临时多注册一条 `beings:terminal` →
+`expected [ 'beings:terminal' ] to deeply equal []`（并且指名道姓说出撞的是哪条）。两次探针后文件都已还原
+（`git diff --stat` 为空）。
+
+### 6.3 顺手修的第三处（复审没提）
+
+`ToolBrowserModel.unavailable` 原本**声明了但从不赋值、面板也从不读**，而它上面的注释写着
+「the panel says so on its first action」。现在照 `TerminalModel` 的同名字段接活：首读失败时写入
+`errorText(error)`，`accept()` 收到任何状态就清空，面板的空状态文案优先显示它。
+（原状态：浏览器压根没建起来时，面板显示的是「Being 可以读取和操作这个浏览器里的页面」，
+请用户去操作一个不存在的浏览器。）
+
+### 6.4 这一轮的行为偏差（与 e9e106c 相比）
+
+1. **地址栏回车在地址没变时不再发起导航**（BD `renderer/desktop-tools.js` 的 `if(active?.url===url)return;`）。
+   刷新是刷新按钮的事。因为地址栏现在会跟随当前页，这一条如果不加，「不动手直接回车」会变成重复导航。
+2. **`navigate` 现在带 `id`**（`{id: active.id, url}`），BD 也是这么发的。主进程侧
+   `tools/browser/ipc.ts` 的 `fields(value, ['id','url'], …)` 早就收这个字段，不需要改。
+3. **首次 `setViewport(rect, false)` 现在会真的发出去**（以前初始缓存是 `{0,0,0,0,visible:false}`，
+   会被去重吃掉）。语义上更对：主进程从此知道面板挂载了但不可见。
+4. **面板可被压缩**：三个面板同时打开时不再溢出 `.workspace-body`。
+   **仍存在的边界**：外壳浏览器是 `flex:0 0 49%` 且不可压缩（`app/styles.css:92`，不是本单元能改的文件），
+   所以窗口窄到约 1024px 以下、三个面板全开时仍会溢出约十几像素。要彻底解决需要给 `#browser-panel`
+   也加 `flex-shrink`，那是 I2/I6 的范围。
+
+### 6.5 整改后门槛
+
+- `npm run typecheck`：绿。
+- `npx vitest run`：**1114 passed / 58 skipped，102 files**（整改前 1103/58/100；新增 11 例，
+  分别是 `tool-browser-panel-model` 10 例、`subsystem-installers` 1 例）。既有测试一条没删、没弱化。
+- 真机/打包：本轮只动了渲染层模型、面板 CSS 与两个测试文件，没有碰主进程装配、IPC、preload 与 node-pty，
+  §4.2 的打包冒烟**未重跑**。
