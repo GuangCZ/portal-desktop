@@ -315,6 +315,95 @@ vitest 改写约定：`node:assert/strict` 的 `assert.equal` = 严格相等 →
       .finally(() => { if (flights.get(key) === promise) flights.delete(key); })`；
     `flights.set(key, promise)`；返回 promise。**捕获的 ledger 在整个 run 期间属于发起时的身份。**
 
+### test/feature-task-runner.test.cjs（260 行，已逐行读完）—— 21 个用例
+
+夹具（原样照抄）：
+- `setup()`：`sequence = 0`；`let ledger = new FeatureTasks({createId: () => \`task-${++sequence}\`, identityKey: 'alice'})`；
+  `runner = new FeatureTaskRunner({getLedger: () => ledger})`；返回 `{runner, get ledger(){return ledger;},
+  replace(){ ledger = new FeatureTasks({createId: () => \`task-${++sequence}\`, identityKey: 'bob'}); }}`。
+- `deferred()`：暴露 `{promise, resolve, reject}`。
+- `const bonfire = {kind:'bonfire', snapshot:{messages:[{content:'private message'}]}, status:{status:'ready', errorCode:''}}`。
+
+用例（顺序即原文件顺序）：
+1. `only allowlisted user operations create task records` — `['getTownMessageSnapshot','refreshTownMessages','getFiresides','sendBonfireMessage','unknown']`
+   逐个 `run(name, [], () => 42) === 42`（同步透传，非 Promise）；账本为空；
+   `run('requestTownRead',[{kind:'invalid'}],...)` 也透传原值；`run('requestTownRead',[{kind:'bonfire'}],()=>bonfire)` 结果 === bonfire，
+   summary `'已读取 1 条篝火消息。'`、mayDelayChat true、快照不含 `/private message/`。
+2. `identical concurrent requests share the same promise even with reordered object keys` —
+   `listScrolls` 参数 `{offset:0,limit:10}` 与 `{limit:10,offset:0}` → `first === second`；`await Promise.resolve()` 后 `sends === 1`；账本 1 条；
+   `pending.resolve({scrolls: []})` 后状态 succeeded。
+3. `a settled request never replays itself; a new explicit invocation can run again` —
+   `beginChannelConnection` 返回 `{status:'pending'}` → waiting；`sends === 1`；再次显式调用 → `sends === 2`（`.finally` 已清理在途表）。
+4. `returning to a Fireside starts a new selection while the previous selection is still settling` —
+   `read(firesideId, selectionRevision, pending)` 包装 `requestTownRead` + `[{kind:'fireside', firesideId, selectionRevision}]`；
+   `first = read('1',1,previous)` 且**立刻**建立 `assert.rejects(first, {code:'SESSION_CHANGED'})`（避免未处理拒绝）；
+   `selected = read('1',3,current)`、`duplicate = read('1',3,current)`；`first !== selected`、`selected === duplicate`；
+   `await Promise.resolve()` 后 `calls` 深等于 `[{firesideId:'1',selectionRevision:1},{firesideId:'1',selectionRevision:3}]`；
+   `current.resolve({kind:'fireside', firesideId:'1', snapshot:{messages:[]}, status:{status:'ready', errorCode:''}})` → `await selected === result`；
+   `previous.reject(Object.assign(new Error('Previous room selection was cancelled'),{code:'SESSION_CHANGED'}))`；
+   最终 succeeded 1 条、failed 1 条。
+5. `identity changes isolate old request callbacks and duplicate maps` — `listScrolls [{}]` 两次，中间 `context.replace()`；
+   `first !== second`（WeakMap 按账本实例分表）；旧账本第一条 succeeded，新账本第一条仍 running；
+   第二个 resolve `{scrolls:[{title:'new'}]}` 后新账本 summary `'已读取 1 份卷轴的目录。'`。
+6. `request correlation stays inside asynchronous task context and never stores the prompt` —
+   `currentTask() === null`；run 内 `await Promise.resolve()` 后 `currentTask()` 的 ledger === 当前账本、`task.feature === 'bonfire'`；
+   `recordRequest({requestId:'request-1', prompt:'private prompt', token:'private token'})`；
+   run 结束后 `runner.currentTask() === null`、账本 requestId 'request-1'、快照不含 `/private prompt|private token/`；
+   `runner.recordRequest({requestId:'outside'}) === null`（无 store）。
+7. `independent concurrent tasks retain their own AsyncLocalStorage request identifiers` —
+   两个 `getScroll`（args `{id:'one'}` / `{id:'two'}`）交错 recordRequest，最终 `list().map(requestId).sort()` 深等于 `['one','two']`。
+8. `accepted and unknown execution results stay waiting and preserve original errors` —
+   对 `['REQUEST_ACCEPTED','RESULT_UNKNOWN']`：`listScrolls` 抛带 code 的 Error（message `'raw secret payload'`），
+   run 拒绝且**抛回同一对象**（`candidate === error`），账本 waiting，快照不含 `/raw secret/`；
+   再测 `{accepted: true}` 结果原样返回且账本 waiting。
+9. `response errors cannot appear as successful tasks while existing UI receives the same result` —
+   `[{error:{code:'NETWORK_ERROR',message:'secret'}}, {__townError:true,code:'SERVICE_ERROR'}, {ok:false,code:'SERVICE_ERROR'}]`
+   逐个：`getGroveCatalog` 返回值原样透传，账本 failed，快照不含 `/secret/`。
+10. `a rejected preflight ends locally and a later explicit read can complete independently` —
+    `requestTownRead` 抛 `{code:'BUSY'}` → 拒绝且账本 failed、requestId `''`、detail 匹配 `/未发送/`；
+    随后显式重读成功，先前那条仍为 failed。
+11. `explicit busy and accepted transport states take precedence over stale result arrays` —
+    `['accepted','busy','BUSY',202]`，结果 `{status, scrolls: []}`：busy/BUSY → failed，其余 → waiting。
+12. `Town old snapshots never count as a successful new request when status reports failure or waiting` —
+    `[['REQUEST_ACCEPTED','waiting'],['BUSY','failed'],['READINESS_UNKNOWN','failed'],['RESULT_UNCONFIRMED','needs_input'],['NETWORK_ERROR','failed']]`，
+    响应 `{...bonfire, status:{status:'waiting', errorCode: code}}`；断言状态与 `summary === ''`。
+13. `Grove installation checks require user setup and never claim installation` —
+    `prepareGroveInstallation` 返回 `{status:'needs_setup', kit:{name:'name', env:{API_KEY:'private'}}, assessment:{blocked:true}}`
+    → needs_input、mayDelayChat false、detail 匹配 `/尚未安装或运行脚本/`、JSON 不含 `/private|API_KEY/`。
+14. `Channel outcomes distinguish QR authorization, pending, unsupported and confirmed statuses` —
+    `[[{status:'pending'},'waiting'],[{status:'unknown'},'waiting'],[{status:'pending',qrCodeDataUrl:'data:image/png;base64,private'},'needs_input'],
+      [{status:'registered'},'needs_input'],[{status:'unsupported'},'failed'],[{status:'connected'},'succeeded']]`；
+    每次响应额外带 `detail:'secret raw channel response'`；快照不得含 `/base64|secret raw|qrCode/`。
+15. `Channel checks can report disconnection while a connection operation still needs action` —
+    `checkChannelStatus` + `{status:'disconnected'}` → succeeded；`beginChannelConnection` + 同样响应 → needs_input。
+16. `Portal status confirms local process operations without implying a verified relay` —
+    `startPortal → {portal:{status:'running',health:'unknown'}}` succeeded 且 summary 匹配 `/中继连接状态.*确认/`；
+    `stopPortal → {portal:{status:'external'}}` needs_input；`deployPortal → {status:'existing_connection'}` needs_input；
+    `stopPortal → {portal:{status:'stopped'}}` succeeded。
+17. `Portal update response errors are failures even when the outer call resolved` —
+    `{portalUpdate:{status:'error'}}` failed；`{portalUpdate:{status:'available', releaseUrl:'https://example.test/?token=secret'}}` succeeded；
+    快照不含 `/example.test|secret/`。
+18. `curated library and Grove summaries contain titles and counts, not raw bodies or setup data` —
+    `getScroll [{id:'one'}] → {scroll:{title:'日志',content:'private body'}}`；`getGroveCatalog [{}] → {kits:[{name:'one',description:'private manifest'}]}`；
+    `getGroveDetail ['one'] → {name:'One', setup_guide:{env_template:{TOKEN:'private setup'}}}`（**args 第一项是字符串**）；
+    `requestTownRead [{kind:'fireside'}] → {rooms:{owned:[{id:1,description:'private room'}], joined:[]}}`；
+    全部 succeeded，快照不含 `/private body|private manifest|private setup|private room|env_template/`。
+19. `unknown response shapes remain unconfirmed and raw backend exceptions retain identity` —
+    `getScroll → {message:'done'}` waiting；`getGroveDetail` 拒绝一个无 code 的 Error（`'private upstream exception'`）→ 原对象抛回、账本 failed、
+    快照不含 `/private upstream/`。
+20. `a full active ledger never prevents stopping Portal but still blocks new tracked work` —
+    `new FeatureTasks({maxRecords: 1})`（**无 identityKey**），先 begin 一条 `{feature:'channel',operation:'connect',title:'渠道授权',execution:'being'}`
+    并 update 到 waiting；`stopPortal` 走逃生路径：返回值透传、`stopped === 1`、账本仍 1 条且那条仍 waiting；
+    `startPortal` 抛 `{code:'TASK_LIMIT_REACHED'}` 且 `started === 0`。
+21. `the full-ledger stop escape preserves stop failures and never swallows unrelated bookkeeping errors` —
+    `new FeatureTasks({maxRecords: 1})`，`ledger.begin({feature:'portal',operation:'inspect',title:'待核对'})`（**无 execution，默认 local**）；
+    `stopPortal` 逃生后 fn 抛 `stopError` → 原对象拒绝；再把 `ledger.begin` 换成抛 `ledgerError`（无 code）→ `run('stopPortal',...)` 同步抛出原对象，
+    且 fn 未被调用（`stopped === false`）。
+
+vitest 改写注意：`assert.rejects(p, c => c === error)` → `await expect(p).rejects.toBe(error)`；
+`assert.rejects(p, {code:'X'})` → `expect(p).rejects.toHaveProperty("code","X")`（提前建立以免未处理拒绝）；
+`assert.ok(arr.every(...))` → `expect(...).toBe(true)`。
+
 ## 进度
 
 | 模块 | 状态 |
@@ -326,7 +415,7 @@ vitest 改写约定：`node:assert/strict` 的 `assert.equal` = 严格相等 →
 | src/feature-task-history.cjs | 未开始 |
 | src/feature-task-discussion.cjs | 未开始 |
 | test/feature-tasks.test.cjs | 已读（15 个用例） |
-| test/feature-task-runner.test.cjs | 未开始 |
+| test/feature-task-runner.test.cjs | 已读（21 个用例） |
 | test/feature-task-history.test.cjs | 未开始 |
 | test/feature-task-discussion.test.cjs | 未开始 |
 | test/town-error-ipc.test.cjs（feature-tasks 相关用例） | 未开始 |
