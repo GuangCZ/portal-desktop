@@ -84,7 +84,7 @@ const failWith = (code: string, message: string) => new TownError(code, message)
 // Bonfire truncates past its limit silently; fireside returns 400. Both are rejected locally instead.
 const SPEAK_LIMIT: Record<string, number> = { bonfire: 4000, fireside: 32000 };
 
-export function readQuery(route: string, query: unknown = {}): Record<string, unknown> {
+function readQuery(route: string, query: unknown = {}): Record<string, unknown> {
   if (libraryRoute(route)) return libraryQuery(route, query);
   if (!ROUTES.has(route) || !query || Object.getPrototypeOf(query) !== Object.prototype || Object.keys(query as object).some(k => !ROUTES.get(route)!.includes(k))) throw fail('INVALID_REQUEST');
   const value = query as Record<string, unknown>;
@@ -206,9 +206,9 @@ export class TownClient {
           try {
             if (this.store.loadCredential) saved = await this.store.loadCredential(ctx.key, ctx.loomBeingId);
             else {
-              const load = this.store.load;
-              if (typeof load !== 'function') throw new TypeError('this.store.load is not a function');
-              saved = { token: await load(ctx.key, ctx.loomBeingId) };
+              if (typeof this.store.load !== 'function') throw new TypeError('this.store.load is not a function');
+              // Receiver-bound: TownClientStore#load delegates to this.loadCredential (src/town-client.cjs:91).
+              saved = { token: await this.store.load(ctx.key, ctx.loomBeingId) };
             }
           } catch (error) {
             this._context(ctx);
@@ -389,9 +389,9 @@ export class TownClient {
     const { ctx, token, townId, display } = receipt;
     this._context(ctx);
     try {
-      const save = this.store.save;
-      if (typeof save !== 'function') throw new TypeError('this.store.save is not a function');
-      await save(ctx.key, ctx.loomBeingId, token, townId, display, () => { try { this._context(ctx); return true; } catch { return false; } });
+      if (typeof this.store.save !== 'function') throw new TypeError('this.store.save is not a function');
+      // Receiver-bound: TownClientStore#save delegates to this._mutate/this._save (src/town-client.cjs:251).
+      await this.store.save(ctx.key, ctx.loomBeingId, token, townId, display, () => { try { this._context(ctx); return true; } catch { return false; } });
     } catch {
       this._context(ctx);
       // Keep the new token in main-process memory; retry only persistence, never confirm.
@@ -415,9 +415,9 @@ export class TownClient {
     if (this._pairing) throw fail('BUSY');
     const ctx = this._context();
     this.reset();
-    const remove = this.store.remove;
-    if (typeof remove !== 'function') throw new TypeError('this.store.remove is not a function');
-    await remove(ctx.key);
+    if (typeof this.store.remove !== 'function') throw new TypeError('this.store.remove is not a function');
+    // Receiver-bound: TownClientStore#remove delegates to this._mutate/this._file (src/town-client.cjs:269).
+    await this.store.remove(ctx.key);
     return this.state();
   }
 

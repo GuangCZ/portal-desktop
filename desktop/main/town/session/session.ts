@@ -198,7 +198,9 @@ export class TownSession {
   _members: Map<string, TownMember> | null = null;
   _state: TownSessionState;
 
-  constructor({ getContext, fetchImpl = globalThis.fetch, readImpl = null, writeImpl = null, getIdentity = null, onChange = () => {}, now = Date.now, membersTtlMs = 60000 }: TownSessionOptions) {
+  // `Partial<...> = {}` mirrors town-session.cjs:146 `= {}`: a no-arg construction must reach the
+  // runtime guard below and throw the business error, not a destructuring TypeError.
+  constructor({ getContext, fetchImpl = globalThis.fetch, readImpl = null, writeImpl = null, getIdentity = null, onChange = () => {}, now = Date.now, membersTtlMs = 60000 }: Partial<TownSessionOptions> = {}) {
     if (typeof getContext !== 'function' || typeof fetchImpl !== 'function' || (readImpl !== null && typeof readImpl !== 'function')) throw new Error('Town 会话配置无效。');
     this.getContext = getContext; this.fetchImpl = fetchImpl; this.readImpl = readImpl; this.writeImpl = writeImpl;
     this.getIdentity = getIdentity; this.onChange = onChange; this.now = now; this.membersTtlMs = membersTtlMs;

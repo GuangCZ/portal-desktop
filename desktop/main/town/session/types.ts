@@ -13,15 +13,19 @@ export type SanitizeText = (value: unknown, secrets?: string[]) => string;
 /** Errors carry the code catalogue from docs/interfaces.md §5. */
 export class TownError extends Error {
   code: string;
+  // `declare` keeps these type-only: BeingDesktop builds errors as
+  // `Object.assign(new Error(message), {code})`, so `code` is the sole own key and
+  // `Object.hasOwn(error, 'detail')` stays false until a detail is actually attached.
   /** Credential load reason surfaced by TownClientStore (`SECURE_STORAGE_UNAVAILABLE` | `CREDENTIAL_UNREADABLE`). */
-  reason?: string;
+  declare reason?: string;
   /** Redacted upstream rejection detail for an ambiguous direct-message recipient. */
-  detail?: string;
+  declare detail?: string;
   /** Disambiguation choices taken from `recipient_warning.candidates`. */
-  candidates?: TownCandidate[];
+  declare candidates?: TownCandidate[];
   constructor(code: string, message: string) {
     super(message);
-    this.name = 'TownError';
+    // Non-enumerable so the own-key set stays {code} and JSON.stringify matches the CJS envelope.
+    Object.defineProperty(this, 'name', { value: 'TownError', configurable: true, writable: true });
     this.code = code;
   }
 }

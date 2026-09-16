@@ -33,6 +33,7 @@
 | candidates.ts | 测试通过 |
 | client.ts | 测试通过 |
 | session.ts | 测试通过 |
+| （复审回归）tests/town-session-store-binding.test.ts | 测试通过 |
 
 ### BeingDesktop/docs/town-sdk-integration.md（111 行，已读完）
 
@@ -843,7 +844,8 @@ const townSession = new TownSession({
 5. `test/p1-name-rules.test.cjs` 中跨 `preload.cjs` / `TownController` 的断言未移植（那两个模块不在本单元），每处都在测试文件里写明了删掉的是哪一半。
 6. `TownSession._read` 会给 `'inbox'` 区新增一个 `_state` 键，而构造与 `reset()` 的初值只有五个区。这是 BeingDesktop 的原行为，原样保留。
 7. `/api/messages` 不在 `TownSession` 的 `ROUTES` 白名单内：私信只能经 `readImpl`（client token）读取，直连 `_request('/api/messages')` 会抛 `INVALID_REQUEST`。原行为，保留。
-8. 本单元只做移植，**没有做集成**：IPC、renderer、`main.ts` 挂钩、以及与 portal-desktop 既有 `desktop/main/town/client.ts` / `live.ts` / `ipc.ts` / `pairing.ts` 的二选一，都留给后续阶段。`client.ts` 顶部注释列出了两份实现的重叠与差异清单。
+8. `TownError#name` 仍为 `'TownError'`（BeingDesktop 为 `'Error'`），属性已改为不可枚举，自有键集合与 JSON 序列化已与 CJS 一致；Town 错误路径无人读 `error.name`。详见「复审处理 · 残留差异」。
+9. 本单元只做移植，**没有做集成**：IPC、renderer、`main.ts` 挂钩、以及与 portal-desktop 既有 `desktop/main/town/client.ts` / `live.ts` / `ipc.ts` / `pairing.ts` 的二选一，都留给后续阶段。`client.ts` 顶部注释列出了两份实现的重叠与差异清单。
 
 ### 门槛
 
@@ -874,3 +876,50 @@ $ npx vitest run
 - 第二组 17 项：`validId`、`memberId`、`normalizeTownResponse` 的五条路由分支与标量输入、`matchesTownIdentity` 的十种组合、`sanitizeText` 的九类脱敏、`candidates` 的去重/非法 ID/截断、`messagesDto` / `directMessagesDto` / `firesideMessagesDto` 的过滤、去重、排序与错误分支。
 
 核验脚本只读 BeingDesktop 工作树，未写入任何文件；脚本本身留在会话 scratchpad，不进仓库。
+
+---
+
+## 复审处理（2026-09-16，第二轮）
+
+复审判 fail，6 条发现（2 high / 1 medium / 3 low）。**全部确认属实并已修**，无一条被判为复审误判。
+新增 `tests/town-session-store-binding.test.ts`（5 条）做回归保护——把 fix 逐条还原后，5 条用例全部按复审给出的现象失败，
+还原修复后全绿，证明这组用例真的钉住了这些行为。
+
+### 根因：凭据 store 被拆成裸函数调用
+
+三处（`_credential` / `_savePairReceipt` / `forget`）都把 `this.store.X` 先摘成局部变量再调用，
+严格模式下 `this === undefined`。BeingDesktop 生产注入的 `TownClientStore`（`src/main.cjs:373`）是**类实例**，
+`load` → `this.loadCredential`、`save` → `this._mutate/this._save`、`remove` → `this._mutate/this._file`，
+全部依赖接收者，所以接入真实 store 后必崩。移植版的测试用 `{load: async()=>…}` 这种箭头函数对象当 store，
+天然照不出来——这是本轮最值得记的教训：**注入面的测试替身形状要和生产实现一致（类实例就用类实例）**。
+
+| # | 级别 | 位置 | 处理 |
+| --- | --- | --- | --- |
+| 1 | high | `client.ts` `_savePairReceipt` | 改回 `await this.store.save(...)`，守卫改为 `typeof this.store.save !== 'function'`。原先 TypeError 会落进 `catch {}` 被无差别转成 `PAIR_STORAGE_ERROR`，集成时看不出根因。 |
+| 2 | high | `client.ts` `forget` | 改回 `await this.store.remove(ctx.key)`。原先直接抛 TypeError 冒到 IPC，且 `reset()` 已先执行——状态清空但磁盘凭据仍在。 |
+| 3 | medium | `client.ts` `_credential` | 改回 `await this.store.load(ctx.key, ctx.loomBeingId)`。生产 store 带 `loadCredential` 走不到此分支，但注入面语义必须与 BeingDesktop 一致。 |
+| 4 | low | `types.ts` `TownError` | 三个可选字段改 `declare`（`target: ES2022` ⇒ `useDefineForClassFields: true`，纯声明字段会被 `defineProperty` 建成值为 `undefined` 的自有键）；`this.name = …` 改成不可枚举的 `Object.defineProperty`。自有键回到只剩 `code`，`JSON.stringify` 回到 `{"code":"X"}`，`Object.hasOwn(error,'detail')` 在未赋值时回到 `false`。 |
+| 5 | low | `client.ts` `readQuery` | 去掉 `export`（只被同文件 `read()` 使用）。导出面回到与 `module.exports = {TownClient, consumeEvents}` 一一对应。 |
+| 6 | low | `session.ts` 构造参数 | 参数类型改 `Partial<TownSessionOptions> = {}`，对齐 `town-session.cjs:146` 的 `= {}`。无参构造回到抛中文业务错误 `Town 会话配置无效。`，而不是解构 TypeError；运行时守卫仍是唯一契约。 |
+
+### 残留差异（已知、无功能影响）
+
+`TownError` 实例的 `name` 值仍是 `'TownError'`（BeingDesktop 的 `Object.assign(new Error(m), {code})` 是 `'Error'`）。
+按复审给出的修法保留该值、只把属性改成不可枚举，因此自有键集合与 JSON 序列化都已一致。
+已核对 BeingDesktop 全树：Town 错误路径无人读 `error.name`（`src/main.cjs:741` 的包络逐字段取 `code`/`message`/`candidates`/`detail`），
+保留 `'TownError'` 只利于调试。已登记进 openIssues。
+
+### 复审后门槛原文
+
+```
+$ npm run typecheck
+> portal-desktop@0.1.3 typecheck
+> tsc --noEmit
+（无输出，通过）
+
+$ npx vitest run
+ Test Files  49 passed | 7 skipped (56)
+      Tests  399 passed | 16 skipped (415)
+```
+
+本单元累计新增 5 个测试文件、90 条用例（85 条移植 + 5 条复审回归），既有测试一条未删、未弱化。
