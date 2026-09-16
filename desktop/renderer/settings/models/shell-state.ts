@@ -32,7 +32,8 @@ export interface ShellStateHost {
   conversation: { organizer: SidebarProjection };
 }
 
-export type ShellPage = "" | "about" | "privacy";
+/** I6b added "models" (模型配置 + Side by Side, settings/components/model-settings.tsx). */
+export type ShellPage = "" | "about" | "privacy" | "models";
 
 const EMPTY: ShellSidebarState = { scope: "", projects: [], tasks: {} };
 

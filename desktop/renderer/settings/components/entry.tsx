@@ -15,6 +15,7 @@ import type { AppModel } from "../../app/models/app";
 import { NO_SHELL_STATE } from "../models/shell-state";
 import { AboutPage } from "./about";
 import { PrivacyPage } from "./privacy";
+import { ModelSettingsPage } from "./model-settings";
 import "../styles.css";
 
 export function ShellPagesSection({ app }: { app: AppModel }) {
@@ -32,16 +33,20 @@ export function ShellPagesSection({ app }: { app: AppModel }) {
       <button type="button" id="open-privacy" className="shell-link" onClick={() => shell.open("privacy")}>
         隐私
       </button>
+      <span aria-hidden="true">·</span>
+      <button type="button" id="open-models" className="shell-link" onClick={() => shell.open("models")}>
+        模型
+      </button>
       <Dialog
         id="shell-page-dialog"
         className="utility-dialog"
-        aria-label={page === "privacy" ? "隐私说明" : "关于 Being Desktop"}
+        aria-label={page === "privacy" ? "隐私说明" : page === "models" ? "模型配置" : "关于 Being Desktop"}
         open={page !== ""}
         onClose={() => shell.open("")}
         dismissOnBackdrop
       >
         <div className="dialog-heading">
-          <h2>{page === "privacy" ? "隐私说明" : "关于"}</h2>
+          <h2>{page === "privacy" ? "隐私说明" : page === "models" ? "模型" : "关于"}</h2>
           <button
             type="button"
             id="close-shell-page"
@@ -51,7 +56,7 @@ export function ShellPagesSection({ app }: { app: AppModel }) {
           />
         </div>
         <div className="dialog-body">
-          {page === "privacy" ? <PrivacyPage app={app} /> : page === "about" ? <AboutPage app={app} /> : null}
+          {page === "privacy" ? <PrivacyPage app={app} /> : page === "models" ? <ModelSettingsPage app={app} /> : page === "about" ? <AboutPage app={app} /> : null}
         </div>
       </Dialog>
     </div>
