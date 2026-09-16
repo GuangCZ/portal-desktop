@@ -21,6 +21,10 @@ renderer/
 │  ├─ page.tsx
 │  ├─ components/           身份、发送、内容阅读和安装面板
 │  └─ models/               Town 状态、请求协调和消息筛选
+├─ settings/                侧栏账本的渲染层投影与关于 / 隐私静态页
+│  ├─ components/           侧栏底部入口、关于、隐私
+│  ├─ models/               侧栏账本（主进程为真值）
+│  └─ styles.css            本模块自带样式入口（由 components/entry.tsx 引入）
 ├─ portal/page.tsx          本机 Portal 页面
 ├─ browser/                内置浏览器页面及 hooks/ 分栏交互
 └─ shared/                 跨功能复用
