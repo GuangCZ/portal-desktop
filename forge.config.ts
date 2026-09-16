@@ -29,10 +29,55 @@ const macSignOptions: OsxSignOptions & { continueOnError: false } = {
   ignore: ignoreMacSigningFile,
   optionsForFile: () => macIdentity === '-' ? { timestamp: 'none' } : {},
 };
+// The modules that must reach the packaged app as real files rather than as part
+// of a bundle, with their runtime dependencies. MEASURED 2026-09-16, not
+// inferred: @electron-forge/plugin-vite sets `packagerConfig.ignore` to
+// `file => !file.startsWith('/.vite')`, so node_modules is excluded from the
+// package ENTIRELY — moving a module from devDependencies to dependencies changes
+// nothing, because @electron/packager never gets as far as pruning. A packaged
+// build made before this list existed contained 15 asar entries and no
+// node_modules at all.
+//
+// The plugin skips its own ignore when one is already set (VitePlugin.js
+// resolveForgeConfig), which is what the function below relies on. It keeps the
+// same '/.vite' rule and adds these subtrees.
+//
+//   ws         the tool bridge's relay socket. Bundling it does NOT work: Vite
+//              stubs its optional peer deps and the first frame throws
+//              "bufferUtil.mask is not a function" (desktop/main/tools/tool-link.ts).
+//   node-pty   the interactive terminal; resolves a .node binary at runtime, which
+//              AutoUnpackNativesPlugin then unpacks beside the asar.
+//   node-addon-api  node-pty's only runtime dependency.
+//
+// Anything added here must be a `dependencies` entry, and its own runtime
+// dependencies must be listed too — this is a literal list, not a resolver.
+// tests/packaging-contract.test.ts pins both halves.
+export const PACKAGED_MODULES = ['ws', 'node-pty', 'node-addon-api'];
+const MODULE_PATH = /^\/node_modules\/((?:@[^/]+\/)?[^/]+)(?:\/|$)/;
+// node-pty ships 58 MB of prebuilt binaries for four platform/arch pairs. Only
+// the packaging host's can ever run, and @electron/rebuild builds a fresh
+// `build/Release/pty.node` inside the copied tree anyway — which node-pty's own
+// loader prefers over `prebuilds/` (node_modules/node-pty/lib/utils.js:19).
+// Cross-packaging a native module is not possible regardless, so the host's
+// platform is the right filter. Everything else under node-pty stays: the rebuild
+// runs AFTER the copy (measured — the source tree still has no `build/`
+// afterwards), so binding.gyp, src/, deps/ and third_party/ must be present.
+const FOREIGN_PREBUILD = /^\/node_modules\/node-pty\/prebuilds\/([^/]+)/;
+export function packagerIgnore(file: string): boolean {
+  if (!file) return false;
+  if (file.startsWith('/.vite')) return false;
+  if (file === '/node_modules') return false;
+  const prebuild = FOREIGN_PREBUILD.exec(file);
+  if (prebuild && !prebuild[1].startsWith(`${process.platform}-`)) return true;
+  const owner = MODULE_PATH.exec(file);
+  return owner ? !PACKAGED_MODULES.includes(owner[1]) : true;
+}
+
 const config: ForgeConfig = {
   outDir: process.env.PORTAL_DESKTOP_PACKAGE_OUT || 'out',
   packagerConfig: {
     asar: true,
+    ignore: packagerIgnore,
     // Packager also derives macOS's display name from its executable name.
     executableName: process.platform === 'darwin' ? 'Being Desktop' : 'being-desktop',
     appBundleId: signing.clientIdentifier,
