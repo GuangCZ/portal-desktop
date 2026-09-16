@@ -30,3 +30,22 @@ Worktree `.local/i5-conversation`，分支 `i5-conversation`，基线 `next @ 7b
   断言 `POST /api/chat/stream` body 带 `scene_id`/`scene_meta.scene_label`/`client_ref` 且 `message` 带 v1 帧 →
   `GET /api/history` 一次 → 停止 → `POST /api/stop` → 重启后会话仍在）。
   §6.3 真机冒烟：typecheck/vitest、`npm run start`、打包产物启动、`test:all` 的 skipped 名单只减不增。
+
+### 1.2 docs/migration/i0-seams.md（451 行）
+
+对本单元最要紧的几条：
+
+- **副本已经在 I0 一次收敛完**（偏离方案 §2.5 的分步走）：`chat/context.ts` **已删除**，`chat/titles.ts` 的本地
+  `sanitizeText` **已删除**，`chat/session-recovery.ts` 已改 import `common`。
+  也就是说 §3.5「要收敛的副本」三条里前两条在基线上已经完成；`chat/connection.ts` 的 `beingIdentityKey` 也已经是
+  `sessionPartition(parseConnection(address))` 的一行代理（`tests/identity-partition.test.ts` 钉住）。**本单元这一步是核实而非施工。**
+- `common/message-context.ts` 导出 `desktopMessageContext`、`DESKTOP_PORTAL_NAME`、`DesktopRuntime`、`DesktopMessageContextOptions`；
+  I0 实测 `chat/context.ts` 与 `tools/message-context.ts` 去空白后逐字节相同（4626 字节）。
+- `SubsystemContext`：`handle / exclusive / window() / store / electron / userData / desktopId / clientVersion / fetchImpl /
+  onError / registry / push`。`store` 是 `SubsystemSettings`，**与方案不同**：拆成 `settings: Settings` + `extras` + `saveExtra(patch)`。
+- `DesktopSubsystem` 多了 `linked?(): void`（装后同步一趟，惰性规则的唯一例外出口，用于「写」而不是「读」）。
+- `installSubsystems(ctx, installers)` 是注册表测试入口；`installDesktopExtensions` 是生产入口。
+- renderer：`FeatureModel = Store & { start?(): () => void }`；要开 IPC 订阅/定时器的一律放 `start()` 并返回关闭函数。
+  插槽排序 `order` 升序、同 order 按 key 字典序；`order` 用百位留空隙。
+- architecture 测试现在是**八条**（多了 `main/common/` 依赖边界、`subsystems/` 不得 import electron）。
+- `connectionCleared()` **从来没有调用方**（main.ts 没接线），既有缺口。
