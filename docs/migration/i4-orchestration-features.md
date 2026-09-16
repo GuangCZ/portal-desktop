@@ -136,3 +136,27 @@
 - §1.1：`featureMethods` 经 `FeatureTaskRunner.run` 记账，身份不一致抛 `SESSION_CHANGED`；`serialized` 进 `mutationTail`。
 - §1.2 编排七条与功能任务四条的 payload 已抄进本单元的 IPC 清单（见下）。
 - §1.3 推送：`being:workers`（`Orchestration.snapshot()`，50ms 合并）、`being:feature-tasks`（`{tasks, persistenceError}`，身份切换先推空列表）。
+
+### 本仓库既有实现（读一遍的结论）
+- `desktop/main/app/ipc.ts` 的 `createTrustedHandle`：来源校验 + quitting 守卫 + `catch → new Error(report(channel, error))`。
+  **所以任何 `code` 都活不过 IPC**：BD 里 `featureMethods` 的 SESSION_CHANGED 本来也是裸抛（这四条不在 `townMethods` 里），保真。
+- `desktop/main/main.ts:88` 的 `exclusive` = `mutation.then(op)`，无 quitting 判定（quitting 由 `handle` 拦）。
+- `desktop/main/app/identity.ts`：`validDesktopId` / `desktopPortalName`（`being-desktop-tools-<uuid>`），与 policy 的默认值逐字相同。
+- `desktop/main/common/loom-connection.ts`：`parseConnection(input)` / `sessionPartition(ConnectionIdentity)`；
+  `chat/connection.ts` 的 `beingIdentityKey(address)` 是二者的组合代理。
+- `desktop/main/chat/sessions.ts`：`snapshot(): SessionsSnapshot{open,version,identityKey:'bound'|'',active,cursor,seeded,degraded,sessions[],recovery}`；
+  `workersChanged()`（第 186 行，`if (this.open) this._touch()`）；`get open()`。
+  **注意**：`snapshot().identityKey` 是 `'bound'`/`''`，不是真身份；`sessions.identityKey` 字段才是真值。
+- `desktop/main/chat/ipc.ts`：IPC 注册模板（`fields()` 白名单、`plain()` 原型校验、`invalid()` 带 code、`enveloped()` 包装）。
+- `desktop/main/features/feature-task-runner.ts`：`run(name, args, fn)` 里的 `name` 必须是 **BD 方法名**
+  （`OPERATIONS` 的键是 `listScrolls`/`startPortal`/…，`requestTownRead` 特判）。传新 kebab 通道名会让账本定义全部落空。
+  → `features/methods.ts` 同时接 `channel`（守卫/日志）与 `operation`（BD 方法名，喂给 runner）。
+- `desktop/main/features/feature-task-history.ts`：`identityKey` 必须匹配 `/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/`
+  （`persist:loom-…` 与 `disconnected` 都满足）；`restore()`/`register()`/`save()`/`flush()`/`records`/`persistenceError`。
+- `desktop/main/orchestration/orchestration-policy.ts`：`configure/syncBridge/inspectForMessage/assertEnforced`，
+  失败码 `ORCHESTRATION_NOT_ENFORCED`。
+- `desktop/main/orchestration/worker-callbacks.ts`：`createCallbackSender({getConnection,fetchImpl,parseConnection,sessionPartition})`、
+  `createContinuationSender({...,getTarget})`；`getConnection()` 只需要 `{url}`。
+- renderer：`desktop/renderer/app/components/sidebar.tsx:204/244` 已有 `session-activity-light`（talking/waiting/inactive），
+  但该文件**不在本单元可触碰清单内** → BD 的「Worker running 让会话灯变 talking 且优先于等待回复」这条规则本单元做不了（写进 openIssues）。
+  同理 `appendSession` 的「挂在每个会话行下面」做不到，`SidebarSlot` 只能是 `sidebar-scroll` 里的一个独立段落。
