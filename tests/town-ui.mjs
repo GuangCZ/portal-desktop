@@ -86,7 +86,15 @@ try {
       // The public homepage carries the member directory and needs no credential.
       if (url.pathname === '/api') {
         globalThis.town.members++;
-        if (globalThis.town.holdMembers) await new Promise(resolve => { globalThis.town.resolveMembers = resolve; });
+        // 「还没到」这件事用一次快速失败表示，不用挂住请求。IM 2026-09-16 首次执行时
+        // 实测：原来的写法是每一个并发 `/api` 各自 await 一个新 Promise，永不兑现,
+        // 客户端在目录未到时重试了 9 次，于是 9 个请求同时挂在 beings.town 上,
+        // 把这个源的并发预算占满——连**不碰目录**的 `bonfire()` 直读都一起挂死
+        // （实测：held-direct-bonfire HUNG>8s；改成快速失败后同一次调用 n=2）。
+        // 挂死之后 feed 当然是空的，于是下面那条「目录还没到也要出消息」永远等不到
+        // `.social-message`，看起来像产品缺陷，其实是夹具把自己饿死了。
+        // 顺带修掉原来的另一半：`resolveMembers` 每次被覆盖，只兑现得了最后一个。
+        if (globalThis.town.holdMembers) return new Response('', { status: 503 });
         return Response.json({ community: [{ town_id: 't_River', display_name: '河流', description: '' }] });
       }
       if (!authorized) return Response.json({ error: 'unauthorized' }, { status: 401 });
@@ -148,9 +156,13 @@ try {
 
   // ── one read, cache first, directory late ──────────────────────────────────
   await page.locator('.social-message').first().waitFor();
-  const beforeDirectory = await page.locator('.social-message').first().textContent();
+  // 默认排序是「最新在前」（feed-controls 的 select），所以带 @ 的 seq 7 排在 seq 8
+  // 之后——`.first()` 取到的是没有提及的那一条。IM 2026-09-16 首次执行时改成按内容找,
+  // 并顺带把「两条都出来了」也断言上，比原来的写法更强，不是更松。
+  const beforeDirectory = await page.locator('.social-message').allTextContents();
   check('messages render while the member directory is still pending',
-    beforeDirectory.includes('篝火消息') && beforeDirectory.includes('@t_River'));
+    beforeDirectory.length === 2
+    && beforeDirectory.some(text => text.includes('篝火消息') && text.includes('@t_River')));
   check('the pending directory did not stop the feed read',
     (await app.evaluate(() => globalThis.town.reads.length)) === 1);
   await app.evaluate(() => { globalThis.town.holdMembers = false; globalThis.town.resolveMembers?.(); });

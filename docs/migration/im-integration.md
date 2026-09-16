@@ -468,3 +468,35 @@ asar 里 `/.vite/renderer/main_window/index.html` 与 `/node_modules/node-pty/bi
   这会改变 Town 与对话两族通道**每一个调用点**收到的东西——跨 I1/I5/I7/I6b 四个单元的文件，
   其中三个正在并行改这些文件。属于「应用层缺陷，附证据进 openIssues，不顺手重构」。
   脚本里的 4 条断言**原样保留**（它们断的是正确契约），只在文件头写清楚原因与证据出处。
+
+### 4.5 `tests/town-ui.mjs` 首次执行：两个脚本缺陷（已修）+ 一个应用层重复读（未修，见 openIssues）
+
+跑到第 4 条 check 停住。逐层测下来（全部实测）：
+
+**脚本自己的两处（已就地修）**：
+
+1. **夹具把自己饿死了**。`/api`（公共成员目录）原来的写法是每个并发请求各自
+   `await new Promise(resolve => { globalThis.town.resolveMembers = resolve; })`——**永不兑现**，
+   而且 `resolveMembers` 每次被覆盖，最后只兑现得了一个。
+   目录不到时客户端会重试，实测 `globalThis.town.members` 涨到 **9**，九个请求同时挂在 `https://beings.town` 上。
+   后果不是「目录慢」，是**整个源都挂死**：
+   `held-direct-bonfire` → `HUNG>8s`、`held-refreshTimeline` → `HUNG>8s`——
+   连**根本不读目录**的 `townDesktop.bonfire()` 直读都一起挂；`sync.bonfire.status` 永远停在 `refreshing`、`lastSuccessAt: null`。
+   feed 当然是空的，于是「目录还没到也要出消息」那条永远等不到 `.social-message`，**看起来像产品缺陷，其实是夹具的**。
+   改成「还没到」= 一次 **503 快速失败**（不占请求），同一次调用立刻变成
+   `held-direct-bonfire {"ok":true,"n":2}`、`held-refreshTimeline {"ok":true}`、`sync.status: ready`。
+2. **按渲染顺序取第一条**。`check('messages render while…')` 取 `.social-message` 的 `.first()`，
+   但 feed 默认排序是「最新在前」，带 `@t_River` 的是 seq 7，排在 seq 8 之后——
+   实测渲染出来的是 `["…第二条篝火消息…", "…篝火消息 @t_River…"]`，`.first()` 里没有 `@t_River`。
+   改成在全部文本里按内容找，并**additionally** 断言「两条都渲染出来了」——比原来强，不是更松。
+
+修完之后前 4 条 check 通过，停在第 5 条 `the pending directory did not stop the feed read`（`reads.length === 1`）。
+
+**第三处是应用层的，不改**（→ openIssues）：**一次打开发两次 feed 读**。
+
+- 实测：首次绘制那一刻 `reads` 是 **1** 条（`since:null`），**250 ms 之后变成 2 条**（同样 `since:null`）。
+- 关键对照：把目录改成**立刻成功**（`holdMembers:false`，目录根本不挂）跑一遍，`reads` 同样是
+  `[{at:…754424},{at:…754674}]` —— **两条，间隔 250 ms**。
+  所以这次重复读**与目录是否就绪无关**，也不是 503 模型引入的，是打开篝火本身就读两次。
+- 顺带量到：干净成功的一次打开，公共目录 `/api` 被请求 **4** 次（失败时 9–12 次）——公共目录没有 in-flight 去重。
+- 这条 check 的断言（`=== 1`）是对的，**原样保留不动**；它现在红，指的正是上面这件事。
