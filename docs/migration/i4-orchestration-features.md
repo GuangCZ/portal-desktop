@@ -190,7 +190,7 @@ BeingDesktop 也把它们放在同一个 composition root。
 | 装配点 | BD `src/main.cjs` | 本仓库 |
 | --- | --- | --- |
 | `new Orchestration({...})` | 163-170 | `subsystems/orchestration.ts:120-139`，`directory=<userData>/workers`、`getWorkspace` 取 `projectWorkspace‖workspace`、`getSessionIds` 取会话快照、`getExecutionContext` 给 `{desktopId, place}`、`onChange` 推 `beings:workers` 并调 `sessions.workersChanged()` |
-| `callbacks.setTransport({...})` | 171-176 | `:160-179`，`send`/`resume` 用 `createCallbackSender`/`createContinuationSender`（注入 `net.fetch`、`parseConnection`、`sessionPartition`、`getTarget=capabilities().place`），`ready = !closed && Boolean(bound)`，`toolsReady` 查桥的 `desktop_worker_status` |
+| `callbacks.setTransport({...})` | 171-176 | `:160-179`，`send`/`resume` 用 `createCallbackSender`/`createContinuationSender`（注入 `net.fetch`、`parseConnection`、`sessionPartition`、`getTarget=capabilities().place`），`ready = !closed && verified && Boolean(bound)`（复审后补 `verified`，见下），`toolsReady` 查桥的 `desktop_worker_status` |
 | `new OrchestrationPolicy({...})` + `assertEnforced` | 359-362 | `:141-152`，`validDesktopId`/`desktopPortalName` 从 `app/identity.ts` 注入（policy 自带的两份默认值只为单测存在） |
 | 编排指令注入 | `being-chat` 的 message 组装 | `:183` `setOrchestrationInstructions(orchestrationInstructions)` |
 | 账本状态（`featureHistories`/`openFeatureHistories`/`featureHistoryCache`） | 114-122 | `features/history-cache.ts` 一个类全包（`identity()`/`ledger`/`current`/`records`/`load()`/`register()`/`flush()`） |
@@ -246,6 +246,9 @@ BD 里这 11 条都不是「Town 包络」，所以 preload 一律 `ipcRenderer.
 BD 的四套词典（worker 状态 8 项、review、delivery、agent status 5 项）、
 `featureNames` 9 项、`statusNames` 6 项、六个筛选、`canEnd`、三句 `showModeStatus`、
 `仅保留最近 300 条事件；早期事件已截断。` 等文案逐字搬运，并由两个渲染层测试钉住。
+控件标签同样是 BD 原文（`renderer/index.html:399-409` 的「编排本机执行任务」「默认 Worker」
+「检测 Agent Kit」「重试配置」「重连调度工具」）——复审发现这五处曾被改写，已改回。
+React 外壳自己加的只有无障碍属性（`aria-label="编排设置"` 之类），BD 用的是 `<h3>` 标题。
 
 ### 5. 共享文件触碰行（逐行）
 
@@ -284,7 +287,7 @@ desktop/renderer/app/models/registry.ts
 CSS 由 `renderer/orchestration/slot.tsx` 自己 `import './styles.css'`，
 **没有**去动 `renderer/main.tsx`（那会是第七个共享文件）。
 
-## 与方案的偏差（三处，都有原因）
+## 与方案的偏差（四处，都有原因）
 
 1. **面板而不是 place sheet。** §3.4 想让设置与 Worker 详情进 `SHEET_SLOTS`。
    全屏页的标题由壳层从 `renderer/town/models/town.ts` 的 `definitions` 取 —— 那是 I1 的文件，
@@ -293,8 +296,19 @@ CSS 由 `renderer/orchestration/slot.tsx` 自己 `import './styles.css'`，
 2. **侧栏是一个独立分组，不是挂在每个会话行下面。** BD 的 `appendSession` 把 Worker 列表插在
    每个会话行之后，那要改 `renderer/app/components/sidebar.tsx`（不在可触碰清单内）。
    `SidebarSlot` 只能是 `sidebar-scroll` 里的一段，于是做成「会话 → Worker」的两级折叠分组，
-   折叠状态仍存 localStorage `being.workerGroups.collapsed`（键名与 BD 一致）。
-3. **`desktop/shared/types.ts` 新增的是一行独立 `import type`**，没有把 `OrchestrationAPI`
+   折叠状态仍存 localStorage，键名是 BD 原样的 `being.workerGroups.collapsed`
+   （复审时这里一度是 `beings:worker-groups-collapsed`，已改回，并由
+   `tests/orchestration-integration-renderer.test.ts` 断言实际写进 storage 的键）。
+   两边 origin 不同，本来就不存在迁移问题；改回只是为了不让记录里出现一句可核查而为假的话。
+3. **回调传输的 `ready` 不按方案字面写。** §3.4 给的装配代码是
+   `ready: () => !closed && bound`，BD `src/main.cjs:174` 是
+   `!exitStarted && Boolean(connection) && state.connection.status === 'connected'`。
+   照方案写会漏掉「连接已核验」这一条：保存过地址但 Being 不可达时，冷启动第一拍就 `pump()`，
+   对刚从磁盘恢复出来的待通知 worker 发 POST、累加 `completion.attempts`、
+   把「完成通知未送达，将自动重试」写进本来没事的详情。子系统里加了 `verified` 标志
+   （`connectionVerified()` 置真，`connectionCleared()`/`quitting()` 清掉），
+   `ready = !closed && verified && Boolean(bound)`，语义与 0.8.26 一致。
+4. **`desktop/shared/types.ts` 新增的是一行独立 `import type`**，没有把 `OrchestrationAPI`
    塞进既有那行 —— 既有行一个字符都没动，合回时冲突面更小。
 
 ## 改了三个既有测试（都不是弱化）
@@ -309,17 +323,72 @@ CSS 由 `renderer/orchestration/slot.tsx` 自己 `import './styles.css'`，
 
 其余既有测试**一条没删、一条没改、一条没 skip**。
 
+## 复审后的修正（2026-09-16，第二轮）
+
+复审给了 1 条 medium、6 条 low。逐条处理如下，新增 6 条测试，全部先在**改回旧实现**的状态下
+跑过一遍确认会红（证据：四条断言分别报 owner 身份键不符 / promise 没有 reject /
+抛的是「任务不存在或连接身份已变化」而不是退出文案 / `ready()` 是 true），再改回。
+
+1. **（medium）`bind()` 没有守卫，两次身份交错会把 Orchestration 绑到错的 Being 上。** 属实。
+   `Orchestration.selectOwner` 同步判 `owner === this.owner`，却要到
+   `presentation.dispose()` + `stopAll()` + `flush()` 全部 await 完才提交 `this.owner`，
+   中间有一大段可被插入的窗口。可达路径就是 `main.ts:449-469` 的 `beings:save`：
+   `verifyConnection()` 先用新身份调了 `connectionVerified`，takeover 失败（那里的注释自己写明
+   这是 ordinary path），回滚后再用旧身份调一次；两次都不 await。先发的那次会**后**提交，
+   于是 manager 停在刚被拒绝的 Being 上，而 store / 账本 / sessionPartition 都说旧的 ——
+   `worker-callbacks` 的 `sessionPartition(connection) !== owner` 恒真，
+   所有完成通知被拒并进入退避重试。
+   修法照 BD：BD 把 connect/disconnect/reconnect 都放进 `serialized`（`src/main.cjs:136`），
+   `selectOwner` 只在 `mutationTail` 上跑。这里在子系统内部建了同样的一条队列
+   （不能挂 `ctx.exclusive`：`connectionVerified` 本身就是从 `main.ts` 的 `exclusive` 里调出来的，
+   挂上去会死锁），`bind(target?)` 排进队列，目标身份在**轮到自己时**才读，
+   所以最后一次公告总是赢。`connectionCleared()` 走同一条队列（`bind('')`），
+   同身份重复 bind 也因此只做一遍，不再出现启动时 installer 与 `restoreStartup` 各跑一遍
+   `stopAll/flush/读盘 + callbacks.recover`。
+   测试：`tests/features-integration-identity.test.ts`
+   「a rolled-back save leaves the manager and the ledger on the same Being」
+   （回滚场景 + 普通切换场景两段）。
+2. **（low）`ready()` 少了「连接已核验」。** 属实，且如复审所说是方案文本本身带来的偏差。
+   已加 `verified` 标志，并在「与方案的偏差」第 3 条里写明。
+   测试：`tests/orchestration-integration-wiring.test.ts`
+   「the callback transport waits for the connection to be VERIFIED, not merely saved」
+   （夹具新增 `address` 选项 = 带着已保存连接冷启动）。
+3. **（low）折叠键名与记录不符。** 属实。键名改回 BD 的 `being.workerGroups.collapsed`，
+   并在既有折叠测试里断言真正写进 storage 的键。
+4. **（low）编排设置页五处标签是重写的。** 属实。五处全部改回 `renderer/index.html:399-409` 原文。
+5. **（low）功能任务详情缺「打开功能页 / 到功能页处理」，且丢了 `execution === 'native'` 分支。**
+   - 跳转入口：`FeatureTasksModel.setNavigate(handler)` 注入，缺省 `null` 时不渲染按钮；
+     渲染规则照 BD（`needs_input` 用「到功能页处理」且是 primary，其余「打开功能页」）。
+     本单元没有可跳的目的地（功能页分属 I1 / I7），所以**目的地仍未接线**，见下面「没做」一节。
+   - `native` 分支：已按 BD 补回（`executionLabel` 提到 model 层，可测）。
+     但复审给的后果判断不成立：BD `src/feature-tasks.cjs:83/182` 与本仓库
+     `desktop/main/features/feature-tasks.ts:115/214` 都只认 `['being','local']`，
+     `begin()` 直接抛，`restore()` 直接 `continue` 丢行 —— 所以 `execution:'native'` 的旧档案行
+     根本到不了渲染层，BD 那条分支本身就是不可达的防御代码（这也正是移植时 TS 严格模式下
+     它被删掉的原因：DTO 类型是 `'being' | 'local'`，写 `=== 'native'` 会报无重叠比较）。
+     补回时保留了类型不变，比较前显式放宽为 string，并把「不可达」写在注释和测试里。
+6. **（low）`SESSION_CHANGED.restore` 的常量没有调用方。** 属实。
+   `history-cache.ts` 改成 import 并使用该常量，于是
+   `tests/features-integration-identity.test.ts:110` 钉的就是用户真会看到的那句。
+7. **（low）serialized 分支排队后没有重判「正在退出」。** 属实。
+   `createFeatureMethods` 新增可选 `exiting`，在 `exclusive` 回调里**按 BD 的顺序**先判退出再比账本；
+   子系统传 `() => closed`。文案用本壳层 `app/ipc.ts` 已有的「客户端正在退出，请稍候。」
+   而不是 BD 的「桌面端正在退出。」：同一个条件不该有两种说法，这个壳自称「客户端」。
+   测试两条：`createFeatureMethods` 直接驱动（排队中途进入退出）＋ 经真通道
+   `beings:feature-task-discuss` 验证子系统确实把 `exiting` 接上了。
+
 ## 门槛
 
 - `npm run typecheck`：干净。
-- `npx vitest run`：`Test Files 100 passed | 8 skipped (108)`、`Tests 1108 passed | 58 skipped (1166)`。
+- `npx vitest run`：`Test Files 100 passed | 8 skipped (108)`、`Tests 1114 passed | 58 skipped (1172)`
+  （复审前是 1108；+6 是上面那 6 条回归测试。skip 数没变）。
   **连跑八次全绿**——前面抓到过一次偶发失败：`tests/features-integration-identity.test.ts` 在身份切换后只用
   `settle()`（30 轮 `setImmediate`）等账本换好，而换账本要真读一次磁盘文件，并发负载下读不完就断言 `currentIdentity()`。
   改成 `await f.extensions.ready`（`connectionVerified` 交给生产代码的同一个 promise）后不再复现。
   断言本身一个字没放松。
 - 基线是**实测**的，不是抄的：`git archive 9794cab` 解到 scratchpad、软链 `node_modules` 后跑同一条命令，
   得 **1071 passed / 58 skipped**（i0 文档写的 1070/57 少算了一条；那次唯一的失败只因为缺 `heart-portal` 子模块）。
-  1108 − 1071 = **+37**，正是本单元新增的 37 条；skip 没增没减。
+  1114 − 1071 = **+43**（复审前 +37，复审后再 +6）；skip 没增没减。
 
 ## 真机冒烟（如实记录）
 
@@ -355,6 +424,10 @@ CSS 由 `renderer/orchestration/slot.tsx` 自己 `import './styles.css'`，
 - **`connectionCleared()` 依然没有调用方**（P1 遗留，I0 未改）。本子系统实现了它（`generation++`、
   `selectOwner('')`、重载账本），但 `main.ts` 从来没调过，所以「断开连接」时账本不会主动清空 ——
   需要能改 `main.ts` 的单元来接。
+- **功能任务详情的「打开功能页」没有目的地。** `FeatureTasksModel.setNavigate()` 已经备好，
+  但功能页分属 I1（Town）与 I7（Portal / Channel），本单元无处可跳，所以现在按钮不渲染 ——
+  `needs_input` 的任务在本单元里仍然没有「前往处理」的入口，只能看到它需要什么。
+  改法：拥有功能页的单元在挂载时调一次 `model.setNavigate((feature, task) => …)`。
 - **桥不在时的两条通道**（`beings:workers-reconnect`、`toolsReady`）只在测试里用替身验证过，
   真桥要等 I2。
 - **交互冒烟未做**，见上。
