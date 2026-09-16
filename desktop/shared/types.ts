@@ -4,6 +4,7 @@ import type { DesktopToolsAPI } from './desktop-types';
 import type { OrchestrationAPI } from './desktop-types';
 import type { ShellStateAPI } from './shell-state-types';
 import type { TownDesktopAPI } from './desktop-types';
+import type { ModelSettingsAPI } from './model-settings-types';
 export interface UpdateState {
   phase: 'idle' | 'checking' | 'available' | 'current' | 'unavailable';
   currentVersion: string; latestVersion?: string; message: string; releaseUrl: string;
@@ -114,6 +115,8 @@ export interface DesktopAPI {
   shellState: ShellStateAPI;
   /** Town's direct reads, timeline and pairing (town-desktop-types.ts). */
   townDesktop: TownDesktopAPI;
+  /** 模型配置 and Side by Side (model-settings-types.ts). */
+  modelSettings: ModelSettingsAPI;
   // ────────────────────────────────────────────────────────────────────────────
 }
 declare global { interface Window { beings: DesktopAPI } }
