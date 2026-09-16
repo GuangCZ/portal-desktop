@@ -402,3 +402,80 @@ BD 的 `state.workspace.path` 对应的是本仓库的 `projectWorkspace`（`sha
   不 import electron 这一条）。
 - 「未注入 pty」的优雅失败路径有专门用例：`tests/terminal-integration-subsystem.test.ts` 的
   「without a pty module it refuses with BeingDesktop's own sentence and stays usable」。
+
+### 4.2 第二个提交（node-pty 注册 + 真机验证）
+
+`desktop/main/tools/terminal/node-pty.ts` 的 `registerNodePty()` 在终端子系统的 installer 里调用一次
+（不在 `main.ts`——I0 之后任何单元都不得改它）。它只存一个 thunk，**不加载模块**：
+原生模块缺失或 ABI 不匹配的机器照样能开客户端，只有有人要终端时才失败，文案还是 BD 的那句。
+用 `createRequire(import.meta.url)` 而不是静态 import——`vite.main.config.ts` 把 `node-pty` 列进
+`rollupOptions.external`，静态 import 会在 ESM bundle 里留下裸 specifier。
+
+- `npm run typecheck` 退出码 0；`npx vitest run` **1103 通过 / 58 跳过**（与骨架一致：
+  新增的 `tests/terminal-e2e.mjs` 是 Playwright 脚本，不在 vitest 的 `include` 里）。
+
+**真机（本机 darwin-arm64，2026-09-16 实跑）**
+
+1. **`npm run start`（开发树）**：用 `npm run start -- -- --remote-debugging-port=9223` 起客户端，
+   再用 Playwright 的 `connectOverCDP` 驱动。结果：
+   - 点顶栏「终端」→ 面板打开 → 自动新建会话
+     `{"title":"zsh","cwd":"/Users/d5c","status":"running","pid":55493,"cols":72,"rows":49}`；
+   - 在 xterm 里敲 `echo dev-mode-ok` + 回车 → `readTerminal` 里出现两次该串（命令回显 + 输出），
+     且 `.xterm-rows` 的 textContent 也包含它 → **PTY 与渲染两端都通**；
+   - 点顶栏「Being 工具浏览器」→ 面板打开 → 地址栏输入本地夹具 URL → 标签页标题变为「工具浏览器测试」；
+   - `toolBrowser.navigate({url:'search some text'})` 被拒绝，文案
+     「请输入 HTTP 或 HTTPS 地址，例如 localhost:3000。」（与外壳浏览器的「裸文本补 https」**不同**，符合定案 5.6）；
+   - 收起浏览器后 `visible === false`，原生视图从窗口摘下。
+   - 渲染层无 `pageerror`。
+2. **`npm run package` 后从产物启动**：`tests/terminal-e2e.mjs`（新增）跑通，输出
+   「终端 E2E 通过：打包客户端能启动 PTY、回显命令并关闭会话。」。断言覆盖：
+   会话 `status==='running'` 且有 pid、cwd 是绝对路径；`.xterm-screen` 挂载且 `cols>=2`（fit 真的跑过）；
+   在 xterm 自己的 `.xterm-helper-textarea` 里敲 `echo being-desktop-terminal-ok` 后回显出现 ≥2 次；
+   `.xterm-rows` 也包含它；新建第二个会话后逐个 `close`，最终 `sessions.length === 0`；渲染层无 `pageerror`。
+   产物里实测：
+   ```
+   app.asar.unpacked/node_modules/node-pty/build/Release/pty.node        -rwxr-xr-x
+   app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper    -rwxr-xr-x
+   app.asar/node_modules/node-pty/lib/index.js                            （在 asar 内）
+   ```
+
+**两个与产品无关的本地变通（不改任何产品代码，供复现）**：
+- 本机没有 Rust 工具链，`resources/heart-portal` 不存在 → 用一个打印 `heart-portal 0.0.0` 的
+  临时 Mach-O stub 满足 `forge.config.ts` 的 `extraResource`（I0 也是这么做的）。
+- macOS 26 下 ad-hoc 签名 + hardened runtime 的产物**起不来**：
+  `dyld: ... Electron Framework ... different Team IDs`——library validation 不接受两个无 Team 的 ad-hoc 签名。
+  验证前对产物执行一次 `codesign --force --deep --sign - "Being Desktop.app"`（去掉 runtime 标志）即可。
+  这是本机签名环境的限制，不是打包配置问题；正式签名（`signing.identity`）不受影响。
+
+---
+
+## 5. 未做 / 存疑（如实记录）
+
+1. **`tests/terminal-e2e.mjs` 没有接进 `package.json` 的 scripts，也没有接进 `scripts/test-all.mjs`。**
+   这两个都是本单元不许改的共享文件（`package.json` 只有 I0 能改；`test-all.mjs` 的步骤列表不在允许清单里）。
+   在有人补上 `"test:terminal"` 与一行 `await npm('terminal-e2e', ['run', 'test:terminal'])` 之前，
+   它只能手工跑：`npm run package` 之后 `node tests/terminal-e2e.mjs`。
+2. **`DesktopBrowser` 实例的归属需要 I2 配合**（见 D1）。I2 若照方案 §3.2 直接
+   `new Browser(...)`，会出现两个 `DesktopBrowser` 抢同一个窗口的 `contentView`、共用同一个分区。
+   建议的一行接法写在 D1 里。**合回顺序是 I3 → I2，所以这件事由 I2 的作者或整合者在 rebase 时处理。**
+3. **工具浏览器没有独立的 E2E。** 本次用一次性脚本在开发树里实测过（见 §4.2 第 1 条），
+   但没有落成可重复的 `tests/tool-browser-e2e.mjs`——方案 §6.2 也没有要求。
+   既有的 `tests/browser-e2e.mjs` 测的是外壳浏览器，本单元一行未改。
+   **注意**：它里面的 `contentView.children.find(v => v.webContents)` 在两个浏览器同时挂载时会取到第一个；
+   该脚本只开外壳浏览器，所以当前仍然正确，但 I2 扩写它时要留意。
+4. **终端面板的三项 BD 功能没有移植**：
+   - `Being · 命令`只读标签页（`updateJobs`）——它映射的是 `DesktopConsole` 的 job，属于 I2；
+   - 终端选项菜单（新建 / 选择工作目录 / 复制 / 粘贴 / 清除显示 / 恢复隐藏的只读标签）——
+     其中「复制/粘贴」已按快捷键实现（走 `navigator.clipboard`，不是 BD 的
+     `copyDesktopText`/`readNativeText` 通道，那两条属于 I2），「选择工作目录」需要 I6 的设置面板；
+   - 面板宽度可拖拽的分隔条（外壳浏览器有 `#browser-divider`，终端面板暂时用固定 flex-basis）。
+5. **`Settings.projectWorkspace` 目前没有任何界面可以设置**（`SaveSettings` 里没有这个字段）。
+   因此现在的终端总是开在用户主目录。这不是本单元引入的缺口——`projectWorkspace` 是 P0 从
+   BeingDesktop 的配置里读出来保留的字段——但在有界面之前，「选择工作目录」这件事是断的。
+6. **Linux**：`common/platform.ts` 的 `terminalSupported` 只认 win32/darwin（BD 的写死行为，原样保留），
+   所以 Linux 上终端面板会一直显示「当前平台不支持交互终端。」。node-pty 的 Linux prebuild 与打包同样未验证（I0 也没验）。
+7. **xterm 的字号变量**：`typography()` 读 `--font-mono` 与 `--text-code`，这两个 CSS 变量是 BeingDesktop 的，
+   **本仓库的样式表里没有定义**，所以现在一直走兜底（等宽栈 + 12px）。
+   等 I6 的外观设置把这两个变量补上，终端字号就会跟着走，不需要再改这里。
+8. **`connectionCleared()` 依然没有调用方**（P1 就有的缺口，I0 原样保留）。
+   本单元的两个子系统都没有实现它——终端与浏览器是本地工具，换 Being 不需要清空。

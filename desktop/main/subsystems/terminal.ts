@@ -6,15 +6,13 @@
 // `shellPath` are left at their defaults there and are left at their defaults
 // here. Teardown is line 1615: the terminal is disposed before the tool bridge.
 //
-// The pty factory is NOT registered here yet. `tools/terminal/node-pty.ts` — the
-// one file that reaches for the native module — lands in the next commit
-// (integration plan §5.8: the channels, the panel and the browser ship first, so
-// a platform that cannot build node-pty still gets everything else). Until then
-// every `create` fails with BeingDesktop's own message —「无法启动 … 交互终端，
-// 请检查终端组件与系统安装。」— which is exactly what a failed
-// `require('node-pty')` produced in 0.8.26, and the tool bridge drops
-// `desktop_terminal_*` from its catalogue on its own (`DesktopTools`'s
-// `toolAllowed` gates on `Boolean(getTerminal())`).
+// `registerNodePty()` is the `require('node-pty')` BeingDesktop did inline. It
+// resolves nothing here — the factory is a thunk the first `create()` calls — so
+// a machine with no usable native module still opens the client and fails only
+// when someone asks for a terminal, with 0.8.26's own message:「无法启动 … 交互
+// 终端，请检查终端组件与系统安装。」. The tool bridge drops `desktop_terminal_*`
+// from its catalogue on its own (`DesktopTools`'s `toolAllowed` gates on
+// `Boolean(getTerminal())`).
 //
 // `reveal` replaces BeingDesktop's `showTerminal` (line 1697), which reached into
 // the page with `executeJavaScript('window.beingTerminal.reveal(id)')` and threw
@@ -23,6 +21,7 @@
 // 0.8.26's, unchanged.
 import { DesktopTerminal } from '../tools/terminal/terminal';
 import { createRevealGate, registerTerminalIpc, terminalPush } from '../tools/terminal/ipc';
+import { registerNodePty } from '../tools/terminal/node-pty';
 import type { DesktopSubsystem, SubsystemContext } from './types';
 
 export interface TerminalSubsystem extends DesktopSubsystem {
@@ -42,6 +41,9 @@ export function installTerminalSubsystem(ctx: SubsystemContext): TerminalSubsyst
   // unconditional here; the three channel names stay in tools/terminal/ipc.ts.
   const push = terminalPush(() => ({ send: ctx.push }));
   const gate = createRevealGate(id => push.reveal(id));
+  // Idempotent and free: it only stores a thunk (tools/terminal/node-pty.ts).
+  try { registerNodePty(); }
+  catch (error) { report('terminal-pty-register', error); }
 
   let closed = false;
   let blocked = '';

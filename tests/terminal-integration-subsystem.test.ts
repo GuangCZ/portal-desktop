@@ -45,11 +45,17 @@ class FakePty implements PtyLike {
   kill() { this.kills++; for (const listener of this.exit) listener({ exitCode: 0 }); }
 }
 
-function fixture({ pty = true, settings = {} as Partial<Settings> }: { pty?: boolean; settings?: Partial<Settings> } = {}) {
+/** How the native module behaves on this machine.
+ *  · 'fake'         — loads, and spawns the fixture's pty.
+ *  · 'missing'      — registered, but `require` throws: a module that is absent
+ *                     or built for another Electron ABI, which is what
+ *                     BeingDesktop's inline `require('node-pty')` did.
+ *  · 'unregistered' — nothing registered at all, the state the skeleton commit
+ *                     ships in (integration plan §5.8). */
+type PtyMode = "fake" | "missing" | "unregistered";
+
+function fixture({ pty = "fake", settings = {} as Partial<Settings> }: { pty?: PtyMode; settings?: Partial<Settings> } = {}) {
   const spawned: FakePty[] = [];
-  // The mechanism the integration phase registers the real module through
-  // (`setDefaultPtyFactory`), standing in for it until `registerNodePty()` lands.
-  setDefaultPtyFactory(pty ? () => ({ spawn: (_file: string, _args: string[] | string, options: PtySpawnOptions) => { const handle = new FakePty(options); spawned.push(handle); return handle; } }) : null);
   const handlers = new Map<string, (event: any, ...args: any[]) => Promise<unknown>>();
   const pushes: { channel: string; payload: any }[] = [];
   const errors: { scope: string; error: unknown }[] = [];
@@ -75,6 +81,13 @@ function fixture({ pty = true, settings = {} as Partial<Settings> }: { pty?: boo
     userData: dirname, desktopId: "11111111-1111-4111-8111-111111111111",
     onError: (scope, error) => { errors.push({ scope, error }); },
   }, [context => (subsystem = installTerminalSubsystem(context))]);
+  // AFTER installing, because the installer calls `registerNodePty()` — the
+  // production mechanism, not a constructor parameter. `DesktopTerminal` resolves
+  // the factory on its first `create()`, so the last registration wins.
+  setDefaultPtyFactory(
+    pty === "fake" ? () => ({ spawn: (_file: string, _args: string[] | string, options: PtySpawnOptions) => { const handle = new FakePty(options); spawned.push(handle); return handle; } })
+      : pty === "missing" ? () => { throw new Error("Cannot find module 'node-pty'"); }
+        : null);
   // The terminal is offered on win32 and darwin only (common/platform.ts
   // `terminalSupported`), and the subsystem takes the host's platform on purpose.
   // Pin it so every runner exercises the same case; the pty is a fake either way.
@@ -121,22 +134,24 @@ describe("terminal subsystem", () => {
     } finally { await f.cleanup(); }
   });
 
-  it("without a pty module it refuses with BeingDesktop's own sentence and stays usable", async () => {
-    // Integration plan §5.8's degradation, and the state this commit ships in:
-    // nothing is registered, so `DesktopTerminal` fails inside the same try block
-    // a failed `require('node-pty')` failed in.
-    const f = fixture({ pty: false });
-    try {
-      // The message a failed `require('node-pty')` produced in 0.8.26, unchanged;
-      // the shell name comes from the platform, so the invariant half is what is
-      // matched.
-      await expect(f.act("create", {})).rejects.toThrow(/交互终端，请检查终端组件与系统安装。$/);
-      // Nothing was half-created, the create slot was released, and the channels
-      // still answer — the panel shows an empty stage, not a broken client.
-      expect(await f.call("beings:terminal")).toEqual({ sessions: [], activeSessionId: null });
-      expect(f.errors).toEqual([]);
-      await expect(f.act("create", {})).rejects.toThrow(/交互终端，请检查终端组件与系统安装。$/);
-    } finally { await f.cleanup(); }
+  it("without a usable pty module it refuses with BeingDesktop's own sentence and stays usable", async () => {
+    // Both halves of integration plan §5.8's degradation: the skeleton commit,
+    // where nothing is registered, and a machine whose native module will not
+    // load. They must be indistinguishable to the user.
+    for (const pty of ["unregistered", "missing"] as const) {
+      const f = fixture({ pty });
+      try {
+        // The message a failed `require('node-pty')` produced in 0.8.26,
+        // unchanged; the shell name comes from the platform, so the invariant
+        // half is what is matched.
+        await expect(f.act("create", {})).rejects.toThrow(/交互终端，请检查终端组件与系统安装。$/);
+        // Nothing was half-created, the create slot was released, and the channels
+        // still answer — the panel shows an empty stage, not a broken client.
+        expect(await f.call("beings:terminal")).toEqual({ sessions: [], activeSessionId: null });
+        expect(f.errors).toEqual([]);
+        await expect(f.act("create", {})).rejects.toThrow(/交互终端，请检查终端组件与系统安装。$/);
+      } finally { await f.cleanup(); }
+    }
   });
 
   it("reveal pushes the request, waits for the panel, and refuses two ways", async () => {
