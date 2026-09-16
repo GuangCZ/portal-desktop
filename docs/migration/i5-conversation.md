@@ -243,7 +243,7 @@ Worktree `.local/i5-conversation`，分支 `i5-conversation`，基线 `next @ 7b
 - `npx vitest run`：**114 文件 / 1279 通过 / 24 跳过**（基线 109 / 1197 / 34；复审修复前是 1271）。
   新增 5 个测试文件、+82 通过；重新启用 10 条 skip（34 → 24）。既有用例一条未删、未弱化。
 - **打包真跑**：`PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package`（绕代理）+ `codesign --force --deep --sign -`，`resources/heart-portal` 用 clang 编的 Mach-O stub（`--version` 打印 `heart-portal 0.0.0`）。
-- **`tests/electron-smoke.mjs`：18 条全过**（在最终树上重新打包后又跑了一遍，仍全过）（§6.1 的 10 步全部走到）。覆盖：打包客户端启动 → 真实设置对话框连接夹具 → 侧栏一个会话 → 基线 `GET /api/history` 恰好一次 → 发一句 → `.chat-message.is-user` + 流式行 → `POST /api/chat/stream` 的 body 带 `scene_id`（`desktop-<uuid>-<uuid>`）/ `scene_meta.scene_label` / `scene_meta.client` / `client_ref`，`message` 带 v1 帧且声明长度属实、剥掉后正是人说的话、帧里 `chatSessionId` 等于场景里的会话 UUID、直接模式无 orchestrator 段、token 不在 body 任何位置 → 停止按钮 → `POST /api/stop` 恰好一次 → 重启后会话、标题、双方消息都在，且转写里没有 `request context v1`。
+- **`tests/electron-smoke.mjs`：18 条全过**（在最终树上重新打包后又跑了一遍，仍全过；复审修复后第三次重新打包 + 重签 + 重跑，18 条仍全过）（§6.1 的 10 步全部走到）。覆盖：打包客户端启动 → 真实设置对话框连接夹具 → 侧栏一个会话 → 基线 `GET /api/history` 恰好一次 → 发一句 → `.chat-message.is-user` + 流式行 → `POST /api/chat/stream` 的 body 带 `scene_id`（`desktop-<uuid>-<uuid>`）/ `scene_meta.scene_label` / `scene_meta.client` / `client_ref`，`message` 带 v1 帧且声明长度属实、剥掉后正是人说的话、帧里 `chatSessionId` 等于场景里的会话 UUID、直接模式无 orchestrator 段、token 不在 body 任何位置 → 停止按钮 → `POST /api/stop` 恰好一次 → 重启后会话、标题、双方消息都在，且转写里没有 `request context v1`。
 - 未跑：`npm run test:all` 全量（会串行占用四个 worktree 共用的 E2E 锁，且包含其它单元的脚本）。本单元只保证 `electron-smoke` 从「skipped」变「passed」，§6.3.4 的「skipped 名单只减不增」在这一项上成立。
 - `npm run start` 开发实例未单独跑：打包产物启动（§6.3 第 3 条，更强的一条）已真跑通过。
 
@@ -270,7 +270,9 @@ Worktree `.local/i5-conversation`，分支 `i5-conversation`，基线 `next @ 7b
 
 ## 8. 复审结论的处理（2026-09-16，同一 worktree）
 
-复审五条，逐条如下。`npm run typecheck` 绿，`npx vitest run` **114 文件 / 1279 通过 / 24 跳过**。
+复审五条，逐条如下。`npm run typecheck` 绿，`npx vitest run` **114 文件 / 1279 通过 / 24 跳过**；
+本轮改了渲染层（转写、解释卡片、选区工具条、样式），所以重新 `prepare:desktop` + `electron-forge package`
++ `codesign --force --deep --sign -`，`npm run test:e2e` 的 18 条**再次全过**。
 
 ### F1（medium，已修）转写里的 `@提及` 没有做显示名投影
 
