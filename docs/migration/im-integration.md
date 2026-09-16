@@ -93,3 +93,33 @@
 - 复审 low（**本单元第 9 条**）：`tools/security.ts` 的 `protocolFile` 保留，理由是「I3 看不到本分支、无法表态，留给 I3 落地后再判断」。
 - 已核实无副本遗留（I0 已收敛 tools/ 下的）。
 
+### 1.6 docs/migration/i4-orchestration-features.md
+
+- IPC 11 条 invoke + 2 条推送（`beings:workers`、`beings:feature-tasks`）。
+- 「没做 / 待后续单元」：`orchestration.presentation` 由 I2 的 `linked()` 赋值（已做）；验收卡片属 I5；
+  **侧栏活动灯不认 Worker**（BD 规则「有 Worker 在跑 → 会话灯 talking，且优先于等待回复」，
+  `OrchestrationModel.hasActiveWorkers(sessionId)` 已写好，侧栏接一行即可）→ **本单元第 10 条**；
+  **`connectionCleared()` 依然没有调用方**，本子系统实现了它（generation++、selectOwner('')、重载账本）→ **本单元第 11 条**；
+  功能任务详情的「打开功能页」没有目的地（`setNavigate()` 已备好）→ I7；交互冒烟未做（另一个 worktree 的 Electron 占着单实例锁）。
+
+### 1.7 docs/migration/i1-town.md
+
+- D2：`town/ipc.ts` 原 10 条删 8 留 2；`beings:town` 与 `beings:town-open` 改由 `town/ipc-desktop.ts` 注册。
+  **`beings:town-open` 原来经 `options.open(url)` 打到外壳浏览器，改成 `ctx.electron.shell.openExternal`（允许名单逐字一致），已记为行为偏差**
+  → **本单元第 12 条**。
+- 遗留 4：`desktop/main/town/channel/` 里还留着 u3 的 `sanitize.ts` / `loom-connection.ts` 类副本未收敛到 `common/*`
+  （i1 只做了 `scrollId` 一项）→ **本单元第 8 条**。
+- 遗留 1：`tests/town-ui.mjs` 与 `tests/town-sdk.mjs` 未经真实运行验证（无 cargo → 无安装包）→ **本单元第 14b 条**。
+- 遗留 6：`MIGRATION.md` 里 i1 建了表头（标题 + 一行说明 + 表头 + 分隔行 + 自己一行）→ 与 i2/i4/i6 各自的一行数据行并存 → **本单元第 4 条**。
+- §10.1：`tests/town-names.mjs` 与 `tests/seed-garden.mjs` 曾被 i1 改坏，已重写并真跑通过。
+
+### 1.8 docs/migration/i6-shell-state.md
+
+- 4.1：`beings:snapshot` 不加 `sidebar`，改用自己的 `beings:sidebar-state` 读通道 + `beings:sidebar` 推送。
+- 4.3 / 9.5：**没有 `beings:sidebar-project-select`**，理由是「本壳层没有文件浏览页，唯一能切换的 `settings.workspace` 是 Portal 工作目录」；
+  9.5 明确说「I2/I3 的 `DesktopTools({getWorkspace})` / `DesktopConsole({getWorkspace})` 若要按项目切换工作目录，就需要补回这条通道，
+  实现落在 `main/shell/ipc.ts`，`updateSidebar` 不用动」→ **本单元第 13 条**。
+- 4.7：重申 `main.ts` 从来没调用过 `extensions.connectionCleared()` → **本单元第 11 条**。
+- 没做 4：`tests/sidebar-e2e.mjs` 没有 npm 脚本入口 → **本单元第 3 条**。
+- 没做 6 / §6：`MIGRATION.md` 表头与 `desktop/renderer/README.md` 目录树留给合回者；i6 给了要粘贴的四行（settings/）→ **本单元第 4、5 条**。
+
