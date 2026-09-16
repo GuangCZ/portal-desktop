@@ -682,15 +682,15 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 
 | 模块 | 状态 |
 | --- | --- |
-| types.ts | 已移植（typecheck 通过，测试未写） |
-| vendored.ts (sanitizeText / desktopEnvironment / consoleEnvironment) | 已移植 |
-| worker-events.ts | 已移植 |
-| native-worker-results.ts | 已移植 |
-| agent-kits.ts | 已移植 |
-| agent-process.ts | 已移植 |
-| orchestration-policy.ts | 已移植 |
-| worker-callbacks.ts | 已移植 |
-| orchestration.ts | 已移植 |
+| types.ts | 已移植（无独立测试；被全部测试间接覆盖） |
+| vendored.ts (sanitizeText / desktopEnvironment / consoleEnvironment) | 已移植，测试通过（redaction / env 用例） |
+| worker-events.ts | 已移植，测试通过（manager 测试里 3 条映射用例） |
+| native-worker-results.ts | 已移植，测试通过 |
+| agent-kits.ts | 已移植，测试通过（manager 测试里 detection 用例 + CLI 参数断言） |
+| agent-process.ts | 已移植，测试通过 |
+| orchestration-policy.ts | 已移植，测试通过 |
+| worker-callbacks.ts | 已移植，测试通过 |
+| orchestration.ts | 已移植，测试通过 |
 
 测试（tests/orchestration-*.test.ts）：
 
@@ -746,3 +746,28 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 
 已恢复：上一轮会话在最后一次 WIP 提交后写出了全部 9 个 TS 模块但未提交；本轮先落盘（`npm run typecheck` 通过），
 再逐模块对照 BeingDesktop 源码校验保真度，然后写测试。
+
+---
+
+## 门槛（2026-09-16 收尾）
+
+- `npm run typecheck`：通过。
+- `npx vitest run`：`Test Files  49 passed | 7 skipped (56)` / `Tests  360 passed | 29 skipped (389)`。
+  基线是 309 通过 / 16 跳过；本单元净增 51 条通过、13 条 skip（全部是跨单元依赖，见上）。
+- `git diff --name-status 4921932 HEAD` 全为 `A`：只新增文件，没有改动任何既有文件。
+
+## 集成阶段需要接回的注入点
+
+| 注入参数 | 来源模块（BeingDesktop） | 目前的默认值 |
+| --- | --- | --- |
+| `OrchestrationPolicy.validDesktopId` / `desktopPortalName` | src/desktop-identity.cjs | 模块内逐行照抄的默认实现 |
+| `createCallbackSender/createContinuationSender` 的 `parseConnection` / `sessionPartition` | src/security.cjs | 无默认值（必填），测试里注入逐行副本 |
+| `createCallbackSender/createContinuationSender` 的 `fetchImpl` | main.cjs 用 Electron `net.fetch` | `globalThis.fetch` |
+| `createContinuationSender` 的 `getTarget` | DesktopToolLink `link.capabilities().place` | 无默认值（必填） |
+| `WorkerCallbacks.send` / `resume` / `ready` / `toolsReady` / `report` / `now` | main.cjs boot()（见"main.cjs boot() wiring"） | null / `()=>true` / `Date.now` |
+| `Orchestration.presentation` | WorkerPresentation（浏览器单元） | 未设置（`present` 会抛"Desktop 结果展示尚未就绪。"） |
+| `Orchestration.assertEnforced` / `enforcement` | OrchestrationPolicy | 未设置（跳过强制检查） |
+| `Orchestration.getExecutionContext` | main.cjs：`{desktopId, place: desktopTools?.link.capabilities().place}` | `() => ({})` |
+| `Orchestration.detect` / `launch` | agent-kits / agent-process | 本单元自带实现 |
+| `launchAgent` 的 `windowsRunner` / `consoleEnvironment` | src/desktop-console.cjs（DesktopTerminal 单元） | `''`（win32 未注入即抛错）/ vendored 副本 |
+| 请求上下文帧 `WrapMessage` / `UnwrapMessage` | src/orchestration-message.cjs → P1 的 desktop/main/chat/frame.ts | 仅在 types.ts 声明类型，本单元不使用 |
