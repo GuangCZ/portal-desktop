@@ -507,3 +507,61 @@ validTown(value, route, beingId, query):
 相关 `ERRORS` 文案：`IDENTITY_MISMATCH: 'Town 返回的身份与当前 Being 不一致。'`、`INVALID_RESPONSE: 'Being 未返回可核对的 Town 工具结果，已保留上次同步内容。'`、`INCOMPLETE_RESULT`（文案在 being-town-reader 的 ERRORS 表后半段，本单元只需要 code）。
 
 移植决定：把 `validTown` 原样移植为 `desktop/main/town/session/result-contract.ts` 的 `validateTownToolResult`，同时在 `TownClient` 构造参数里开放 `validateResult` 注入点（默认指向这份移植），供后续集成阶段接回 BeingDesktop 的中继实现。
+
+### 测试 test/town-client.test.cjs（228 行，21 个用例，已读完）
+
+夹具（原样照抄）：
+```js
+const token = 'a'.repeat(64);
+const json = (v, status = 200) => new Response(JSON.stringify(v), {status, headers: {'Content-Type': 'application/json'}});
+const bonfire = {ok: true, messages: [{seq: 1, being: 'alice', message: '原文', at: '2026-09-10T00:00:00Z'}], global_latest_seq: 1};
+const tick = () => new Promise(r => setImmediate(r));
+function fixture(fetchImpl) {
+  let context = {key: 'account-a', beingId: 'alice', revision: 1, connected: true};
+  const calls = [], saved = [], events = [];
+  let stream;
+  const store = {load: async () => token, save: async (...v) => saved.push(v), remove: async () => {}};
+  const client = new TownClient({getContext: () => context, store, retryMs: 10,
+    onEvent: e => events.push(e), fetchImpl: async (url, options) => {
+      calls.push({url: new URL(url), options});
+      if (fetchImpl) return fetchImpl(url, options);
+      if (new URL(url).pathname === '/api/client/stream') return new Response(new ReadableStream({start(c) { stream = c; options.signal.addEventListener('abort', () => { try { c.close(); } catch {} }); }}), {headers: {'Content-Type': 'text/event-stream'}});
+      if (new URL(url).pathname === '/api/bonfire/mentions') return json({being: 'alice', mentions: []});
+      return json(bonfire);
+    }});
+  return {client, calls, saved, events, store,
+    switch: () => {context = {...context, beingId: 'bob', key: 'account-b', revision: 2}; client.reset();},
+    end: () => stream.close(),
+    push: (type, data) => stream.enqueue(new TextEncoder().encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`))};
+}
+const writeFixture = fetchImpl => fixture((url, options) => new URL(url).pathname === '/api/bonfire/mentions' ? json({being:'alice', mentions:[]}) : fetchImpl(url, options));
+```
+> 注意 fixture 的 context **只有 `beingId`，没有 `loomBeingId`** —— 走 `c.loomBeingId || c.beingId` 分支。`store` 只有 `load`（没有 `loadCredential`），走 `{token: await store.load(...)}` 分支。
+
+用例名清单（21 条，顺序即原文件顺序）：
+1. `SDK direct reads use only Town client bearer auth, verify identity, preserve full text` —— TownSession + readImpl 组合；`f.calls.length === 2`；每次调用 origin 是 `https://beings.town`、无 `token` 查询参数、有 `Bearer`、`redirect:'error'`、`credentials:'omit'`；首个调用 `since_id === '9223372036854775807'`。
+2. `unpaired reads never dispatch to Being or fall back to anonymous Town` —— `store.load = async () => null` → `AUTH_REQUIRED`，`calls.length === 0`。
+3. `wrong identity stops before fetching message history` —— mentions 返回 `being:'bob'` → `IDENTITY_MISMATCH`，`calls.length === 1`。
+4. `stale REST response cannot cross a Being switch` —— pending 中 `f.switch()` → `SESSION_CHANGED`。
+5. `REST failures redact upstream messages and do not retry or return partial results` —— 401/403→`AUTH_REQUIRED`，429→`RATE_LIMITED`，500→`SERVICE_ERROR`；错误文案不含 token；`calls.length === 1`。
+6. `route allowlist excludes token management and arbitrary hosts` —— `['/api/client/token','/api/token','https://evil.test/api','//evil.test/api']` 全 `INVALID_REQUEST`；`/api/messages` 带任何 query（`{limit:10}`/`{since:1}`/`{token:'injected'}`）全 `INVALID_REQUEST`；`/api/bonfire/hear` 带 `{limit:false}`/`{limit:{}}`/`{limit:201}`/`{limit:'1e2'}`/`{token:'injected'}` 全 `INVALID_REQUEST`；`calls.length === 0`。
+7. `pair persists only encrypted-store input and returns public status without token` —— confirm 返回 `{ok:true, being_id:'alice', token}`；`saved.map(a => a.slice(0,5))` 等于 `[['account-a','alice',token,'','']]`；`saved[0][5]()` 为 `false`（成功配对后的 reset 使旧请求守卫失效）；结果 JSON 不含 token；confirm 请求无 Authorization；body 等于 `{being_id:'alice', code:'AB3XY9'}`。
+8. `secure storage unavailable fails before consuming the one-time pairing code` —— `store.assertAvailable` 抛 `AUTH_REQUIRED` → `calls.length === 0`。
+9. `SSE authenticates hello, emits only safe invalidation hints, and stops on identity change` —— events 为 `[{type:'hello'},{type:'bonfire'},{type:'fireside',firesideId:'7'},{type:'dm'}]`；events 与 state 的 JSON 都不含 token；`state().status === 'connected'`；`switch()` 后 `state().paired === false`。
+10. `SSE distinguishes anonymous, protocol errors and foreign identities without accepting hints` —— 三组：`token_kind:'being'`→`reconnecting`；`being_id:'bob'`→`identity_mismatch`；`{anonymous:true}`→`auth_required`；后两者 `client._timer === null`；`events.length === 0`。
+11. `SSE data before hello is rejected; network EOF reconnects and hello requests reconciliation` —— hello 前推 bonfire → `events.length === 0`，status `reconnecting`，`_timer` 为真。
+12. `fragmented UTF-8, CRLF, comments, multiline data and incomplete EOF are parsed safely` —— 输入 `': heartbeat\r\nevent: bonfire\r\ndata: {"message":\r\ndata: "中文"}\r\n\r\nevent: dm\ndata: {"partial":true}'`，**逐字节** enqueue；结果只有 `[{type:'bonfire', data:{message:'中文'}}]`。
+13. `oversized SSE event is cancelled without publishing` —— `'data: ' + 'a'.repeat(1024*1024+1)` → `INVALID_RESPONSE`，`cancelled === true`。
+14. `SSE EOF reconnects once and revalidates hello before reconciling` —— hello → `retryMs = 10` → `end()` → 等 30ms → `calls.length === 2`、status `connecting`；再 hello → events `[{hello},{hello}]`；所有调用无 token 查询参数且有 Bearer；`lifecycle({enabled:false})` 后 `_stream === null`、`_timer === null`。
+15. `paired speak posts directly with the client token and never dispatches a Being turn` —— 回执 `{ok:true, id:'892', seq:892, mentions:['bob'], via:'client:my-desktop'}`；`calls.length === 2`；`url.href === 'https://beings.town/api/bonfire/speak'`；`method === 'POST'`；body `{message:'大家好'}`。
+16. `fireside speak carries the ring id and reports non-membership as not sent` —— body `{message:'在圈里说话', fireside_id:10}`；403 → `NOT_SENT`。
+17. `speak rejects over-limit text locally instead of letting bonfire truncate it silently` —— 4001 字符 / 32001 字符 → `NOT_SENT`，`calls.length === 0`；`'字'.repeat(4000)` 能发出，`calls.length === 2`。
+18. `an unconfirmed write is never reported as unsent, and an unpaired one asks for pairing` —— fetch 抛 `TypeError` → `RESULT_UNKNOWN`；未配对 → `AUTH_REQUIRED`，`calls.length === 0`。
+19. `a receipt for another being is treated as unconfirmed rather than accepted` —— `being:'mallory'` → `RESULT_UNKNOWN`。
+20. `an IP-trusted host reporting via=being is surfaced, not rejected` —— `via:'being'` 原样返回。
+21. `bonfire shows the server display name, matching fireside, instead of the being id` —— `speaker_name:'Alice'` → `beingName === 'Alice'`、`beingId === ''`、`authorUnknown === true`。
+22. `reply metadata is carried on reads and sent on speak, and only for a real parent` —— 读：`messages[0].replyTo === undefined`、`messages[1].replyTo` 等于 `{id:'1', beingId:'alice', preview:'原帖'}`；写：body `{message:'我也说一句', reply_to:1}`；`replyTo:'abc'` → `NOT_SENT`。
+23. `inbox reads over the client token and keeps the order Town returned` —— 顺序 `['m2','m1']`；`senderName` 分别 `'Bob'`/`'carol'`；`via:'client:phone'`；`replyTo` 等于 `{id:'m0', beingId:'alice', preview:'更早'}`；最后一次调用 `https://beings.town/api/messages` 带 Bearer。
+24. `a private message to yourself is refused locally, before any request` —— `recipient:'alice'` → `NOT_SENT`，`calls.length === 0`；`recipient:'bob'` → `{ok:true, id:'m9', recipient:'bob', via:'client:desk'}`，body `{recipient:'bob', content:'hi'}`。
+
+（实际 `test(...)` 调用 24 次；上面编号即用例数 **24**。）
