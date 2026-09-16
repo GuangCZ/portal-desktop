@@ -337,3 +337,12 @@ P1 的 chat 子系统原样搬进 `subsystems/chat.ts`，成为这套注册方�
 - **`connectionCleared()` 依然没有调用方。** 接口和扇出都在，`main.ts` 从来没有接过它——这是 P1 就有的缺口，I0 没有顺手改。
 - **`npm run start` 的人工冒烟没做**（本机缺 Rust 工具链，`resources/heart-portal` 不存在；打包验证用的是临时 stub）。
 - **Linux 的 node-pty 没有 prebuild**，`MakerZIP` 的 linux 目标需要构建机上有 python3 + make + g++，本次未验证。
+
+## 集成阶段 I1–I7：并行单元（2026-09-16）
+
+I0 的接缝铺好之后，五到七个单元在各自的 worktree 里把移植进来的类接成真实子系统。
+每个单元写自己的 `docs/migration/i<N>-*.md`，**这里只加一行表格项**。
+
+| 单元 | 产出 | 记录 |
+| --- | --- | --- |
+| I3 终端 + 内置工具浏览器 | `main/subsystems/{terminal,tool-browser}.ts`、`main/tools/{terminal,browser}/ipc.ts`、`main/tools/terminal/node-pty.ts`、`preload/channels/{terminal,tool-browser}.ts`、`shared/{terminal,tool-browser}-types.ts`、`renderer/{terminal,tool-browser}/` | `docs/migration/i3-terminal-browser.md` |
