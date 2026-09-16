@@ -17,8 +17,7 @@ export function portalConfig(settings: Settings): string {
 }
 
 export function portalArguments(config: string, settings: Settings): string[] {
-  // Saved client switches also apply when reusing a TOML, without rewriting its
-  // tools, relative paths, comments or security policy.
+  // Managed desktop settings override legacy TOMLs without rewriting them.
   return ['--config', config, '--name', settings.portalName,
     '--exec-enabled', String(settings.allowExec), '--kits-enabled', String(settings.kitsEnabled)];
 }

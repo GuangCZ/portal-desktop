@@ -54,6 +54,7 @@ export function TownComposer({ model }: { model: TownModel }) {
             onClick={close}
           ></button>
         </div>
+        <div className="dialog-body">
         <p
           id="town-send-context"
           className="field-help"
@@ -131,6 +132,7 @@ export function TownComposer({ model }: { model: TownModel }) {
         <p id="town-send-notice" className="field-help" role="status" hidden={!town.sendNotice}>
           {town.sendNotice}
         </p>
+        </div>
         <div className="dialog-footer">
           <span
             id="town-send-count"

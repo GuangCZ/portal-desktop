@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { PortalSupervisor } from '../desktop/main/portal/supervisor';
@@ -13,13 +13,19 @@ const data = (result: any) => JSON.parse(result.content.find((item: any) => item
 
 // A local relay and disposable profile exercise the exact bundled engine without
 // Electron windows, login registrations or contacting a real Being.
-it.skipIf(process.platform !== 'win32')('uses the bundled Portal for exec, background sessions and workspace screenshots with no shell on PATH', async () => {
+it.skipIf(process.platform !== 'win32').each([
+  { environment: 'normal', restricted: false },
+  { environment: 'restricted', restricted: true },
+])('uses the bundled Portal for exec, background sessions and workspace screenshots with $environment PATH', async ({ environment, restricted }) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'portal-tools-native-'));
   const workspace = path.join(root, "中文 workspace ' fixture");
   await mkdir(workspace);
   const binary = path.resolve('resources/heart-portal.exe');
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   let relay: any, id = 0;
+  let phase = 'start';
+  const operations: { id: number; operation: string; milliseconds: number; error?: string }[] = [];
+  const diagnostic = () => `${portal.state.phase}: ${portal.state.message}\n${portal.state.logs.slice(-30).join('\n')}`;
   const pending = new Map<number, { resolve(value: any): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   server.on('connection', (socket: any) => {
     let ready = false;
@@ -32,13 +38,45 @@ it.skipIf(process.platform !== 'win32')('uses the bundled Portal for exec, backg
       clearTimeout(request.timer); pending.delete(message.id);
       if (message.error) request.reject(new Error(JSON.stringify(message.error))); else request.resolve(message.result);
     });
+    socket.on('close', () => {
+      if (relay !== socket) return;
+      relay = null;
+      for (const request of pending.values()) {
+        clearTimeout(request.timer);
+        request.reject(new Error(`Local Portal relay closed\n${diagnostic()}`));
+      }
+      pending.clear();
+    });
   });
-  const rpc = (method: string, params: unknown = {}): Promise<any> => new Promise((resolve, reject) => {
+  const rpc = async (method: string, params: Record<string, unknown> = {}): Promise<any> => {
     const requestId = ++id;
-    const timer = setTimeout(() => { pending.delete(requestId); reject(new Error('Local Portal RPC timed out')); }, 15_000);
-    pending.set(requestId, { resolve, reject, timer });
-    relay.send(JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }));
-  });
+    const operation = [method, params.name, (params.arguments as { action?: string })?.action].filter(Boolean).join(' ');
+    const started = Date.now();
+    phase = operation;
+    console.info(`[portal-tools] #${requestId} ${operation}: start`);
+    let failure: string | undefined;
+    try {
+      return await new Promise((resolve, reject) => {
+        if (relay?.readyState !== 1) { reject(new Error(`Local Portal relay is not open\n${diagnostic()}`)); return; }
+        // Exec and screenshot have 30s engine deadlines. The RPC deadline must
+        // allow their error response to arrive rather than hide it at 15s.
+        const timer = setTimeout(() => {
+          pending.delete(requestId);
+          reject(new Error(`Local Portal RPC #${requestId} ${operation} timed out after ${Date.now() - started}ms\n${diagnostic()}`));
+        }, 40_000);
+        pending.set(requestId, { resolve, reject, timer });
+        relay.send(JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }), (error?: Error) => {
+          if (!error) return;
+          clearTimeout(timer); pending.delete(requestId); reject(error);
+        });
+      });
+    } catch (error) { failure = String(error); throw error; }
+    finally {
+      const entry = { id: requestId, operation, milliseconds: Date.now() - started, error: failure };
+      operations.push(entry);
+      console.info('[portal-tools]', JSON.stringify(entry));
+    }
+  };
   const call = async (name: string, args: unknown) => {
     const result = await rpc('tools/call', { name, arguments: args });
     expect(result.isError, JSON.stringify(result)).not.toBe(true);
@@ -52,14 +90,14 @@ it.skipIf(process.platform !== 'win32')('uses the bundled Portal for exec, backg
     expect(options.env.PATH).toContain('WindowsPowerShell\\v1.0');
     expect(Object.keys(options.env).filter(key => key.toLowerCase() === 'path')).toEqual(['PATH']);
     launched = true;
-    // The client has repaired PATH. Remove it again only in this fixture to
-    // independently verify the engine's absolute shell and screenshot launches.
-    return spawn(file, args, { ...options, env: { ...options.env, PATH: workspace } });
+    // Also cover ordinary Windows launches. The restricted case separately
+    // checks the engine's shell/screenshot discovery without a usable PATH.
+    return spawn(file, args, restricted ? { ...options, env: { ...options.env, PATH: workspace } } : options);
   }) as typeof spawn);
   try {
     await new Promise<void>(resolve => server.once('listening', resolve));
     await portal.start({ endpoint: '', being: '', hasToken: true, workspace, portalBinary: binary, portalName: 'native-tools-fixture',
-      autoStart: false, allowExec: true, kitsEnabled: false, portalEnvironmentPath: workspace },
+      autoStart: false, allowExec: true, kitsEnabled: false, ...(restricted ? { portalEnvironmentPath: workspace } : {}) },
     parseConnection(`http://127.0.0.1:${server.address().port}/${path.basename(root)}/?token=local-fixture`));
     await vi.waitFor(() => expect(portal.state.phase, portal.state.message).toBe('connected'), { timeout: 15_000 });
     expect(launched).toBe(true);
@@ -88,12 +126,22 @@ it.skipIf(process.platform !== 'win32')('uses the bundled Portal for exec, backg
     expect((await rpc('tools/call', { name: 'portal_file_read', arguments: { path: outside } })).isError).toBe(true);
     expect(await readFile(outside).catch(() => null)).toBeNull();
     expect(portal.state.phase).toBe('connected');
+  } catch (error) {
+    await mkdir('test-results', { recursive: true });
+    await writeFile(`test-results/portal-tools-native-${environment}-failure.json`, JSON.stringify({ phase, operations, state: portal.state, error: String(error) }, null, 2));
+    throw error;
   } finally {
-    await portal.stop();
-    for (const request of pending.values()) clearTimeout(request.timer);
-    for (const client of server.clients) client.terminate();
-    await new Promise<void>(resolve => server.close(() => resolve()));
-    expect(path.dirname(root)).toBe(path.resolve(os.tmpdir()));
-    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    try { await portal.stop(); }
+    finally {
+      for (const request of pending.values()) {
+        clearTimeout(request.timer);
+        request.reject(new Error('Local Portal fixture is closing'));
+      }
+      pending.clear();
+      for (const client of server.clients) client.terminate();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      expect(path.dirname(root)).toBe(path.resolve(os.tmpdir()));
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   }
-}, 45_000);
+}, 180_000);

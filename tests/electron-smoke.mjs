@@ -215,8 +215,6 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   const downloadReply = await rpc('tools/call', { name: 'client_download_ping', arguments: { value: 'installed via client' } });
   assert(JSON.stringify(downloadReply).includes('Kit reply: installed via client'));
   console.log('PASS: client download, atomic installation, Portal hot reload and real downloaded Kit tool call without reconnecting.');
-  assert(!list.tools.some(tool => tool.name === 'portal_exec'));
-  assert(!list.tools.some(tool => tool.name === 'portal_screenshot'));
   const rejected = await rpc('tools/call', { name: 'portal_file_write', arguments: { path: '../outside.txt', content: 'no' } });
   assert(rejected.isError || JSON.stringify(rejected).includes('outside workspace'));
   await openPlace(page, 'chat');

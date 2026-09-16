@@ -60,14 +60,18 @@ body:not([data-view=chat]) #conversation-name{display:none}
 .log-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}.log-heading h2{font-size:13px}.log-heading span{font-size:11px;color:var(--muted)}
 #portal-logs{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:18px;color:var(--secondary);font:11px/1.9 ui-monospace,SFMono-Regular,Consolas,monospace;height:230px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
 .portal-foot{font-size:11px;color:var(--muted);margin-top:14px}
-dialog{padding:0;width:580px;max-height:90vh;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:16px;color:var(--text);box-shadow:0 24px 100px #0003}dialog::backdrop{background:#0004;backdrop-filter:blur(5px)}
-#settings-form,#town-auth-form,.kit-install-form,.client-settings-content{padding:28px}.dialog-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}.dialog-heading h2{font-size:21px;font-weight:550}
-form>label,.field-row label{display:block;font-size:12px;margin:18px 0 7px;color:var(--secondary)}
+dialog{padding:0;width:580px;max-height:90vh;overflow:hidden;background:var(--bg);border:1px solid var(--line);border-radius:16px;color:var(--text);box-shadow:0 24px 100px #0003}dialog::backdrop{background:#0004;backdrop-filter:blur(5px)}
+dialog[open]:not(#place-sheet){display:flex;flex-direction:column}
+#settings-form,#town-auth-form,.kit-install-form,.client-settings-content,#town-send-form{display:flex;flex-direction:column;min-height:0;flex:1;width:100%;overflow:hidden;padding:0}
+.dialog-heading{display:flex;align-items:center;justify-content:space-between;flex-shrink:0;gap:16px;padding:28px 28px 16px;margin:0}.dialog-heading h2{font-size:21px;font-weight:550;margin:0}
+.dialog-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:4px 28px 18px;scrollbar-gutter:stable}
+.dialog-body>label:first-child,.dialog-body>.field-row:first-child label,.dialog-body>.connection-description:first-child{margin-top:0}
+form label,.field-row label,.dialog-body>label,.dialog-body .field-row label{display:block;font-size:12px;margin:18px 0 7px;color:var(--secondary)}
 input:not([type=checkbox]){width:100%;border:1px solid var(--line);color:var(--text);background:var(--control);border-radius:8px;padding:10px 11px;font-size:13px;min-width:0}input::placeholder{color:var(--muted);font-size:12px}
 .field-help{font-size:11px;color:var(--muted);line-height:1.8;margin:7px 0}.picker{display:flex;gap:8px}.picker button{border:1px solid var(--line);border-radius:8px;font-size:12px;white-space:nowrap;padding:0 14px}
 .switch-list{border-top:1px solid var(--line);margin-top:22px;padding-top:9px}.switch-list label{display:flex;align-items:center;justify-content:space-between;padding:11px 0;gap:20px}.switch-list label span{display:flex;flex-direction:column;gap:4px}.switch-list strong{font-size:12px;font-weight:500}.switch-list small{font-size:11px;color:var(--muted)}
 input[type=checkbox]{appearance:none;width:30px;height:18px;border-radius:10px;background:var(--muted);position:relative;flex-shrink:0;cursor:pointer}input[type=checkbox]:before{content:'';width:12px;height:12px;position:absolute;left:3px;top:3px;border-radius:50%;background:var(--bg);transition:transform .15s}input[type=checkbox]:checked{background:var(--accent)}input[type=checkbox]:checked:before{transform:translateX(12px)}
-.form-error{color:#c5674e;font-size:12px;min-height:16px;white-space:pre-wrap}.dialog-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:20px}.dialog-footer>span{font-size:11px;color:var(--muted)}
+.form-error{color:#c5674e;font-size:12px;min-height:16px;white-space:pre-wrap}.dialog-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0;margin:0;padding:16px 28px 28px;border-top:1px solid var(--line);background:var(--bg)}.dialog-footer>span{font-size:11px;color:var(--muted)}
 #toast{position:fixed;top:18px;left:50%;transform:translateX(-50%);max-width:min(600px,calc(100vw - 32px));margin:0;border:1px solid var(--line);background:var(--bg);color:var(--text);padding:12px 18px;border-radius:10px;box-shadow:0 10px 35px #0003;font-size:12px;z-index:2147483647}
 #toast:not(:popover-open){display:none}
 .eyebrow{font-size:10px;letter-spacing:1px;color:var(--muted)}
@@ -152,9 +156,13 @@ html[data-theme=dark] .mention-tag,html[data-theme=dark] .mentions-me .social-av
 #town-send-count{font-size:12px;font-variant-numeric:tabular-nums}.over-limit{color:#b34b47!important}.send-shortcut{font-size:11px;color:var(--muted)}
 
 /* Catalog panes share the space left inside the sheet, including short windows. */
+#place-sheet #town-view.paginated-view{overflow:hidden}
+#place-sheet .paginated-view .town-content{height:100%;min-height:0;width:100%;display:flex;flex-direction:column;padding-bottom:18px}
+#place-sheet .paginated-view .town-toolbar,#place-sheet .paginated-view .town-live-row,#place-sheet .paginated-view .list-status{flex-shrink:0}
+#place-sheet .paginated-view #town-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
+#place-sheet .paginated-view #town-pagination{flex-shrink:0;gap:16px;margin-top:12px}
+#place-sheet .paginated-view #town-pagination:empty{display:none}
 #place-sheet #town-view:is(.kit-catalog,.seed-catalog){overflow:hidden}
-#place-sheet :is(.kit-catalog,.seed-catalog) .town-content{height:100%;min-height:0;width:100%;display:flex;flex-direction:column;padding-bottom:18px}
-#place-sheet :is(.kit-catalog,.seed-catalog) .town-toolbar,#place-sheet :is(.kit-catalog,.seed-catalog) .town-live-row,#place-sheet :is(.kit-catalog,.seed-catalog) .list-status{flex-shrink:0}
 #place-sheet :is(.kit-catalog,.seed-catalog) #town-body{flex:1;min-height:0;display:flex;overflow:auto}
 #place-sheet :is(.kit-catalog,.seed-catalog) .catalog-split{flex:1;min-width:0;min-height:0;align-items:stretch;grid-template-columns:minmax(200px,.8fr) minmax(0,1.4fr)}
 #place-sheet :is(.kit-catalog,.seed-catalog) .catalog-list,#place-sheet :is(.kit-catalog,.seed-catalog) .catalog-detail{min-width:0;min-height:0;max-height:none;overscroll-behavior:contain;scrollbar-gutter:stable}
@@ -163,8 +171,6 @@ html[data-theme=dark] .mention-tag,html[data-theme=dark] .mentions-me .social-av
 #place-sheet :is(.kit-catalog,.seed-catalog) .catalog-item>*{max-width:100%}
 #place-sheet :is(.kit-catalog,.seed-catalog) .catalog-detail{padding:24px 12px 24px 24px}
 #place-sheet :is(.kit-catalog,.seed-catalog) .detail-placeholder{min-height:0;height:100%;padding:24px;text-align:center;line-height:1.8}
-#place-sheet :is(.kit-catalog,.seed-catalog) #town-pagination{flex-shrink:0;gap:16px;margin-top:12px}
-#place-sheet :is(.kit-catalog,.seed-catalog) #town-pagination:empty{display:none}
 #place-sheet :is(.kit-catalog,.seed-catalog) .loading-block,#place-sheet :is(.kit-catalog,.seed-catalog) .empty-state{min-height:0;width:100%;margin:auto}
 .kit-detail{overflow-wrap:anywhere}
 .kit-summary .reading-title{margin-bottom:6px}
@@ -248,6 +254,14 @@ body:not([data-view=chat]):not([data-view=portal]) #view-title{display:none}
 .feed-options .feed-selectors{position:absolute;right:0;top:34px;z-index:3;display:grid;width:240px;padding:16px;gap:12px;background:var(--control);border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 25px #00000014}
 .feed-options .feed-select{justify-content:space-between}
 .feed-options .feed-select select{width:140px;max-width:140px}
+#place-sheet #town-view.social-view{overflow:hidden}
+#place-sheet .social-view .town-content{height:100%;min-height:0;width:100%;display:flex;flex-direction:column;padding-bottom:18px}
+#place-sheet .social-view .town-toolbar,#place-sheet .social-view .town-live-row,#place-sheet .social-view .list-status{flex-shrink:0}
+#place-sheet .social-view #town-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+#place-sheet .social-view .feed-controls{position:sticky;top:0;z-index:2;background:var(--bg)}
+#place-sheet .social-view .fireside-thread-heading{position:sticky;top:0;z-index:3;min-height:44px;background:var(--bg)}
+#place-sheet .social-view .fireside-thread-heading h2{margin:0}
+#place-sheet .social-view .fireside-thread .feed-controls{top:44px}
 @container stage (max-width:570px){#scene-invitation{display:none}.scene-place #scene-location{font-size:19px;max-width:280px}.town-toolbar #town-search{width:160px}.town-header-actions{margin-left:auto}}
 
 /* The conversation belongs to two participants; navigation stays out of the way. */
@@ -344,7 +358,7 @@ body[data-view=chat].has-topic .scene-ribbon{display:flex!important;min-height:0
 .social-foot .scene-select{margin:0;padding:4px 9px;border-radius:8px}
 .social-foot .scene-select:first-of-type{margin-left:auto}
 @media(prefers-reduced-motion:reduce){#place-sheet[open],#client-settings-dialog[open],#companion-panel:not([hidden]){animation:none}.options-menu button{transition:none}}
-.settings-tabs{display:flex;gap:4px;padding:4px;margin-top:22px;background:var(--surface);border-radius:12px}
+.settings-tabs{display:flex;gap:4px;flex-shrink:0;padding:4px;margin:0 28px 8px;background:var(--surface);border-radius:12px}
 .settings-tabs button{flex:1;min-height:34px;padding:6px 8px;border-radius:9px;font-size:12px;color:var(--secondary);white-space:nowrap}
 .settings-tabs [aria-selected=true]{background:var(--control);color:var(--text);box-shadow:0 1px 4px #00000008}
 #client-settings-dialog [role=tabpanel]{min-height:270px}

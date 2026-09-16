@@ -66,6 +66,9 @@ try {
   await persist();
   await requirePortalSource();
   await npm('typecheck', ['run', 'typecheck']);
+  // Native Windows unit tests exercise the bundled Portal from resources/.
+  // Build it before Vitest; a clean CI checkout has no generated binary yet.
+  if (!flags.has('--reuse-package')) await npm('build-portal', ['run', 'build:portal']);
   await npm('unit', ['test', '--', '--reporter=default', '--reporter=junit', '--outputFile.junit=test-results/unit.xml']);
   await npm('menu-keyboard', ['run', 'test:menu-keyboard']);
   await npm('update-progress', ['run', 'test:update-progress']);
@@ -75,7 +78,6 @@ try {
   // Some engine tests share process-level environment variables; serialize Rust tests.
   await step('portal-rust', 'cargo', ['test', '--locked', '-p', 'heart-portal', '--', '--test-threads=1'], source);
   if (!flags.has('--reuse-package')) {
-    await npm('build-portal', ['run', 'build:portal']);
     await npm('package', ['run', 'package']);
   }
   await npm('client-lifecycle', ['run', 'test:client-lifecycle']);

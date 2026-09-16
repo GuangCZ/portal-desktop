@@ -16,13 +16,17 @@ export function Town({ model }: { model: TownModel }) {
     definition = definitions[town.view],
     channel = town.channel(),
     social = Boolean(channel),
+    paginated =
+      !town.directId &&
+      (["embers", "scrolls", "seeds"].includes(town.view) ||
+        (town.view === "kits" && town.tab === "grove")),
     root = useRef<HTMLElement>(null);
   useLayoutEffect(() => { if (root.current) root.current.scrollTop = 0; }, [town.view, town.directId]);
   return (
     <section
       id="town-view"
       ref={root}
-      className={`view${social ? " social-view" : ""}${town.view === "embers" ? " bookshelf-view" : ""}${town.view === "kits" && town.tab === "grove" && !town.directId ? " kit-catalog" : ""}${town.view === "seeds" && !town.directId ? " seed-catalog" : ""}`}
+      className={`view${social ? " social-view" : ""}${paginated ? " paginated-view" : ""}${town.view === "embers" ? " bookshelf-view" : ""}${town.view === "kits" && town.tab === "grove" && !town.directId ? " kit-catalog" : ""}${town.view === "seeds" && !town.directId ? " seed-catalog" : ""}`}
       hidden={!definition}
     >
       <div className="town-content">

@@ -25,6 +25,7 @@ export function KitInstall({ model }: { model: TownModel }) {
             onClick={() => town.closeInstall()}
           />
         </div>
+        <div className="dialog-body">
         <p>{plan.description}</p>
         <p className="card-meta">
           v{plan.version} · {plan.tools} 个声明工具
@@ -65,6 +66,7 @@ export function KitInstall({ model }: { model: TownModel }) {
         <p className="form-error" role="alert">
           {town.installError}
         </p>
+        </div>
         <div className="dialog-footer">
           <span>Portal 会自动刷新 Kit 清单</span>
           <button className="primary" type="submit" disabled={town.installBusy}>

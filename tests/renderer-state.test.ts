@@ -401,6 +401,27 @@ describe("Town request and identity isolation", () => {
       "sent",
     ]);
   });
+  it("keeps the private-message tab selected after sending", async () => {
+    const townApi = vi.fn(async (_query: import("../desktop/shared/types").TownQuery) =>
+      result({ messages: [] }),
+    );
+    const sendTown = vi.fn(async () => result({ ok: true }));
+    const { model } = town({ town: townApi, sendTown });
+    model.live = live();
+    model.view = "mail";
+    model.tab = "all";
+    model.tabs.mail = "all";
+    model.compose();
+    model.recipient = "river";
+    model.content = "reply without changing my view";
+    await model.send();
+    expect(model.tab).toBe("all");
+    expect(model.tabs.mail).toBe("all");
+    expect(townApi.mock.calls.map(([query]) => query.kind)).toEqual([
+      "inbox",
+      "sent",
+    ]);
+  });
   it("rejects a stale sender identity and clears credentials when closing pairing", async () => {
     const sendTown = vi.fn();
     const { model } = town({ sendTown });
