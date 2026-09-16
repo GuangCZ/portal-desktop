@@ -300,10 +300,11 @@ ToolLink=DesktopToolLink}`。
 | browser-links | test/browser-links.test.cjs | tests/tools-browser-links.test.ts | 测试通过（5/5） |
 | network | test/desktop-network.test.cjs | tests/tools-network.test.ts | 测试通过（13/13） |
 | console | test/desktop-console.test.cjs | tests/tools-console.test.ts | 测试通过（12/12） |
-| tool-link | test/desktop-tool-link.test.cjs | tests/tools-tool-link.test.ts | 测试通过（86/87，1 skip） |
+| tool-link | test/desktop-tool-link.test.cjs | tests/tools-tool-link.test.ts | 测试通过（87/87） |
 | desktop-tools | test/desktop-tools.test.cjs | tests/tools-desktop-tools.test.ts | 测试通过（16/16） |
 | terminal-tools | test/desktop-terminal-tools.test.cjs | tests/tools-terminal-tools.test.ts | 测试通过（4/4） |
 | worker-presentation | test/worker-presentation.test.cjs | tests/tools-worker-presentation.test.ts | 测试通过（6/6） |
+| loopback relay 夹具 | test/integration/portal-loopback.cjs | tests/tools-portal-loopback.ts | 已移植（只取 frame/LoopbackRelay/until） |
 | console 集成 | test/desktop-console-integration.cjs | tests/tools-console-integration.test.ts | 全部 skip（仅 Windows、需真实 PowerShell） |
 
 ### 移植期补充记录（2026-09-16 第二段）
@@ -324,6 +325,18 @@ ToolLink=DesktopToolLink}`。
 - `desktop-tools` 测试里的 `desktopPortalName` 夹具逐行抄自 `src/desktop-identity.cjs` 5..10 行。
 - `browser-links` 测试同样内联 `normalizeBrowserUrl` + `navigationUrl` 夹具（src/desktop-browser.cjs 16..34 行）。
 - console 测试里的 `__dirname`/`__filename` 换成 `path.resolve("tests")` 与本测试文件路径（vitest 的 cwd 是仓库根）。
+- `terminal-tools.ts` 比 `src/desktop-terminal-tools.cjs` 多三处 `args.sessionId === undefined` /
+  `!== undefined` 守卫（`sessions()` 第 50 行、`invoke()` 第 55 行的 `scope`、`check()` 第 57 行），
+  原因是 strict 模式下 `Map<string, ScopeState>.get()` 不收 `string | undefined`。
+  **三处在运行期都不可达**：`sessionId` 为 `undefined` 时 `Map.get(undefined)` 本就返回 `undefined`，
+  `check()` 里那处又被前面的 `!scope ||` 短路。运行期语义与 BeingDesktop 逐行一致，
+  集成阶段可以直接按原 `.cjs` 的写法机械核对。
+- `platform.ts`（`src/platform.cjs`）不在本单元的模块清单里，是因为 `src/desktop-console.cjs`
+  在模块作用域 require 它才一并移植的。`src/platform.cjs` 在 BeingDesktop 里还被
+  `src/desktop-terminal.cjs` 等模块使用，属于**跨单元共享代码**：并行的终端/安装器单元很可能
+  也移植了同一份。合并时把 `desktopPlatform` / `desktopEnvironment` / `shellPath` 收敛到一处
+  （建议 `desktop/main/platform.ts`），把 `desktop/main/tools/console.ts:10` 的 import 改指过去，
+  删掉多余副本；三份实现应逐字相同，合并不涉及语义取舍。
 
 ---
 
@@ -350,10 +363,42 @@ getWorkspace:()=>state.workspace.path,orchestration,…})`；`portalRequestAdapt
 
 ## 未完成 / 存疑
 
-- `tests/tools-tool-link.test.ts` 的「a local relay performs real native-WebSocket tool discovery and a fixed call」
-  用 `it.skip`：依赖 BeingDesktop `test/integration/portal-loopback.cjs`（279 行的回环 relay 模拟器），
-  不属于本迁移单元。
+- **`ws` 必须从 devDependencies 提到 dependencies（集成阶段唯一必须改的依赖项，本单元无权改
+  `package.json`）。** `desktop/main/tools/tool-link.ts` 的默认传输走
+  `createRequire(import.meta.url)('ws')`（BeingDesktop `src/desktop-tool-link.cjs:7` 是模块顶层
+  `require('ws')`）。portal-desktop 基线把 `ws ^8.21.3` 放在 devDependencies，而
+  `forge.config.ts` 用 `asar: true`、@electron/packager 默认 prune 掉 devDependencies，
+  所以发行版 asar 里没有 `node_modules/ws`，`DesktopTools` 构造 `ToolLink` 时不传
+  `WebSocketImpl`，真实调用面必然 MODULE_NOT_FOUND。BeingDesktop 0.8.26 的 `package.json`
+  里 `"ws": "8.21.3"` 本来就在 dependencies，提级即与来源一致。
+  typecheck 与 vitest 看不见这个问题：开发树里 devDependencies 是装着的。
+
+  **「改成静态 import 让主进程包自带 ws」这条路已实测走不通，不要再试**（2026-09-16 实测，
+  见 MEMORY「协议行为必须实测」）。做法与结果：把 `import { WebSocket } from 'ws'` 写成静态
+  import + 本地 `declare module 'ws'`，按 `@electron-forge/plugin-vite`
+  `dist/config/vite.main.config.js` 与仓库 `vite.main.config.ts` 合并出的真实主进程配置
+  （`build.lib` formats `['cjs']`，external 只有 electron + node builtins）跑 `vite build`：
+  打包**成功**（42 modules，73.5 kB，ws 确实被内联），但在一个上游没有任何 `node_modules`
+  的目录里加载该 bundle 并连真实 relay 时，**第一帧就炸**：
+  `TypeError: bufferUtil.mask is not a function`（`Sender.frame` → `Sender.dispatch` →
+  `WebSocket.send`）。根因是 Vite 把 ws 解析不到的 optional peer dep 换成了空桩
+  （bundle 里可见 `const __viteOptionalPeerDep_bufferutil_ws = {}`，`utf-8-validate` 同样），
+  于是 `lib/buffer-util.js` 里 `try { require('bufferutil') } catch {}` 的 catch 永远不触发，
+  `module.exports.mask` 被覆盖成一个调用空桩的函数。同一次实测也确认了上一段的结论：
+  在那个目录里 `require('ws')` 返回 `MODULE_NOT_FOUND`，即打包后 createRequire 必然失败。
+  结论：**只能提依赖等级**，不能靠打包绕开；`tool-link.ts` 的 `defaultWebSocket` 上方已写下同样的备注。
 - `tests/tools-console-integration.test.ts` 四条全部 `it.skip`：原文件是仅 Windows 的独立脚本
   （首行就 `throw`），要真实 PowerShell 与 Windows job object。
 - `DesktopBrowser` / `DesktopTerminal` / `Orchestration` 的真实实现不在本 worktree，
   `desktop/main/tools/types.ts` 里只有按调用面写的接口；集成阶段要用真实类替换并复核。
+- `platform.ts` 与并行单元可能重复，合并时需收敛（见上「移植期补充记录」最后一条）。
+
+## 复审修复（2026-09-16 第三段）
+
+| 复审发现 | 处理 |
+| --- | --- |
+| medium：`ws` 在 devDependencies，打包后 createRequire 必然 MODULE_NOT_FOUND，且未记录 | 保留 `createRequire`（实测是唯一能跑通的形态），在 `tool-link.ts` 写下 PACKAGING CONTRACT 注释，并把依赖提级列入上面的「未完成 / 存疑」与 openIssues。复审建议的「静态 import + `declare module 'ws'`」实测会打出一个第一帧就崩的包，未采纳，证据见上。 |
+| low：`cleanups` 没有 `afterEach`，断言失败会泄漏真实 WebSocketServer | 已加 `afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); })`，删掉测试体末尾的内联清理，语义与 node:test 的 `t.after` 一致。 |
+| low：loopback 端到端用例被整体 `it.skip` | 已把 `test/integration/portal-loopback.cjs` 的 `frame` / `LoopbackRelay` / `until` 移植为 `tests/tools-portal-loopback.ts`（非 `.test.ts`，vitest 不会收集），恢复该用例的 7 条断言。tool-link 测试现在 87/87，无 skip。 |
+| low：`terminal-tools.ts` 三处未记录的 `sessionId === undefined` 守卫 | 保留守卫（strict 模式下必要），在「移植期补充记录」补一条，写明三处均为不可达的类型收窄、运行期语义不变。 |
+| low：`platform.ts` 跨单元重复 | 在「移植期补充记录」补一条合并指引（收敛到 `desktop/main/platform.ts`，改 `console.ts:10` 的 import）。隔离 worktree 里看不到兄弟单元，只能留给合并阶段。 |
