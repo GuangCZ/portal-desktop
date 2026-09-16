@@ -467,6 +467,58 @@ vitest 改写注意：`assert.rejects(p, c => c === error)` → `await expect(p)
   - 循环结束 `return !this.persistenceError`。
 - `flush()`：`while (this._savePromise) await this._savePromise;` 然后 `return !this.persistenceError`。
 
+### test/feature-task-history.test.cjs（190 行，已逐行读完）—— 10 个用例
+
+夹具（原样照抄）：
+- `encryptedStorage()`：`key = randomBytes(32)`；`isEncryptionAvailable: () => true`；
+  `encryptString(value)` = aes-256-gcm，`iv = randomBytes(12)`，返回 `Buffer.concat([iv, authTag, data])`；
+  `decryptString(value)`：iv = `value.subarray(0,12)`，authTag = `value.subarray(12,28)`，密文 = `value.subarray(28)`。
+- `directory(t)`：在 `path.resolve(__dirname,'../.local')` 下 `mkdtemp('feature-task-history-test-')`，
+  `t.after` 里校验父目录与前缀后 `fs.rm(..., {recursive:true, force:true})`。
+  **vitest 下改用 `os.tmpdir()` 下的 mkdtemp + afterEach 清理**（不能往 portal-desktop 仓库里写文件），前缀保持 `feature-task-history-test-`。
+- `record(beingId = 'cz_being')`：`requestId = randomUUID()`；
+  `{requestId, route:'/api/bonfire/hear', beingId, prompt: \`[Being Desktop Town sync:${requestId}]\\nRaw private prompt goes here.\`}`。
+- `begin = history => history.ledger.begin({feature:'bonfire', operation:'read', title:'读取篝火', execution:'being'})`。
+
+用例：
+1. `encrypts owned requests and ledger atomically, restores interrupted reads for user review` —
+   restore → begin → `register(own)` 为真 → `ledger.update(task.id,{requestId: own.requestId, detail:'读取中'})` → `flush() === true`；
+   密文文件不含 `Raw private prompt` / `读取篝火` 字节；目录内无 `.tmp` 残留；
+   文件名 === `sha256('persist:first').digest('hex') + '.bin'`；
+   每个 onChange 事件的键只有 `tasks`/`persistenceError`，事件 JSON 不含 `Raw private prompt`；
+   新实例 restore 后该任务 status `'needs_input'`、detail 匹配 `/不会自动重发/`、
+   `records[0].requestId === own.requestId`、`records[0].prompt === own.prompt.replace(/\s+/g,' ')`（**归一化折叠空白**）。
+2. `different identities have different encrypted files and exact isolation` — 同目录两个身份，文件路径不同；
+   各自 restore 后只看得见自己的任务（`againA.ledger.get(taskB.id) === null`）。
+3. `corrupt or foreign ciphertext is never replaced after failed restore` — 三种坏文件：
+   `corrupt` = `Buffer.from('corrupt ciphertext')`；`foreign` = 合法密文但 `identityKey:'other'`；
+   `schema` = 合法密文但**缺少顶层 `records` 键**（`Object.keys(payload).length === 3`）；
+   载荷模板：`{version:1, identityKey: ..., ledger:{version:1, identityKey: history.identityKey, records: []}, ...(kind==='schema' ? {} : {records: []})}`；
+   restore 后 begin + register，`flush() === false`、`persistenceError === true`、**磁盘文件与原始字节完全一致**。
+4. `unavailable encryption keeps records in memory and writes no plaintext` —
+   `safeStorage: {isEncryptionAvailable: () => false, encryptString(){encryptionCalls++; return Buffer.from('plaintext');}}`；
+   `flush() === false`、任务仍 `running`、`encryptionCalls === 0`、目录**完全为空**。
+5. `an encryption failure preserves the last complete encrypted version` — 先正常落盘一次留 `original`；
+   把 `encryptString` 换成抛错；complete 后 `flush() === false`；磁盘字节不变；无 `.tmp` 残留。
+6. `serialized saves retain the latest mutation even while the prior write is pending` —
+   包装 `encryptString`：第 1 次调用时 `queueMicrotask(() => history.ledger.complete(task.id,{summary:'The final result'}))`；
+   `begin` 后连续 30 次 `update(task.id,{detail:\`Progress ${i}\`})`；`flush()` 后 `encryptions === 2`；
+   新实例 restore 得到 `succeeded` + summary `'The final result'`；无 `.tmp` 残留。
+7. `registration uses exact normalized owned records, rejects getters and is capped at 256` —
+   同一条 `own` 注册两次都返回真但 `records.length === 1`（按 requestId 去重）；
+   `register({...own, route:'/api/chat/stream'}) === false`（路由不在允许表，且不改动 `_records`）；
+   `Object.defineProperty(unsafe,'prompt',{get(){invoked++; throw ...}})` → `register(unsafe) === false` 且 `invoked === 0`；
+   `register({...own, beingId:'another'}) === false` **且随后 `records.length === 0`**
+   （同 requestId、不同 beingId 会让归一化把这一组整体丢弃）；
+   再注册 258 条新记录 → `records.length === 256`（上限）；`history.records` 是深拷贝（改副本不影响内部）。
+8. `same history restore is idempotent and callback failures do not interrupt work` —
+   `onChange(){throw new Error('Observer failed')}`；并发两次 restore + 之后再 restore 都不替换 `history.ledger` 实例（ENOENT 路径）；
+   任务仍 running；`flush() === true`。
+9. `a changed ledger identity cannot overwrite the original account history` —
+   正常落盘后 `history.ledger.reset({identityKey:'identity-other'})` → `flush() === false`，磁盘字节不变。
+10. `unsafe identities never become filesystem paths` — `['', '../other', 'a/b', 'a\\b', 'a'.repeat(129)]`
+    逐个 `assert.throws(() => new FeatureTaskHistory(...), /identity/)`。
+
 ## 进度
 
 | 模块 | 状态 |
@@ -479,7 +531,7 @@ vitest 改写注意：`assert.rejects(p, c => c === error)` → `await expect(p)
 | src/feature-task-discussion.cjs | 未开始 |
 | test/feature-tasks.test.cjs | 已读（15 个用例） |
 | test/feature-task-runner.test.cjs | 已读（21 个用例） |
-| test/feature-task-history.test.cjs | 未开始 |
+| test/feature-task-history.test.cjs | 已读（10 个用例） |
 | test/feature-task-discussion.test.cjs | 未开始 |
 | test/town-error-ipc.test.cjs（feature-tasks 相关用例） | 未开始 |
 | src/main.cjs boot() 注入面 | 未开始 |
