@@ -265,3 +265,48 @@ Town 缓存、Channel、配对探活。同时重写第 2 节第 1 条列出的�
 
 **P3：工具与外壳。** Desktop 工具桥（`being-desktop-tools-<desktopId>`）、终端、
 浏览器多标签。
+
+---
+
+## 集成阶段 I0：接缝（2026-09-16）
+
+P0、P1 与七个纯移植单元（u1–u7）之后，剩下的工作是把移植进来的类接上 IPC、接上界面。
+那是六到七个彼此独立的单元（Town、工具桥、终端与浏览器、编排与功能任务、对话补全、侧栏与设置、Channel 与 Portal），
+要在各自的 worktree 里并行做。I0 不接任何一个，只铺它们共同需要的接缝，让合回 `next` 时共享文件上**只有 append-only 的一行式冲突**。
+
+详细契约见 `docs/migration/i0-seams.md`。这里只记结论与偏差。
+
+### 造了什么
+
+| 接缝 | 文件 | 后续单元怎么用 |
+| --- | --- | --- |
+| 主进程子系统注册表 | `desktop/main/subsystems/types.ts`、`extensions.ts` | 一个子系统一个 `subsystems/<key>.ts`，在 `INSTALLERS` 加一行 |
+| preload 通道 | `desktop/preload/channels/{bridge,chat,index}.ts` | 一个子系统一个 `channels/<key>.ts`，在 `desktopChannels` 加一行 |
+| shared 类型 | `desktop/shared/desktop-types.ts`（聚合）、`chat-types.ts` | 一个 `shared/<key>-types.ts`，聚合器加一行 `export *` |
+| renderer 插槽 | `desktop/renderer/app/slots.tsx`、`app/models/registry.ts` | 面板 / 侧栏段 / 顶栏动作 / 全屏页各一行；model 一行 |
+| 共享正式实现 | `desktop/main/common/{sanitize,platform,loom-connection,message-context}.ts` | 直接 import，不再各带一份 |
+
+`desktop/main/main.ts` 只改了一处（多传一个 `electron` 门面）。**I0 之后任何单元都不得再改 main.ts、package.json、forge.config.ts、vite.*.config.ts。**
+
+P1 的 chat 子系统原样搬进 `subsystems/chat.ts`，成为这套注册方式的第一个使用者与模板；P1 的全部测试未改一行仍然通过。
+
+### 副本收敛
+
+四份 `sanitizeText`、三份 `desktopEnvironment` / `consoleEnvironment` / `WINDOWS_RUNNER`、
+两份 `parseConnection` / `endpoint` / `publicModelUrl` / `allowedNavigation`、两份 `desktopMessageContext`、
+**四份** `sessionPartition`（方案只列了三份，`chat/session-recovery.ts` 是漏掉的第四份）全部合并到 `desktop/main/common/`。
+合并前逐函数体做了去空白的字节比对：全部等价，差异只有 `match =>` 与 `(match) =>`、一个尾逗号、以及类型标注宽窄。
+`sanitizeText` 的 `secrets` 取最宽的 `readonly unknown[]`，四种旧签名的调用方都兼容。
+
+`beingIdentityKey(address)` 改成 `sessionPartition(parseConnection(address))` 的一行代理。
+这是磁盘格式（chat-cache 文件名、session-recovery 文件名、功能任务分桶、worker 目录名、TownClientStore 键），
+所以 `tests/identity-partition.test.ts` 用七个 BeingDesktop 夹具地址把它钉在写死的常量上。
+
+三份 SSE 解析**没有**合并：上限与错误码语义不同（Town 1MB + `INVALID_RESPONSE`，chat 自带码表）。
+
+### 本阶段没做的事
+
+- **没有接任何一个子系统。** 注册表里只有 chat；`PANEL_SLOTS` / `SIDEBAR_SLOTS` / `TOPBAR_SLOTS` / `SHEET_SLOTS` / `FEATURE_MODELS` 都是空数组。
+- **`connectionCleared()` 依然没有调用方。** 接口和扇出都在，`main.ts` 从来没有接过它——这是 P1 就有的缺口，I0 没有顺手改。
+- **`npm run start` 的人工冒烟没做**（本机缺 Rust 工具链，`resources/heart-portal` 不存在；打包验证用的是临时 stub）。
+- **Linux 的 node-pty 没有 prebuild**，`MakerZIP` 的 linux 目标需要构建机上有 python3 + make + g++，本次未验证。
