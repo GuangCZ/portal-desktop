@@ -13,6 +13,7 @@ import type {
 } from "../../../shared/types";
 import type {
   TownDesktopAppState,
+  TownDesktopDirectMessage,
   TownDesktopEnvelope,
   TownDesktopFeed,
   TownDesktopReadResult,
@@ -229,6 +230,12 @@ export class TownModel extends Store {
   timelineStatus: TownDesktopRefreshStatus | null = null;
   /** The inbox, read on demand: entering the page, refreshing, and on a `dm` hint. */
   inbox: FeedMessage[] = [];
+  /** What Town actually returned for the inbox. The rows above are a projection
+   * of it THROUGH the identity: which letters are mine, which were received, and
+   * what address a reply goes to are all decided at projection time
+   * (models/feed.ts `inboxMessages`). Keeping the wire rows is what lets the page
+   * re-project when the identity lands, without asking Town again. */
+  private inboxRead: readonly TownDesktopDirectMessage[] = [];
   members: TownDesktopMember[] = [];
   mentionNames: MentionNames = new Map();
   roomDirectory: TownDesktopRoomDirectory = { owned: [], joined: [], cached: false };
@@ -384,6 +391,7 @@ export class TownModel extends Store {
     this.timeline = null;
     this.timelineStatus = null;
     this.inbox = [];
+    this.inboxRead = [];
     this.roomDirectory = { owned: [], joined: [], cached: false };
     this.roomMembers = [];
     this.installedLibrary = null;
@@ -452,10 +460,19 @@ export class TownModel extends Store {
       this.me = identity;
       this.authLabel = identity ? "@" + identity : state.client.paired ? "Town 连接" : "配对 Being";
       this.scenes.update({ identity: this.me });
-      // Knowing who I am changes how the directory reads back (`withSelf`) and
-      // which messages count as mentioning me. That is a re-projection of what is
-      // already here, not a reason to ask Town again.
-      if (arrived) this.applyMembers(this.members);
+      // Knowing who I am changes how the directory reads back (`withSelf`), which
+      // messages count as mentioning me, and — for the inbox — which letters are
+      // mine, which were received, and where a reply goes. That is a re-projection
+      // of what is already here, not a reason to ask Town again.
+      //
+      // The bonfire and the fireside re-project for free, because `messages()`
+      // runs `feedMessages(..., { me })` on every render. The inbox does not: it
+      // is materialised once, at read time, with the identity baked into every
+      // row (models/feed.ts `inboxMessages`). An inbox read while `me` was still
+      // empty therefore marks every letter `mine: false` and leaves the sent tab
+      // permanently empty — so it is re-projected here, from the rows already in
+      // hand.
+      if (arrived) { this.projectInbox(); this.applyMembers(this.members); }
       else if (definitions[this.view]) void this.load();
     }
     this.updateLive();
@@ -603,6 +620,10 @@ export class TownModel extends Store {
     } catch { /* Names stay as they are; the messages are already readable. */ }
   }
 
+  /** Project the inbox Town returned through the identity in hand. Called at read
+   * time and again if the identity arrives afterwards; it opens no request. */
+  private projectInbox() { this.inbox = inboxMessages(this.inboxRead, { me: this.me }); }
+
   private applyMembers(members: TownDesktopMember[]) {
     this.members = members;
     const named = mentionNames(members);
@@ -689,7 +710,8 @@ export class TownModel extends Store {
     try {
       const { messages } = await this.town.inbox();
       if (generation !== this.request) return;
-      this.inbox = inboxMessages(messages, { me: this.me });
+      this.inboxRead = messages;
+      this.projectInbox();
       this.changedFeeds.delete("dm");
       this.status = `来自 beings.town · 最近 ${this.inbox.length} 封`;
       this.error = undefined;

@@ -358,24 +358,30 @@ describe("Town conversation rules ported from BeingDesktop test/town-conversatio
     expect(refreshLabel(model)).toBe("Being 正忙 · 稍后可读取一次");
   });
 
-  // The one addition over BeingDesktop: the fact arrives on
-  // `beings:model-settings-state` rather than only from a read that already
-  // failed. The sentence is BeingDesktop's own.
+  // The side-by-side fact reaches this page on `beings:model-settings-state` and
+  // nowhere else — no second reader of /api/llm/config
+  // (docs/migration/i6b-model-settings.md openIssue 2) — and it never speaks for
+  // the reader in either direction. Background collection in this shell is the
+  // direct SDK reader, which does not run through the Being's waking loop at all.
   it("takes the side-by-side fact from the model-settings channel and opens no reader of its own", async () => {
     const onModelSettings = vi.fn(() => () => {});
     const modelSettingsState = vi.fn(async () => modelSettings(false));
     const { model, town } = harness({}, { modelSettings: { onModelSettings, modelSettingsState } });
     const stop = model.start();
     await settle();
-    model.show("bonfire");
-    await settle();
-    model.receivePush(envelope([], { status: { status: "idle", lastSuccessAt: null } }));
-    expect(refreshLabel(model)).toBe("后台采集尚未设置，可立即同步");
+    expect(model.sideBySide).toBe(false);
     expect(onModelSettings).toHaveBeenCalledTimes(1);
     expect(modelSettingsState).toHaveBeenCalledTimes(1);
     // No second reader of /api/llm/config, and no Town channel pressed into
     // answering it either.
     expect(Object.keys(town)).not.toContain("modelConfig");
+    model.show("bonfire");
+    await settle();
+    // An unconfigured waking loop is NOT a report that nothing is being
+    // collected: the direct reader says it is waiting for Town, and that is what
+    // the strip says.
+    model.receivePush(envelope([], { status: { status: "idle", lastSuccessAt: null } }));
+    expect(refreshLabel(model)).toBe("等待 Town 同步");
     stop();
   });
 
@@ -386,6 +392,27 @@ describe("Town conversation rules ported from BeingDesktop test/town-conversatio
     await settle();
     model.receivePush(envelope([], { status: { status: "error", errorCode: "NETWORK_ERROR", lastSuccessAt: null } }));
     expect(refreshLabel(model)).toBe("结果检查失败 · 可刷新显示");
+  });
+
+  // …and the other direction, which is the one that actually bit: an
+  // unconfigured loop must not talk over a reader that is doing something. Before
+  // this, 「后台采集尚未设置」sat ahead of REQUEST_ACCEPTED / being_busy /
+  // refreshing / error in the chain, so a user who had never turned Side by Side
+  // on — the default — never saw any of them until the first successful collection.
+  it("never lets an unconfigured loop talk over a reader that is working or failing", async () => {
+    const { model } = harness();
+    model.receiveModelSettings(modelSettings(false));
+    model.show("bonfire");
+    await settle();
+    model.receivePush(envelope([], { status: { status: "refreshing", lastCheckedAt: null, lastSuccessAt: null } }));
+    expect(refreshLabel(model)).toBe("正在同步 Town 消息");
+    model.receivePush(envelope([], { status: { status: "error", errorCode: "NETWORK_ERROR", lastCheckedAt: null, lastSuccessAt: null } }));
+    expect(refreshLabel(model)).toBe("结果检查失败 · 可刷新显示");
+    model.receivePush(envelope([], { status: { status: "waiting", errorCode: "REQUEST_ACCEPTED", lastCheckedAt: null, lastSuccessAt: null } }));
+    expect(refreshLabel(model)).toBe("请求已送达 · 等待 Being 完成");
+    // The sentence itself is not gone: the READER is still allowed to report it.
+    model.receivePush(envelope([], { status: { status: "waiting", reason: "sbs_not_configured", errorCode: "SBS_NOT_CONFIGURED", lastCheckedAt: null, lastSuccessAt: null } }));
+    expect(refreshLabel(model)).toBe("后台采集尚未设置，可立即同步");
   });
 
   // ── one read per opening ───────────────────────────────────────────────────
@@ -404,6 +431,42 @@ describe("Town conversation rules ported from BeingDesktop test/town-conversatio
     await settle();
     expect(reads.length).toBe(1);
     expect(model.me).toBe("t_Willow");
+  });
+
+  // The inbox is the one feed that is NOT re-projected on every render: it is
+  // materialised once, at read time, with the identity baked into each row
+  // (models/feed.ts `inboxMessages` decides `mine`, `received` and the reply
+  // address there and then). So an inbox that was read before the identity
+  // arrived — scene restore, a `beings:town-open` deep link, or simply
+  // `town.inbox()` answering before `town.appState()` — used to leave the sent tab
+  // empty for good and received letters with no address to answer.
+  it("an inbox read before the identity arrived is re-projected when it does, without asking Town again", async () => {
+    const inbox = vi.fn(async () => ({ messages: [
+      { id: "1", senderId: "t_Willow", senderName: "柳", recipientId: "t_River", recipientName: "河流", content: "我寄出的信", createdAt: "2026-09-07T12:00:00+08:00" },
+      { id: "2", senderId: "t_River", senderName: "河流", content: "寄给我的信", createdAt: "2026-09-07T12:01:00+08:00" },
+    ] }));
+    const { model } = harness({ inbox: inbox as unknown as TownDesktopAPI["inbox"] });
+    model.receiveState(appState({ identity: identity({ townId: "", loomBeingId: "", beingId: "" }), client: clientState({ townId: "", paired: false, status: "unpaired" }) }));
+    model.show("mail");
+    await settle();
+    await settle();
+    expect(model.me).toBe("");
+    // Without an identity every letter reads as one that came in, mine included,
+    // and none of them has an address to answer.
+    expect(model.messages().map(entry => entry.mine)).toEqual([false, false]);
+    const readsBeforeIdentity = inbox.mock.calls.length;
+
+    model.receiveState(appState());
+    await settle();
+    expect(model.me).toBe("t_Willow");
+    // Re-projected from the rows already in hand: no second /api/messages.
+    expect(inbox).toHaveBeenCalledTimes(readsBeforeIdentity);
+    expect(model.inbox.map(entry => entry.mine)).toEqual([true, false]);
+    // The sent tab (`mine`) has the letter I sent, addressed to the other end…
+    expect(model.inbox.filter(entry => entry.mine)).toMatchObject([{ content: "我寄出的信", received: false, recipientId: "t_River" }]);
+    // …and the inbox tab (`received`) has the one addressed to me, which is the
+    // address `mailReply` needs before it will offer to answer.
+    expect(model.inbox.filter(entry => entry.received)).toMatchObject([{ content: "寄给我的信", mine: false, recipientId: "t_Willow" }]);
   });
 
   it("an identity that actually changed re-reads the feed on screen", async () => {

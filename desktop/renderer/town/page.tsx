@@ -215,14 +215,23 @@ export function liveMessage(town: TownModel): string {
  * instead of claiming empty or fresh」— which is why an idle feed with nothing
  * collected yet produces NO strip at all rather than a reassuring one.
  *
- * ONE ADDITION over BeingDesktop, and it invents no new sentence: 0.8.26 can only
- * learn that the waking loop is unset from a read that already failed with
- * `SBS_NOT_CONFIGURED`. This shell is told directly, on
- * `beings:model-settings-state`, so the same sentence is said as soon as the fact
- * is known (docs/migration/i6b-model-settings.md openIssue 2: the Town page reads
- * that channel and never opens a second reader of /api/llm/config). A confirmed
- * `configured: true` is never used to contradict the reader — a loop that is on
- * and not collecting is still not collecting. */
+ * NO ADDITION over BeingDesktop: every sentence here is said on the condition
+ * 0.8.26 says it on, and「后台采集尚未设置」in particular is said only when the
+ * reader itself reports `SBS_NOT_CONFIGURED` / `sbs_not_configured`.
+ *
+ * An earlier revision of this unit also said it whenever Side by Side was known
+ * to be unconfigured (`beings:model-settings-state`). That was WRONG HERE, and it
+ * was wrong in a way that hid real states: background collection in this shell is
+ * the direct SDK reader (`direct: true`, desktop/main/subsystems/town.ts, with no
+ * `readCachedSnapshot` wired anywhere in the tree), so it does not run through the
+ * Being's waking loop and does not care whether that loop is configured. Because
+ * the sentence sat ahead of `REQUEST_ACCEPTED` / `being_busy` / `refreshing` /
+ * `error` in the chain, every user who had never turned Side by Side on — the
+ * default — was told「后台采集尚未设置」while the true state was「正在同步 Town
+ * 消息」or「结果检查失败 · 可刷新显示」. `TownModel.sideBySide` is still kept up to
+ * date from that channel (and no reader of /api/llm/config is opened for it,
+ * docs/migration/i6b-model-settings.md openIssue 2), but it never speaks for the
+ * reader: what is or is not being collected is the reader's own report. */
 export function refreshLabel(town: TownModel): string {
   const status = town.timelineStatus;
   if (!status) return "";
@@ -236,9 +245,7 @@ export function refreshLabel(town: TownModel): string {
   const collected = timestamp(status.lastSuccessAt, "最近采集");
   const paused = status.status === "paused";
   const permission = /auth|trust|permission/i.test(`${status.reason || ""} ${status.errorCode || ""}`);
-  const notConfigured = status.errorCode === "SBS_NOT_CONFIGURED"
-    || status.reason === "sbs_not_configured"
-    || (town.sideBySide === false && !collected);
+  const notConfigured = status.errorCode === "SBS_NOT_CONFIGURED" || status.reason === "sbs_not_configured";
   const prefix = !town.connected ? "等待连接"
     : paused && permission ? "Town 需要配对"
     : notConfigured ? "后台采集尚未设置，可立即同步"
