@@ -139,8 +139,13 @@ export function Topbar({ model }: { model: AppModel }) {
         <span id="conversation-name">
           {app.snapshot?.settings.being || "Being"}
         </span>
+        {/* SBS and the two in-page panels below lived in the sandboxed Loom
+            document, which the React conversation replaced on 2026-09-16. They
+            stay hidden until the native equivalents land (openIssues in
+            docs/migration/p1-ui.md) rather than posting into nothing. */}
         <button
           className={`sbs-header-switch${app.sbsKnown && app.sbsEnabled ? " enabled" : ""}`}
+          hidden
           type="button"
           aria-label="切换 SBS 自主醒来"
           aria-pressed={app.sbsKnown ? app.sbsEnabled : undefined}
@@ -310,6 +315,7 @@ export function Topbar({ model }: { model: AppModel }) {
               </button>
               <button
                 data-chat-action="being"
+                hidden
                 disabled={!hasToken}
                 onClick={() => app.chatAction("being")}
               >
@@ -323,6 +329,7 @@ export function Topbar({ model }: { model: AppModel }) {
               </button>
               <button
                 data-chat-action="privacy"
+                hidden
                 disabled={!hasToken}
                 onClick={() => app.chatAction("privacy")}
               >

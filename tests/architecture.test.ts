@@ -105,6 +105,20 @@ test("shared contracts and renderer utilities do not depend on feature implement
   ).toEqual([]);
 });
 
+test("the native conversation does not reach into the retired chat page's services", () => {
+  // renderer/chat is the sandboxed Loom document the React conversation replaced
+  // on 2026-09-16. Its services talk to a Being over HTTP from the renderer,
+  // which is exactly what the native layer exists to stop doing: every byte the
+  // conversation shows now comes through the main process.
+  expect(
+    edges.filter(
+      (edge) =>
+        edge.source.startsWith("renderer/conversation/") &&
+        edge.target.startsWith("renderer/chat/services/"),
+    ),
+  ).toEqual([]);
+});
+
 test("feature models and services remain independent of React components and hooks", () => {
   expect(
     edges.filter(

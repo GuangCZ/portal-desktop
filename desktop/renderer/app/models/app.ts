@@ -9,6 +9,7 @@ import type {
 import { Store, errorText } from "../../shared/models/store";
 import { WorkspaceModel } from "./workspace";
 import { TownModel } from "../../town/models/town";
+import { ConversationModel } from "../../conversation/models/conversation";
 import type { HistoryScope } from "../../chat/models/scenes";
 
 export class AppModel extends Store {
@@ -56,8 +57,17 @@ export class AppModel extends Store {
     () => Boolean(this.chatSource),
   );
   readonly town: TownModel;
+  /** The native conversation layer. It replaced the sandboxed Loom document on
+   * 2026-09-16; `chatSource` survives as the scene identity the shell derives
+   * from a connection, not as a page to load. */
+  readonly conversation: ConversationModel;
   constructor(readonly api: DesktopAPI) {
     super();
+    this.conversation = new ConversationModel({
+      chat: api?.chat,
+      toast: this.toast,
+      beingName: () => this.snapshot?.settings.being || "being",
+    });
     this.town = new TownModel(
       api,
       this.toast,

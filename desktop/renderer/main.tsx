@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./app/page";
 import { AppModel } from "./app/models/app";
 import "./app/styles.css";
+import "./conversation/styles.css";
 
 class ErrorBoundary extends Component<
   { children: ReactNode },

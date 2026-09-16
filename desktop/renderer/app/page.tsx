@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { AppModel } from "./models/app";
 import { useModel } from "../shared/hooks/use-model";
-import { useChatBridge } from "./hooks/use-chat-bridge";
+import { useConversationBridge } from "./hooks/use-conversation-bridge";
 import { Topbar } from "./components/topbar";
+import { Sidebar } from "./components/sidebar";
+import { ConversationPage } from "../conversation/components/conversation";
 import { UpdateProgress } from "./components/update-progress";
 import { SceneRibbon, Companion } from "./components/workspace";
 import { Browser } from "../browser/page";
@@ -18,9 +20,8 @@ import { Dialog } from "../shared/components/dialog";
 import { PlaceHeading } from "./components/navigation";
 import logo from "../../../resources/branding/logo.png";
 export function App({ model }: { model: AppModel }) {
-  const app = useModel(model),
-    frame = useRef<HTMLIFrameElement>(null);
-  useChatBridge(app, frame);
+  const app = useModel(model);
+  useConversationBridge(app, app.conversation);
   useEffect(() => app.start(), [app]);
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = app.theme;
@@ -90,6 +91,7 @@ export function App({ model }: { model: AppModel }) {
       </section>
       <main id="client-main" hidden={app.startup !== "ready"}>
         <div className="workspace-body">
+          <Sidebar model={app} />
           <div className="workspace-stage">
             <Topbar model={app} />
             <p
@@ -128,17 +130,12 @@ export function App({ model }: { model: AppModel }) {
                   </span>
                 </button>
               </div>
-              <iframe
-                id="chat-frame"
-                ref={frame}
-                title="Being 对话"
-                hidden={!app.snapshot?.settings.hasToken}
-                sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-downloads"
-                src={app.chatSource || undefined}
-                onLoad={() => {
-                  if (app.chatSource) app.frameLoaded();
-                }}
-              />
+              {app.snapshot?.settings.hasToken && (
+                <ConversationPage
+                  model={app.conversation}
+                  onPlace={(target) => app.navigate(target.view, target.id)}
+                />
+              )}
             </section>
           </div>
           <Companion model={app.workspace} />
