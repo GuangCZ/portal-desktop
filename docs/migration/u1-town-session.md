@@ -565,3 +565,99 @@ const writeFixture = fetchImpl => fixture((url, options) => new URL(url).pathnam
 24. `a private message to yourself is refused locally, before any request` —— `recipient:'alice'` → `NOT_SENT`，`calls.length === 0`；`recipient:'bob'` → `{ok:true, id:'m9', recipient:'bob', via:'client:desk'}`，body `{recipient:'bob', content:'hi'}`。
 
 （实际 `test(...)` 调用 24 次；上面编号即用例数 **24**。）
+
+### 测试 test/town-session.test.cjs（549 行，39 个用例，已读完）
+
+夹具（原样照抄）：
+```js
+function deferred() { let resolve; const promise = new Promise(yes => { resolve = yes; }); return {promise, resolve}; }
+function json(value, status = 200) { return new Response(JSON.stringify(value), {status, headers: {'Content-Type': 'application/json'}}); }
+function harness(overrides = {}) {
+  const context = {configured: true, connected: true, connectionId: 5, identityRevision: 1, beingName: 'alice', token: 'LOOM_SECRET_MUST_STAY_LOCAL'};
+  const calls = [];
+  const session = new TownSession({getContext: () => ({...context}), readImpl: overrides.readImpl ?? null, fetchImpl: async (url, options) => {
+    const parsed = new URL(url); calls.push({url: parsed, options});
+    if (overrides.request) { const result = await overrides.request(parsed, options, calls); if (result !== undefined) return result; }
+    '/api'                    -> json({community: [{being_id:'alice', display_name:'Alice', about:null}, {being_id:'echo', display_name:'Echo', about:'A resident'}]})
+    '/api/bonfire/mentions'   -> json({being:'alice', mentions:[], latest_id:0})
+    '/api/bonfire/hear'       -> json({ok:true, global_latest_seq:4, messages:[{seq:4, being:'Echo', message:'Hello', at:'2026-09-07T12:00:00+08:00', revised_at:null}]})
+    '/api/bonfire/speak'      -> json({ok:true, seq:5, being:'alice', mentions:['Echo']})
+    '/api/fireside/list'      -> json({owned:[{id:7, name:'Our ring', member_count:2, key:'PRIVATE_INVITE_KEY'}], joined:[{id:9, name:'Another ring', member_count:3}]})
+    '/api/fireside/members'   -> json([{being_id:'alice', display_name:'Alice', joined_at:'2026-09-07T12:00:00+08:00'}, {being_id:'echo', display_name:'Echo', joined_at:null}])
+    '/api/fireside/hear'      -> json({being:'alice', latest_seq:8, messages:[{seq:8, being:'echo', speaker_name:'Echo', message:'Welcome', at:'2026-09-07T12:00:00+08:00', revised_at:null, mentions:['alice']}]})
+    '/api/channels/status'    -> json({channels:[{channel:'feishu', status:'connected', app_id:'cli_example', app_secret:'SHOULD_NOT_LEAK'}, {channel:'wechat', status:'pending'}]})
+    '/api/channels/register'  -> json({ok:true, status:'pending', qr_code_url:'https://weixin.qq.com/q/fixture'})
+    '/api/channels/credentials' -> json({ok:true, app_secret:'SHOULD_NOT_LEAK'})
+    else throw new Error('Unexpected endpoint');
+  }});
+  return {session, context, calls};
+}
+const scrollSummary = (changes = {}) => ({id:'wer79LxF', being_id:'alice', display_name:'Alice', title:'A document', visibility:'private', created_at:'2026-09-07T00:00:00Z', updated_at:'2026-09-07T01:00:00Z', kind:'note', lifecycle:'seed', tags:['notes'], revision:2, share_token:'PRIVATE_SHARE_TOKEN', ...changes});
+```
+> context 只有 `beingName`（无 `beingId`/`loomBeingId`）→ 走 `current.loomBeingId || current.beingId || current.beingName`。
+
+39 个用例名（原顺序）：
+1. public member directory uses homepage without credentials and filters malformed IDs
+2. untrusted Town network reports auth_required without sending a message
+3. IP Trust identity must match the selected Loom identity
+4. Bonfire reads use documented since and limit and normalize full messages
+5. Session to Refresh preserves a complete 32000-character Fireside message and Bonfire keeps its 4000 limit **（依赖 TownRefresh —— 按任务要求用假的 refresh 对象移植，不移植 town-refresh 本身）**
+6. only explicit Bonfire submit sends, with each selected member represented once
+7. mentions are verified from the real directory and added without substring confusion
+8. stale revision is rejected before any network request
+9. connection switch during authorization cannot send or repopulate state
+10. uncertain send is never retried and duplicate in-flight writes are rejected
+11. channel fixed flow uses documented bodies and never returns submitted secrets
+12. channel unknown status stays unknown and untrusted QR links never reach UI
+13. verified QR images are proxied as bounded data images without renderer network access
+14. inline SVG and malformed raster QR responses never become renderable data
+15. oversized or HTML responses fail closed
+16. invalid and accessor requests are rejected without invoking getters or the network
+17. Fireside list and members keep display data while stripping invite keys and extra fields
+18. Fireside hear validates identity and normalizes complete ordered snapshots
+19. Fireside reads keep real authorization errors and never fall back to chat or callback
+20. Fireside rejects malformed, truncated and wrapped member responses
+21. room identifiers and signal properties cannot enter renderer-controlled request JSON
+22. a cancelled background read never starts network requests or changes state
+23. cancelling authorization aborts the request and never advances to hear
+24. cancelling a hear body stops its stream without a service error or cached partial result
+25. identity reset during a Fireside read rejects late responses and preserves reset state
+26. Heart reads bypass the desktop IP Trust probe and retain the Town message contract
+27. an unavailable Heart reader never falls back to a protected desktop Town request
+28. reset aborts Heart requests and cannot publish a late private room response
+29. cancelling the native scheduler cancels its Heart read without changing access state
+30. adding a read-only Heart transport cannot move writes or channel settings into it
+31. Scroll browsing uses authenticated read routes and keeps only display fields
+32. Scroll malformed metadata, duplicate entries and incomplete content cannot become documents
+33. Scroll request capabilities, reserved routes and invalid pagination never reach a transport
+34. a connection switch discards a private Scroll response and clears its access state
+35. directory data never infers a human relationship from IDs or unsupported response fields
+36. periodic directory reads show all public residents without occupying the Being conversation
+37. public directory rejects stale identity and malformed partial records
+38. cancelled library reads cannot start requests or publish access state
+39. channel status accepts current ready booleans without mistaking missing data for an unbound channel
+
+关键断言备忘（移植时不能漏的细节）：
+- 用例 4：`messages[0]` 精确等于 `{id:'4', beingId:'', authorUnknown:true, beingName:'Echo', content:'Hello', createdAt:'2026-09-07T12:00:00+08:00', revisedAt:'', mentions:[]}`；`calls[0]` 是 mentions 探测（`since_id=9223372036854775807`），`calls[1]` 带 `since=3`、`limit=20`。
+- 用例 5：`content = '围'.repeat(31993) + 'THE_END'`；fireside 保留全长，bonfire 截到 4000。**TownRefresh 用假对象**：需要 `readSnapshot`、`getIdentity`、`clock:{now,setTimeout,clearTimeout}`，方法 `start/refresh/snapshot/status/stop`。移植时改为直接断言 `session.getFiresideMessages`/`getBonfireMessages` 的返回，并注明 refresh 部分由 P3 单元覆盖。
+- 用例 6：结果 `{ok:true, id:'5', mentions:['Echo']}`；body `{message:'@echo hello'}`（已含 @echo 就不再前置）。
+- 用例 7：`'@echo-extra hello'` + mentions `['echo']` → body.message 为 `'@echo\n@echo-extra hello'`（子串不算命中）；`'invented-being'` → `INVALID_REQUEST`。
+- 用例 10：并发第二次 `sendBonfireMessage` → `BUSY`；502 → `RESULT_UNKNOWN`；POST 只发一次。
+- 用例 12：`status:'magic-success'` → `'unknown'`；`https://attacker.invalid/qr` → `qrCodeUrl === undefined`。
+- 用例 13：PNG base64 `iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPwAAAAASUVORK5CYII=` → `qrCodeDataUrl === 'data:image/png;base64,' + png`。
+- 用例 14：`data:image/svg+xml;base64,PHN2Zy8+` → `qrCodeDataUrl === undefined`；`'<script/>'` 伪装 PNG → `qrCodeDataUrl === ''` 且 `detail` 匹配 `/扫码图像暂时无法读取/`。
+- 用例 15：`Content-Length: 1048577` → `INVALID_RESPONSE`；`text/html` → `INVALID_RESPONSE`。
+- 用例 16：`get content()` getter **不得被调用**；`{since:-1}`、`{channel:'other'}`、`appSecret:'line\nbreak'` 全 `INVALID_REQUEST`；`calls.length === 0`。
+- 用例 17：owned/joined 共用去重 → `{owned:[{id:7,name:'Our ring',member_count:2}], joined:[{id:9,name:'Another ring'}]}`（`id:'../bad'` 与重复 id 7 被丢）；members → `[{being_id:'alice',display_name:'Alice',joined_at:'2026-09-07'}, {being_id:'echo',display_name:'Echo',joined_at:''}]`（`‮` 被剥）；URL `https://beings.town/api/fireside/members?fireside_id=7`。
+- 用例 18：结果按 seq 升序 `[{id:'6',…},{id:'8',…}]`；`mentions:['alice','alice','../bad']` → `['alice']`；URL `…/api/fireside/hear?fireside_id=7&limit=10`（默认 limit 10）。
+- 用例 19：401/403 各跑一遍，三个读都 `AUTH_REQUIRED`，`calls.length === 3` 且全是 mentions 探测；`being:'another-being'` → `IDENTITY_MISMATCH`，状态 `error`。
+- 用例 21：无效 id `[0, -1, 1.5, '../7', '07', '7?token=x', '9007199254740992', {id:7}]`；`{signal:{}}` 也要 `INVALID_REQUEST`（signal 不是 plainRequest 的合法键）；`limit:201` → `INVALID_REQUEST`。
+- 用例 23：abort 后 `session._requests.size === 0`，`calls[0].options.signal.aborted === true`。
+- 用例 24：body 流被 abort → `ABORTED`，但 `state().fireside.status === 'ready'`（`_authorized` 已经把它置 ready）。
+- 用例 26：`readImpl` 收到 `('/api/bonfire/hear', {query:{limit:20, since:7}, signal})`；直连 fetch 只发生在 `/api`（getMembers）。
+- 用例 31：`reads` 等于 `[{route:'/api/scrolls', query:{offset:2,limit:2,visibility:'private'}}, {route:'/api/scrolls/wer79LxF', query:{offset:0,limit:2}}]`；`detail.scroll.content === '🧭A'`、`totalLength === 3`、`nextOffset === 2`（**emoji 按码点算 1**）、`hasMore === true`。
+- 用例 33：无效 scroll id `['../private','help','search','graph','match','a?token=x','',7]`；无效分页 `[{offset:-1},{offset:4294967296},{limit:201},{limit:'50'},{visibility:'all'},{token:'secret'},{signal:{}}]`；`getScroll({id:'wer79LxF', limit:10001})`；getter 抛错的 `id`；`listBeings({headers:{}})`。
+- 用例 35：结果 `beings` 等于 `[{id:'alice', name:'Alice', description:'A resident', status:'', human:null}]`，`detail` 匹配 `/人类伙伴信息暂未公开/`。
+- 用例 36：两次 `listBeings()` 都读 `/api`，`protectedReads === 0`；`context.connected = false` 后仍返回 2 条（**listBeings 不做 `_context` 连接检查**）。
+- 用例 37：`identityRevision++` 后迟到响应 → `SESSION_CHANGED`；`being_id:'../bad'` → `INVALID_RESPONSE`。
+- 用例 39：`[{ready:true},'connected']`、`[{ready:false},'registered']`、`[{ready:'true'},'unknown']`、`[{},'unknown']`、`[{status:'disabled',ready:true},'disabled']`；第二个渠道恒 `'unknown'`。
