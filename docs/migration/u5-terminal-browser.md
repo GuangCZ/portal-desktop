@@ -79,3 +79,18 @@
 | tools/browser/electron-host.ts | 未开始 |
 | tests/tools-terminal-terminal.test.ts | 未开始 |
 | tests/tools-browser-browser.test.ts | 未开始 |
+
+### src/platform.cjs（33 行，terminal 的依赖）
+
+导出 `{desktopPlatform, desktopEnvironment, shellPath}`。
+- `desktopPlatform(platform = process.platform, arch = process.arch)` → `{platform, arch, name: {win32:'Windows',darwin:'macOS',linux:'Linux'}[platform] || platform, shell: platform === 'darwin' ? 'zsh' : 'PowerShell', terminalSupported: ['win32','darwin'].includes(platform), portalSupported: (win32 && x64) || (darwin && arm64|x64)}`。
+- `desktopEnvironment(source = process.env, platform = process.platform)` — 非 darwin 直接浅拷贝返回；darwin 上把 `PATH` 按 `:` 拆开，只留 `path.posix.isAbsolute` 且不含 `\0\r\n` 的项，再追加 `/opt/homebrew/bin`、`/usr/local/bin`、`/usr/bin`、`/bin`、`/usr/sbin`、`/sbin`；若 `HOME` 合法再追加 `$HOME/.local/bin`、`$HOME/.cargo/bin`；最后 `[...new Set(dirs)].join(':')`。（注释：Finder 启动的程序不继承终端的 Homebrew PATH，这里不求值登录 shell。）
+- `shellPath(platform = process.platform, environment = process.env)` — darwin → `/bin/zsh`；否则 `path.win32.join(environment.SystemRoot || environment.SYSTEMROOT || 'C:\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')`。
+
+### src/desktop-console.cjs 里的 `consoleEnvironment`（terminal 的依赖；DesktopConsole 本体不属本单元）
+
+`module.exports = { DesktopConsole, consoleEnvironment, WINDOWS_RUNNER }`。
+`ENVIRONMENT_KEYS`（全小写集合）：tmpdir, lang, lc_all, lc_ctype, user, logname, shell, systemroot, windir, systemdrive, comspec, pathext, path, home, userprofile, homedrive, homepath, appdata, localappdata, temp, tmp, username, userdomain, computername, os, number_of_processors, processor_architecture, processor_identifier, processor_level, processor_revision, programfiles, programfiles(x86), programw6432, commonprogramfiles, commonprogramfiles(x86), commonprogramw6432, allusersprofile, public, psmodulepath。
+`consoleEnvironment(source = process.env)` — 只保留 key 的小写形式命中集合、值为 string 且不含 `\0` 的项（保留原 key 大小写）。
+
+本单元处理：把 `desktopPlatform / desktopEnvironment / shellPath / consoleEnvironment` 逐行移植到 `desktop/main/tools/terminal/platform.ts`（本单元目录内，避免与并行单元的 tools 顶层文件撞名）；集成阶段若 console 单元也移植了同名函数，应合并到一份共享模块。
