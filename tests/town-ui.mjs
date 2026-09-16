@@ -22,6 +22,18 @@
 // Nothing here is a real credential, a real message or a real Town: every
 // request is answered inside the application by `protocol.handle`, and any
 // request to another origin fails the run.
+//
+// TWO KINDS OF ASSERTION LIVE HERE (IM, 2026-09-16). `check` is a rule the client
+// keeps: a failure stops the run on the spot. `pending` is a rule the client does
+// NOT keep today, recorded red with its evidence and its owner — the run still
+// fails at the end, and the checks after it still get to run, which is the only
+// way the ten rules below the first defect ever get executed at all. A `pending`
+// that starts passing simply reports as passed; none of them is allowed to be
+// quietly deleted, and none of the fixtures may be re-shaped to make one green.
+// That last sentence is the whole of review finding 2: the first run of this
+// script turned「成员目录挂起」into「成员目录 503 快速失败」, which is a different
+// scenario that the client already handles, and two red checks went green without
+// a line of product code changing.
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,10 +52,23 @@ try {
 
 const dir = await mkdtemp(path.join(os.tmpdir(), 'beings-town-ui-'));
 const checks = [];
+/** Rules the client does not keep today: name, and where the defect is. */
+const failed = [];
 const check = (name, condition) => {
   assert.equal(condition, true, name);
   checks.push(name);
   process.stdout.write(`${name}: passed\n`);
+};
+/** A rule that is red because of a defect, not because of the fixture. Recorded
+ * with its evidence, the run fails at the end, and the rest of the script runs. */
+const pending = (name, condition, why) => {
+  if (condition === true) {
+    checks.push(name);
+    process.stdout.write(`${name}: passed\n`);
+    return;
+  }
+  failed.push({ name, why });
+  process.stdout.write(`${name}: FAILED — ${why}\n`);
 };
 
 let app;
@@ -60,7 +85,12 @@ try {
   // ── Town, as fixtures ──────────────────────────────────────────────────────
   await app.evaluate(({ protocol }) => {
     const token = 'f'.repeat(64);
-    globalThis.town = { reads: [], confirms: [], members: 0, holdMembers: true, resolveMembers: null, writes: [], since: null };
+    globalThis.town = { reads: [], confirms: [], members: 0, holdMembers: true, writes: [], since: null };
+    // ONE shared deferred, not one per request. Every concurrent `/api` waits on
+    // this same promise and a single release answers all of them; the first draft
+    // of this fixture awaited a fresh promise per request and overwrote the
+    // resolver, so only the last one could ever be answered.
+    globalThis.town.membersHeld = new Promise(resolve => { globalThis.town.releaseMembers = resolve; });
     const message = (seq, content, extra = {}) => ({
       seq, town_id: 't_River', speaker_name: '河流', message: content,
       at: '2026-09-11T10:0' + (seq % 10) + ':00Z', ...extra,
@@ -86,15 +116,14 @@ try {
       // The public homepage carries the member directory and needs no credential.
       if (url.pathname === '/api') {
         globalThis.town.members++;
-        // 「还没到」这件事用一次快速失败表示，不用挂住请求。IM 2026-09-16 首次执行时
-        // 实测：原来的写法是每一个并发 `/api` 各自 await 一个新 Promise，永不兑现,
-        // 客户端在目录未到时重试了 9 次，于是 9 个请求同时挂在 beings.town 上,
-        // 把这个源的并发预算占满——连**不碰目录**的 `bonfire()` 直读都一起挂死
-        // （实测：held-direct-bonfire HUNG>8s；改成快速失败后同一次调用 n=2）。
-        // 挂死之后 feed 当然是空的，于是下面那条「目录还没到也要出消息」永远等不到
-        // `.social-message`，看起来像产品缺陷，其实是夹具把自己饿死了。
-        // 顺带修掉原来的另一半：`resolveMembers` 每次被覆盖，只兑现得了最后一个。
-        if (globalThis.town.holdMembers) return new Response('', { status: 503 });
+        // 「成员目录还没到」= 请求真的挂着，直到 `releaseMembers()`。这正是下面两条
+        // check 名字里的场景，也是 BeingDesktop test/town-conversation-ui.cjs
+        //「while the member directory remains pending」的原样。
+        // 它当然会让篝火 feed 一起停住——那不是夹具的毛病，是
+        // desktop/main/town/session/session.ts 的 `getBonfireMessages` 把
+        // `/api/bonfire/hear` 和 `getMembers()` 放进同一个 `Promise.all`，
+        // `.catch` 接得住「拒绝」接不住「慢」（复审 finding 2，记录 §8 openIssue 10）。
+        if (globalThis.town.holdMembers) await globalThis.town.membersHeld;
         return Response.json({ community: [{ town_id: 't_River', display_name: '河流', description: '' }] });
       }
       if (!authorized) return Response.json({ error: 'unauthorized' }, { status: 401 });
@@ -155,17 +184,32 @@ try {
     (await page.locator('#town-live-status').textContent()).includes('已连接 Town'));
 
   // ── one read, cache first, directory late ──────────────────────────────────
-  await page.locator('.social-message').first().waitFor();
+  // The directory is still held here, so this wait is BOUNDED: the rule is that
+  // the feed does not wait for it, and a rule that is broken should go red in
+  // seconds rather than at Playwright's default timeout.
+  const HOLD_BUDGET_MS = 6000;
+  let rendered = true;
+  try { await page.locator('.social-message').first().waitFor({ timeout: HOLD_BUDGET_MS }); }
+  catch { rendered = false; }
   // 默认排序是「最新在前」（feed-controls 的 select），所以带 @ 的 seq 7 排在 seq 8
   // 之后——`.first()` 取到的是没有提及的那一条。IM 2026-09-16 首次执行时改成按内容找,
   // 并顺带把「两条都出来了」也断言上，比原来的写法更强，不是更松。
-  const beforeDirectory = await page.locator('.social-message').allTextContents();
-  check('messages render while the member directory is still pending',
-    beforeDirectory.length === 2
-    && beforeDirectory.some(text => text.includes('篝火消息') && text.includes('@t_River')));
-  check('the pending directory did not stop the feed read',
-    (await app.evaluate(() => globalThis.town.reads.length)) === 1);
-  await app.evaluate(() => { globalThis.town.holdMembers = false; globalThis.town.resolveMembers?.(); });
+  const beforeDirectory = rendered ? await page.locator('.social-message').allTextContents() : [];
+  const readsWhilePending = await app.evaluate(() => globalThis.town.reads.length);
+  pending('messages render while the member directory is still pending',
+    rendered
+    && beforeDirectory.length === 2
+    && beforeDirectory.some(text => text.includes('篝火消息') && text.includes('@t_River')),
+    'desktop/main/town/session/session.ts getBonfireMessages: `/api/bonfire/hear` 与 `getMembers()` '
+    + '在同一个 `Promise.all` 里，`.catch` 接得住拒绝接不住慢，目录慢多久 feed 就空多久'
+    + '（最长 session/client.ts 的 AbortSignal.timeout(20000)）。修法：先用缓存/空目录渲染，'
+    + '目录到了再补 mention 标签——下一条 check 断言的正是那条路径已经存在。');
+  pending('the pending directory did not stop the feed read', readsWhilePending === 1,
+    `打开一次篝火发了 ${readsWhilePending} 次 feed 读（首次绘制 1 条，约 250ms 后第 2 条，since 都是 null）;`
+    + ' 与目录是否就绪无关，记录 §8 openIssue 2。');
+  // The directory arrives.
+  await app.evaluate(() => { globalThis.town.holdMembers = false; globalThis.town.releaseMembers(); });
+  await page.locator('.social-message').first().waitFor();
   await page.locator('.town-mention').first().waitFor();
   check('late directory arrival rerenders mention labels without mutating messages',
     (await page.locator('.town-mention').first().textContent()) === '@河流'
@@ -216,6 +260,11 @@ try {
     (await page.locator('#town-live-status').textContent()).includes('六位配对码'));
 
   check('the renderer raised no errors', errors.length === 0);
+  if (failed.length) {
+    console.log(`\n${checks.length} checks passed, ${failed.length} FAILED:`);
+    for (const entry of failed) console.log(`  · ${entry.name}\n    ${entry.why}`);
+    throw new Error(`${failed.length} check(s) failed: ${failed.map(entry => entry.name).join('; ')}`);
+  }
   console.log(`\n${checks.length} checks passed. Scope: offline fixtures; no real Town, credentials or messages.`);
 } finally {
   if (app) await app.close().catch(() => {});
