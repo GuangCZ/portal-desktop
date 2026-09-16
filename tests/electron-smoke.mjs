@@ -90,6 +90,11 @@ let historyReads = 0;
 let stopPosts = 0;
 const sends = [];
 let holdOpen = null;
+/** The breath currently running, as `GET /api/stream/active` reports it. The
+ * client refuses to stop a stream it cannot prove is this conversation's
+ * (main/chat/being-chat.ts `stop`), so a fixture that always answers 204 makes
+ * the stop button a no-op — the refusal, not the stop, is what would be tested. */
+let active = null;
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1');
@@ -101,7 +106,18 @@ const server = createServer(async (request, response) => {
   if (url.pathname.endsWith('/api/status')) return json({ being_name: 'Willow', description: '夹具 Being' });
   if (url.pathname.endsWith('/health')) return json({ status: 'ok', commit: 'fixture' });
   if (url.pathname.endsWith('/api/history')) { historyReads++; return json({ messages: history }); }
-  if (url.pathname.endsWith('/api/stream/active')) { response.writeHead(204); response.end(); return; }
+  if (url.pathname.endsWith('/api/stream/active')) {
+    if (!active) { response.writeHead(204); response.end(); return; }
+    // One delta, carrying the scene: `speaking` is true because the last event is
+    // not a `message_stop`, and `origin: 'human'` keeps it from reading as an
+    // autonomous breath no conversation owns.
+    return json({
+      stream_id: active.streamId,
+      origin: 'human',
+      next_seq: 2,
+      events: [{ event: 'content_block_delta', seq: 1, data: { scene_id: active.scene, delta: { text: '…' } } }],
+    });
+  }
   if (url.pathname.endsWith('/api/stop')) {
     stopPosts++;
     // A real Being ends the breath it was holding; without this the client waits
@@ -118,31 +134,36 @@ const server = createServer(async (request, response) => {
     // returning the framed text verbatim is what makes unframing on ingest the
     // client's job (main/chat/frame.ts's opening comment).
     history.push({ seq: seq++, role: 'user', content: body.message, at: new Date().toISOString(), scene_id: body.scene_id });
+    const streamId = `fixture-${sends.length}`;
+    active = { streamId, scene: body.scene_id };
     response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
     const event = (name, data) => response.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
-    event('meta', { stream_id: `fixture-${sends.length}`, client_ref: body.client_ref });
+    event('meta', { stream_id: streamId, client_ref: body.client_ref });
     const spoken = unwrap(body.message)?.body ?? body.message;
-    if (spoken === SECOND) {
-      // Held open so the stop button has something to stop. `/api/stop` ends it.
-      event('content_block_delta', { delta: { text: '让我想想' } });
-      await new Promise(resolve => {
-        holdOpen = resolve;
-        const timer = setTimeout(resolve, 20000);
-        response.on('close', () => { clearTimeout(timer); resolve(); });
-      });
-      event('message_stop', {});
+    try {
+      if (spoken === SECOND) {
+        // Held open so the stop button has something to stop. `/api/stop` ends it.
+        event('content_block_delta', { delta: { text: '让我想想' } });
+        await new Promise(resolve => {
+          holdOpen = resolve;
+          const timer = setTimeout(resolve, 20000);
+          response.on('close', () => { clearTimeout(timer); resolve(); });
+        });
+        event('message_stop', {});
+        return;
+      }
+      const reply = '我在。';
+      // Slow enough that the streaming row is observable, short enough that the
+      // script is not waiting on a clock.
+      event('content_block_delta', { delta: { text: reply.slice(0, 1) } });
+      await sleep(900);
+      event('content_block_delta', { delta: { text: reply.slice(1) } });
+      history.push({ seq: seq++, role: 'being', content: reply, at: new Date().toISOString(), scene_id: body.scene_id });
+      event('message_stop', { session_id: 'fixture-session' });
+    } finally {
+      if (active?.streamId === streamId) active = null;
       response.end();
-      return;
     }
-    const reply = '我在。';
-    // Slow enough that the streaming row is observable, short enough that the
-    // script is not waiting on a clock.
-    event('content_block_delta', { delta: { text: reply.slice(0, 1) } });
-    await new Promise(resolve => setTimeout(resolve, 900));
-    event('content_block_delta', { delta: { text: reply.slice(1) } });
-    history.push({ seq: seq++, role: 'being', content: reply, at: new Date().toISOString(), scene_id: body.scene_id });
-    event('message_stop', { session_id: 'fixture-session' });
-    response.end();
     return;
   }
   json({ error: 'not found' }, 404);
