@@ -3,8 +3,9 @@
 // keeps `AppModel.post` as the shell's outbound channel on purpose: the
 // companion panel, the Town layer and the search panel all speak through it,
 // and their contracts (and their tests) do not change just because the other
-// end is no longer an iframe. See desktop/renderer/app/hooks/use-chat-bridge.ts
-// for the version that talked to `beings://chat`.
+// end is no longer an iframe. The version that talked to `beings://chat` was
+// `desktop/renderer/app/hooks/use-chat-bridge.ts`, deleted with the rest of the
+// iframe path on 2026-09-16 (MIGRATION.md, "P1 完成状态").
 import { useEffect, useLayoutEffect } from "react";
 import type { AppModel } from "../models/app";
 import { useModel } from "../../shared/hooks/use-model";

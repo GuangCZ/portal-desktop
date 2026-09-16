@@ -13,7 +13,7 @@ const bundle = await build({
         subscribe: () => () => {}, getVersion: () => 0,
         snapshot: { settings: { hasToken: true, being: 'fixture' } },
         api: { platform: 'darwin' }, connection: 'online',
-        chatLoading: false, sbsKnown: false, searchOpen: false,
+        chatLoading: false, searchOpen: false,
         openClientSettings() { window.settingsOpened = (window.settingsOpened || 0) + 1; },
       };
       createRoot(document.getElementById('root')).render(<Topbar model={model} />);`,

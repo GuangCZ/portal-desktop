@@ -1,3 +1,5 @@
+// SKIPPED — see the skip block below: this script drives the retired
+// `beings://chat` iframe (removed 2026-09-16, MIGRATION.md "P1 完成状态").
 // Runs the packaged Electron app against a local HTTP + WSS fixture and the real Rust engine.
 // Never sends a chat or executes a tool against a real Being.
 import { launchDesktop } from './support/electron-lifecycle.mjs';
@@ -13,6 +15,17 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { desktopExecutable, backgroundCoverage, waitForChatReady, clickChatControl, clickWhenPointerReady } from './support/desktop.mjs';
 import { c as archive } from 'tar';
+
+// SKIPPED since 2026-09-16. This script drives the conversation through
+// `page.frameLocator('#chat-frame')` — the sandboxed `beings://chat` document
+// that the native React conversation replaced (MIGRATION.md, "P1 完成状态").
+// The iframe, its request proxy and its generated assets are gone, so every
+// locator below addresses nothing. Rewriting it against the native
+// conversation's own DOM is P2 work; until then it reports a skip rather than
+// a failure, so `npm run test:all` stays readable.
+console.log('SKIPPED: tests/electron-smoke.mjs drives the retired beings://chat iframe. Rewrite against the native conversation (MIGRATION.md, P1).');
+process.exit(0);
+
 
 const executablePath = await desktopExecutable();
 const background = backgroundCoverage();

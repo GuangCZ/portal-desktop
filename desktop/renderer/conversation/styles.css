@@ -70,8 +70,9 @@
    the base typography (paragraphs, headings, quotes, tables); the rules below
    are the chat-specific parts of it — code blocks, the Markdown preview toggle
    and the place links — ported from the retired chat page's stylesheet
-   (desktop/renderer/chat/styles.css lines 937-960, 1086-1092) onto this shell's
-   tokens, so highlighting reads in both themes. */
+   (desktop/renderer/chat/styles.css lines 937-960 and 1086-1092, deleted with
+   the iframe path on 2026-09-16) onto this shell's tokens, so highlighting
+   reads in both themes. */
 .chat-body.reading-text{margin:0}
 .chat-body>:first-child{margin-top:0}
 .chat-body>:last-child{margin-bottom:0}

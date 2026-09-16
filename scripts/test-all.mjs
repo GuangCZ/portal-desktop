@@ -63,8 +63,6 @@ try {
     await npm('build-portal', ['run', 'build:portal']);
     await npm('package', ['run', 'package']);
   }
-  await npm('chat-react', ['run', 'test:chat-react']);
-  await npm('chat-history', ['run', 'test:chat-history']);
   await npm('client-lifecycle', ['run', 'test:client-lifecycle']);
   await npm('portal-runtime', ['run', 'test:portal-e2e']);
   await npm('town-sdk', ['run', 'test:town-sdk']);

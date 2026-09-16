@@ -11,6 +11,10 @@ export async function desktopExecutable() {
   return executable;
 }
 
+// `waitForChatReady` and `clickChatControl` address the sandboxed
+// `beings://chat` document, removed on 2026-09-16. Their only callers are the
+// E2E scripts that skip for the same reason; both go when those scripts are
+// rewritten against the native conversation (MIGRATION.md, "P1 完成状态").
 export async function waitForChatReady(page) {
   await page.frameLocator('#chat-frame').locator('#input').waitFor();
   const frame = page.frames().find(candidate => candidate.url().startsWith('beings://chat/'));

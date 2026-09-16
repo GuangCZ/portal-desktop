@@ -25,10 +25,10 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => {
-    // Chromium warns about the initial about:blank iframe. Loaded chat uses a
-    // distinct beings://chat origin, navigation guards and no desktop IPC.
-    const initialFrameWarning = 'An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.';
-    if (['error', 'warning'].includes(message.type()) && message.text() !== initialFrameWarning) errors.push(message.text());
+    // Chromium used to warn about the chat iframe's initial about:blank. The
+    // shell has had no child frame since 2026-09-16 (MIGRATION.md, "P1 完成状态"),
+    // so nothing is allowed through any more.
+    if (['error', 'warning'].includes(message.type())) errors.push(message.text());
   });
   await page.getByRole('button', { name: '连接我的 Being' }).waitFor();
   if (savedRuntime) {

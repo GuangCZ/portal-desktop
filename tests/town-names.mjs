@@ -1,4 +1,8 @@
 // Real React components with local fixtures; no Town requests or credentials.
+// The `/places` route used to mount `ChatPlaces` — the town-shortcut row of the
+// Loom composer — which went with the `beings://chat` document on 2026-09-16.
+// The native composer has no such row yet, so that coverage is gone rather than
+// repointed; see MIGRATION.md, "P1 完成状态".
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -7,14 +11,12 @@ import { chromium } from 'playwright';
 
 const { outputFiles } = await build({
   stdin: { resolveDir: process.cwd(), sourcefile: 'town-names-fixture.tsx', loader: 'tsx', contents: `
-    import React from 'react';
     import { createRoot } from 'react-dom/client';
     import { TownFeed } from './desktop/renderer/town/components/feed';
     import { TownComposer } from './desktop/renderer/town/components/composer';
     import { TownAuth } from './desktop/renderer/town/components/auth';
     import { TownModel } from './desktop/renderer/town/models/town';
     import { SceneStore } from './desktop/renderer/shared/models/scene';
-    import { ChatPlaces } from './desktop/renderer/chat/components/navigation';
     import { collectMentionNames } from './desktop/renderer/town/models/mentions';
     const messages = [
       { id: 'incoming', sender_display: '河流', sender_name: 'old-river', sender_town_id: 't_RiverA', recipient_town_id: 't_Willow', content: '当前显示名优先', created_at: '2026-09-14T10:00:00Z' },
@@ -41,15 +43,7 @@ const { outputFiles } = await build({
     window.fixtureMessages = feed;
     model.live = { phase: 'connected', beingId: 't_Willow', display: '柳树', generation: 1, revision: 1, sync: 1, versions: { bonfire: 0, mail: 0, firesides: 0 }, message: 'fixture' };
     model.load = async () => {};
-    if (location.pathname === '/places') {
-      window.fixturePlaces = [];
-      function PlacesFixture() {
-        const [channels, setChannels] = React.useState([]);
-        window.updatePlaces = setChannels;
-        return <div id="input-area"><div id="input-row"><textarea id="input" placeholder="说点什么…"/><button type="button" className="btn-icon" aria-label="添加附件">＋</button><div id="desktop-composer-tools"><ChatPlaces send={message => window.fixturePlaces.push(message)} channels={channels}/></div><button id="send-btn" type="button" aria-label="发送">↑</button></div></div>;
-      }
-      createRoot(document.getElementById('root')).render(<PlacesFixture/>);
-    } else createRoot(document.getElementById('root')).render(<>
+    createRoot(document.getElementById('root')).render(<>
       <TownFeed town={model} data={{ messages: feed }} filterKey={model.view + ':all'} />
       <TownComposer model={model} />
       <button id="fixture-auth" onClick={() => { model.live = { ...model.live, phase: 'connecting', beingId: undefined, display: undefined, message: '正在确认 Town 身份' }; void model.auth(); }}>连接设置</button>
@@ -59,12 +53,9 @@ const { outputFiles } = await build({
   bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic',
 });
 const styles = await readFile('desktop/renderer/app/styles.css', 'utf8');
-const chatStyles = await readFile('desktop/renderer/chat/styles.css', 'utf8');
 const server = createServer((request, response) => {
   response.setHeader('Content-Type', request.url === '/fixture.js' ? 'text/javascript' : 'text/html; charset=utf-8');
-  const css = request.url === '/places'
-    ? `${chatStyles} body {margin:0;} #root {min-height:100vh;display:flex;align-items:flex-end;} #input-area {box-sizing:border-box;} #input {box-sizing:border-box;resize:none;font-family:system-ui;} #send-btn {cursor:pointer;}`
-    : `${styles} body {display:block;height:auto;padding:32px; overflow:auto;} .social-feed {max-width:960px;margin:auto;}`;
+  const css = `${styles} body {display:block;height:auto;padding:32px; overflow:auto;} .social-feed {max-width:960px;margin:auto;}`;
   response.end(request.url === '/fixture.js' ? outputFiles[0].text : `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>${css}</style><div id="root"></div><script src="/fixture.js"></script></html>`);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -130,48 +121,8 @@ try {
     assert.match(await page.evaluate(() => window.fixtureMessages[0].content), /@t_RiverA 和 \*\*@t_RiverB\*\*/);
     await page.screenshot({ path: `test-results/town-mentions-${view}.png` });
   }
-  await page.goto(`http://127.0.0.1:${server.address().port}/places`);
-  const trigger = page.locator('#chat-places-trigger');
-  await trigger.waitFor();
-  assert.equal(await trigger.getAttribute('aria-expanded'), 'true');
-  const row = page.locator('#chat-places-menu button');
-  assert.equal(await row.count(), 6);
-  assert.equal(await row.evaluateAll(items => new Set(items.map(item => Math.round(item.getBoundingClientRect().y))).size), 1);
-  await page.locator('#input').fill('保留我的草稿');
-  await trigger.click();
-  assert.equal(await page.locator('#chat-places-popup').isVisible(), false);
-  await trigger.hover();
-  assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
-  await page.evaluate(() => window.updatePlaces(['mail']));
-  assert.equal(await trigger.getAttribute('aria-label'), '展开小镇入口 · 有新动态');
-  await trigger.press('ArrowRight');
-  assert.equal(await page.locator('[data-place="bonfire"]').evaluate(el => el === document.activeElement), true);
-  await page.keyboard.press('ArrowRight');
-  assert.equal(await page.locator('[data-place="firesides"]').evaluate(el => el === document.activeElement), true);
-  await page.keyboard.press('End');
-  assert.equal(await page.locator('[data-place="scrolls"]').evaluate(el => el === document.activeElement), true);
-  await page.keyboard.press('Escape');
-  assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
-  assert.equal(await trigger.evaluate(el => el === document.activeElement), true);
-  await trigger.press('Enter');
-  await page.locator('[data-place="mail"]').click();
-  assert.deepEqual(await page.evaluate(() => window.fixturePlaces), [{ type: 'beings:open-place', view: 'mail' }]);
-  assert.equal(await page.locator('#input').inputValue(), '保留我的草稿');
-  assert.equal(await trigger.getAttribute('aria-expanded'), 'true');
-  await page.screenshot({ path: 'test-results/chat-places-expanded.png' });
-  await trigger.click();
-  await page.screenshot({ path: 'test-results/chat-places-collapsed.png' });
-  await page.setViewportSize({ width: 420, height: 700 });
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await trigger.click();
-  assert.equal(await row.evaluateAll(items => new Set(items.map(item => Math.round(item.getBoundingClientRect().y))).size), 1);
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  await page.locator('[data-place="scrolls"]').click();
-  assert.equal(await page.evaluate(() => window.fixturePlaces.at(-1).view), 'scrolls');
-  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
-  await page.screenshot({ path: 'test-results/chat-places-narrow-dark.png' });
   assert.deepEqual(errors, []);
-  console.log('PASS: DM names, exact and legacy reply recipients, unaddressable legacy mail, saved pairing display and confirmed sender; horizontal town shortcuts, toggle, keyboard, activity badges, narrow layout, reduced motion and draft preservation.');
+  console.log('PASS: DM names, exact and legacy reply recipients, unaddressable legacy mail, saved pairing display and confirmed sender.');
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));

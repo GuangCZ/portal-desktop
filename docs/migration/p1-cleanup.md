@@ -143,10 +143,45 @@ renderer/chat 整个目录、loom.html、构建脚本、相关测试）从仓库
 | 项 | 状态 |
 | --- | --- |
 | docs/migration/p1-cleanup.md 阅读摘要 | 已完成 |
-| 主进程：proxy.ts / scene.ts / main.ts / protocol.ts / window.ts / shared/types.ts | 未开始 |
-| 渲染层：renderer/chat/ 目录、use-chat-bridge、chat-scene.tsx、app.ts、workspace.ts、scene.ts | 未开始 |
-| 根目录 loom.html | 未开始 |
-| 构建与脚本：build-chat.mjs、package.json、prepare-desktop.mjs、test-all.mjs | 未开始 |
-| 测试删除与跳过 | 未开始 |
-| 文档：ARCHITECTURE.md / README(.md/_CN.md) / MIGRATION.md | 未开始 |
-| typecheck + vitest + prepare:desktop | 未开始 |
+| 主进程：proxy.ts / scene.ts 删除，main.ts / protocol.ts / window.ts / shared/types.ts 改写 | 已完成 |
+| main/chat/ready.ts：`upstreamRequest` 内联为 `/api/status` 直连 | 已完成 |
+| 渲染层：renderer/chat/ 整目录、use-chat-bridge.ts、chat-scene.tsx 删除 | 已完成 |
+| 渲染层：app.ts / workspace.ts / scene.ts / topbar.tsx / settings.tsx / styles.css / index.html CSP | 已完成 |
+| 根目录 loom.html 删除 | 已完成 |
+| 构建与脚本：build-chat.mjs 删除、package.json 三个脚本、prepare-desktop.mjs 接手 THIRD-PARTY-LICENSES、test-all.mjs | 已完成（npm run prepare:desktop 通过） |
+| 测试删除：chat-runtime / chat-scopes / chat-scene / chat-react / chat-history / chat-reference | 已完成 |
+| 测试改写：connection.test.ts、renderer-state.test.ts、architecture.test.ts、town-names.mjs、menu-keyboard.mjs、client-lifecycle.mjs | 已完成（town-names 与 menu-keyboard 实跑通过） |
+| E2E 跳过：sbs-refresh / electron-smoke / town-sdk / portal-runtime-e2e / town-ui | 已完成（五个脚本均实跑 exit 0） |
+| 文档：ARCHITECTURE.md / README.md / README_CN.md / MIGRATION.md | 未开始 |
+| typecheck + vitest | 通过（463 passed / 16 skipped） |
+
+### 实跑记录
+
+- `npx tsc --noEmit`：通过。
+- `npx vitest run`：`Test Files 55 passed | 7 skipped (62)` / `Tests 463 passed | 16 skipped (479)`。
+- `npm run prepare:desktop`：通过，`desktop/generated/THIRD-PARTY-LICENSES.txt` 正常生成（7794 字节）。
+- `npx vite build --config vite.renderer.config.ts`：通过，271 modules。
+- `node tests/menu-keyboard.mjs`、`node tests/town-names.mjs`、`node tests/seed-garden.mjs`、
+  `node tests/update-progress.mjs`：PASS。
+- 五个 iframe E2E 脚本逐个 `node tests/<name>.mjs`：都在跳过块处 exit 0。
+
+### 本块做出的判断（原任务没写死的地方）
+
+1. **SBS 开关与 `beings:chat-action` 面板**：唯一写入方是 `use-chat-bridge`，删掉之后
+   `sbsKnown` 永远为 false、`chatAction` 发给空气。连同 topbar 的隐藏按钮、settings 的
+   「模型设置」入口、`renderer-state.test.ts` 的 SBS 用例一起删，而不是留死状态。
+2. **历史范围（当前场景/全部场景）**：原生会话没有这个概念，`ChatSceneIndicator` 与
+   `HistoryScope` 一并删除。topbar 的 grid 第 1 列空出来，`.topbar-actions{grid-column:3}`
+   是显式的，布局不变。
+3. **`chatSource`**：保留为"会话界面身份"的变更令牌（`crypto.randomUUID()`），不再拼成
+   `beings://chat/?...`。`use-conversation-bridge` 依赖它触发 reload，`sharePortalLogs`
+   依赖它判断"是否已连接"。原来断言 URL 参数的用例改写成断言它不含连接信息。
+4. **`tests/chat-reference.test.ts` 删除**：它 import 的是 `chat/models/chat` 与
+   `chat/services/bridge`，不是 shared 组件。`tests/markdown.test.ts` 保留。
+5. **`tests/connection.test.ts` 保留文件、删 5 个代理用例**：其余用例测的是
+   `chat/connection` 的链接解析与脱敏，与代理无关。
+6. **`tests/town-names.mjs` 的 `/places` 路由删除**：它渲染的 `ChatPlaces` 属于 Loom
+   composer，原生 composer 还没有这一排小镇入口。Town 名称/提及部分原样保留并实跑通过。
+7. **THIRD-PARTY-LICENSES**：forge 不直接依赖，但 `vite.renderer.config.ts` 的
+   `publicDir: '../generated'` 会把它拷进渲染层产物，而 shell 仍打包 marked / highlight.js /
+   react / react-dom / scheduler。生成逻辑搬进 `scripts/prepare-desktop.mjs`。

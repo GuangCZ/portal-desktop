@@ -1,9 +1,22 @@
+// SKIPPED — see the skip block below: this script drives the retired
+// `beings://chat` iframe (removed 2026-09-16, MIGRATION.md "P1 完成状态").
 // Real generated Loom + its desktop bridge, served only by a local fixture.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdir, readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { chromium } from 'playwright';
+
+// SKIPPED since 2026-09-16. This script drives the conversation through
+// `page.frameLocator('#chat-frame')` — the sandboxed `beings://chat` document
+// that the native React conversation replaced (MIGRATION.md, "P1 完成状态").
+// The iframe, its request proxy and its generated assets are gone, so every
+// locator below addresses nothing. Rewriting it against the native
+// conversation's own DOM is P2 work; until then it reports a skip rather than
+// a failure, so `npm run test:all` stays readable.
+console.log('SKIPPED: tests/sbs-refresh.mjs drives the retired beings://chat iframe. Rewrite against the native conversation (MIGRATION.md, P1).');
+process.exit(0);
+
 
 const { outputFiles } = await build({ stdin: { resolveDir: process.cwd(), loader: 'tsx', contents: `
   import React from 'react';

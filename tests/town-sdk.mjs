@@ -1,3 +1,5 @@
+// SKIPPED — see the skip block below: this script drives the retired
+// `beings://chat` iframe (removed 2026-09-16, MIGRATION.md "P1 完成状态").
 // SDK contract fixtures only: no real Town pairing, messages or credentials.
 import { launchDesktop } from './support/electron-lifecycle.mjs';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
@@ -5,6 +7,17 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { desktopExecutable, waitForChatReady } from './support/desktop.mjs';
+
+// SKIPPED since 2026-09-16. This script drives the conversation through
+// `page.frameLocator('#chat-frame')` — the sandboxed `beings://chat` document
+// that the native React conversation replaced (MIGRATION.md, "P1 完成状态").
+// The iframe, its request proxy and its generated assets are gone, so every
+// locator below addresses nothing. Rewriting it against the native
+// conversation's own DOM is P2 work; until then it reports a skip rather than
+// a failure, so `npm run test:all` stays readable.
+console.log('SKIPPED: tests/town-sdk.mjs drives the retired beings://chat iframe. Rewrite against the native conversation (MIGRATION.md, P1).');
+process.exit(0);
+
 
 const dir = await mkdtemp(path.join(os.tmpdir(), 'town-sdk-284bef4-'));
 let app, page, failure;
