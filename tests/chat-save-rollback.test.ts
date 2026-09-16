@@ -48,7 +48,10 @@ vi.mock("electron", async () => {
     requestSingleInstanceLock: () => true, quit: vi.fn(),
     whenReady: () => ({ then: (ready: () => Promise<void>) => (fixture.startup = Promise.resolve().then(ready)) }),
   });
-  return { app, clipboard: {}, ipcMain: { handle: vi.fn() }, net: { fetch: vi.fn() },
+  return { app, clipboard: {}, ipcMain: { handle: vi.fn() }, net: { fetch: vi.fn(), request: vi.fn(), isOnline: () => true },
+    // The subsystem seam hands these to installDesktopExtensions (I0, 2026-09-16);
+    // this test mocks that module out, so presence is all that is needed.
+    WebContentsView: class {}, powerMonitor: { on: vi.fn() },
     dialog: { showErrorBox: vi.fn(), showMessageBox: vi.fn() }, nativeTheme: {}, shell: {},
     safeStorage: { isEncryptionAvailable: () => true, encryptString: (value: string) => Buffer.from(value), decryptString: (value: Buffer) => value.toString() },
     protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
