@@ -21,6 +21,8 @@ import type {
   TownDesktopMessage,
   TownDesktopReadResult,
   TownDesktopRefreshStatus,
+  TownDesktopScroll,
+  TownDesktopScrollSummary,
   TownDesktopTimeline,
 } from "../desktop/shared/desktop-types";
 const deferred = <T>() => {
@@ -166,6 +168,34 @@ const result = (data: Record<string, unknown>): TownResult => ({
   data,
   fetchedAt: "2026-09-12T00:00:00Z",
 });
+const scrollSummary = (
+  overrides: Partial<TownDesktopScrollSummary> = {},
+): TownDesktopScrollSummary => ({
+  id: "letter",
+  title: "私人卷轴",
+  beingId: "t_Willow",
+  beingName: "柳树",
+  visibility: "private",
+  kind: "note",
+  lifecycle: "seed",
+  tags: ["笔记"],
+  createdAt: "2026-09-12T00:00:00Z",
+  updatedAt: "2026-09-12T01:00:00Z",
+  revision: 3,
+  ...overrides,
+});
+const scrollDetail = (
+  overrides: Partial<TownDesktopScroll> = {},
+): TownDesktopScroll => ({
+  ...scrollSummary(),
+  content: "只有配对后才读得到的正文",
+  totalLength: 15,
+  offset: 0,
+  limit: 10000,
+  nextOffset: 15,
+  hasMore: false,
+  ...overrides,
+});
 function api(
   overrides: Partial<DesktopAPI> = {},
   townOverrides: Partial<TownDesktopAPI> = {},
@@ -194,6 +224,7 @@ function api(
     inbox: vi.fn(async () => ({ messages: [] })),
     members: vi.fn(async () => ({ members: [], revision: 1, expiresAt: 0 })),
     scrolls: vi.fn(async () => ({ scrolls: [], total: 0, offset: 0, limit: 50, hasMore: false })),
+    scroll: vi.fn(async () => ({ scroll: scrollDetail() })),
     cached: vi.fn(async () => ({ cached: false, data: null, lastSuccessAt: null })),
     pair: vi.fn(async () => clientState()),
     autoPair: vi.fn(async () => clientState()),
@@ -581,8 +612,8 @@ describe("Town request and identity isolation", () => {
     expect(model.messages().map((message) => message.content)).toEqual(["from town"]);
   });
   it("discards stale details and private drafts when the identity changes", async () => {
-    const pending = deferred<TownResult>();
-    const { model } = town({ town: () => pending.promise });
+    const pending = deferred<{ scroll: TownDesktopScroll }>();
+    const { model } = town({}, { scroll: () => pending.promise });
     model.receiveState(appState());
     model.view = "chat";
     model.content = "private draft";
@@ -594,7 +625,9 @@ describe("Town request and identity isolation", () => {
     model.receiveState(
       appState({ identity: identity({ townId: "t_River", connectionRevision: 2 }) }),
     );
-    pending.resolve(result({ title: "private", content: "must not appear" }));
+    pending.resolve({
+      scroll: scrollDetail({ id: "private", title: "private", content: "must not appear" }),
+    });
     await read;
     expect(model.detail).toBeUndefined();
     expect(model.content).toBe("");
@@ -603,6 +636,57 @@ describe("Town request and identity isolation", () => {
     expect(model.sendOpen).toBe(false);
     expect(model.mentionNames.size).toBe(0);
     expect(model.timeline).toBeNull();
+  });
+  it("reads a private scroll body over the paired client and a public one without a credential", async () => {
+    // The catalogue reader carries no token at all (desktop/main/town/catalog.ts),
+    // so 「我的卷轴」 would list rows whose bodies answer 401. The list already
+    // came from the paired client; the body has to follow it.
+    const scroll = vi.fn(async () => ({ scroll: scrollDetail({ id: "letter" }) }));
+    const scrolls = vi.fn(async () => ({
+      scrolls: [scrollSummary({ id: "letter" })],
+      total: 1, offset: 0, limit: 50, hasMore: false,
+    }));
+    const anonymous = vi.fn(async () =>
+      result({ scrolls: [{ id: "note", visibility: "public", title: "\u516c\u5f00\u5377\u8f74" }] }),
+    );
+    const { model } = town({ town: anonymous }, { scroll, scrolls });
+    model.receiveState(appState());
+    model.show("scrolls");
+    model.selectTab("my-scrolls");
+    await settle();
+    // The DTO is projected onto the shape the rows read, so the author and the
+    // date are not blank where the catalogue would have filled them.
+    expect(model.data?.scrolls).toEqual([
+      expect.objectContaining({ id: "letter", display_name: "\u67f3\u6811", being_id: "t_Willow", updated_at: "2026-09-12T01:00:00Z" }),
+    ]);
+    await model.loadDetail({ kind: "scroll", id: "letter" });
+    expect(scroll).toHaveBeenCalledWith({ id: "letter" });
+    expect(model.detail?.fragments[0]).toMatchObject({
+      id: "letter",
+      content: "\u53ea\u6709\u914d\u5bf9\u540e\u624d\u8bfb\u5f97\u5230\u7684\u6b63\u6587",
+      has_more: false,
+    });
+    const credentialed = anonymous.mock.calls.length;
+
+    // A scroll the catalogue itself listed as public stays on the anonymous
+    // route: the validated DTO does not carry `trigger_context`/`outcome`, and
+    // the public reading pane renders them.
+    model.selectTab("scrolls");
+    await settle();
+    await model.loadDetail({ kind: "scroll", id: "note" });
+    expect(anonymous).toHaveBeenCalledWith({ kind: "scroll", id: "note" });
+    expect(anonymous.mock.calls.length).toBeGreaterThan(credentialed);
+    expect(scroll).toHaveBeenCalledTimes(1);
+  });
+  it("offers pairing rather than a retry when a scroll body needs a credential", async () => {
+    const scroll = vi.fn(async () => {
+      throw townError("AUTH_REQUIRED", "\u8bf7\u7528 Being \u63d0\u4f9b\u7684\u516d\u4f4d\u914d\u5bf9\u7801\u8fde\u63a5 Town\u3002");
+    });
+    const { model } = town({}, { scroll });
+    model.receiveState(appState());
+    await model.loadDetail({ kind: "scroll", id: "letter" });
+    expect(model.detailError?.auth).toBe(true);
+    expect(model.detail).toBeUndefined();
   });
   it("sends once and never retries an uncertain result automatically", async () => {
     let fail!: (error: unknown) => void;

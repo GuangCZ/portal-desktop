@@ -22,6 +22,8 @@ import type {
   TownDesktopRoom,
   TownDesktopRoomDirectory,
   TownDesktopRoomMember,
+  TownDesktopScroll,
+  TownDesktopScrollSummary,
   TownDesktopTimeline,
 } from "../../../shared/desktop-types";
 
@@ -69,6 +71,36 @@ export const list = (data: Data, key: string): Data[] => {
     throw new Error("Town 返回的列表格式不正确，请稍后刷新。");
   return (data[key] as unknown[]).map(record);
 };
+
+// The two scroll shapes, reconciled.
+//
+// The library has two readers and they answer differently: the public catalogue
+// hands back Town's raw JSON (`display_name`, `updated_at`, `has_more`), while the
+// paired client hands back the validated DTO (`beingName`, `updatedAt`, `hasMore`)
+// from desktop/main/town/session/library-contract.ts. The rows and the reading
+// pane read ONE shape, so the DTO is projected onto the catalogue's here rather
+// than branched on in five components.
+const scrollRow = (scroll: TownDesktopScrollSummary): Data => ({
+  id: scroll.id,
+  title: scroll.title,
+  being_id: scroll.beingId,
+  display_name: scroll.beingName,
+  visibility: scroll.visibility,
+  kind: scroll.kind,
+  lifecycle: scroll.lifecycle,
+  tags: scroll.tags,
+  created_at: scroll.createdAt,
+  updated_at: scroll.updatedAt,
+  revision: scroll.revision,
+});
+const scrollBody = (scroll: TownDesktopScroll): Data => ({
+  ...scrollRow(scroll),
+  content: scroll.content,
+  total_length: scroll.totalLength,
+  offset: scroll.offset,
+  limit: scroll.limit,
+  has_more: scroll.hasMore,
+});
 export const date = (value: unknown) => {
   const parsed = new Date(str(value));
   return Number.isNaN(parsed.getTime())
@@ -695,7 +727,7 @@ export class TownModel extends Store {
         // the public catalogue has no identity to scope it by.
         const result = await this.town.scrolls({ visibility: "private" });
         if (generation !== this.request) return;
-        this.data = { scrolls: result.scrolls, total: result.total };
+        this.data = { scrolls: result.scrolls.map(scrollRow), total: result.total };
         this.status = `来自 beings.town · ${result.total} 份卷轴`;
       } else {
         const result = await this.api.town(this.query());
@@ -843,6 +875,25 @@ export class TownModel extends Store {
     }
   }
 
+  /** The visibility this page already knows for a listed scroll. `''` when the
+   * scroll was opened from a link rather than a row — and an unknown visibility
+   * is treated as private, which is what the credentialed read is for. */
+  scrollVisibility(id: string): string {
+    const data = this.data;
+    if (!id || !data || !Array.isArray(data.scrolls)) return "";
+    return str((data.scrolls as unknown[]).map(record).find(scroll => str(scroll.id) === id)?.visibility);
+  }
+
+  /** One scroll body over the paired client, projected onto the shape the public
+   * catalogue answers with so the reading pane stays one component. */
+  private async readScrollBody(query: TownQuery): Promise<{ ok: true; data: Data; fetchedAt: string }> {
+    const { scroll } = await this.town.scroll({
+      id: str(query.id),
+      ...(query.offset ? { offset: query.offset } : {}),
+    });
+    return { ok: true, data: scrollBody(scroll), fetchedAt: new Date().toISOString() };
+  }
+
   async loadDetail(query: TownQuery, append = false) {
     const generation = ++this.detailRequest;
     this.selectedId = query.id || "";
@@ -857,7 +908,17 @@ export class TownModel extends Store {
     });
     this.changed();
     try {
-      const result = await this.api.town(query);
+      // A scroll body that is not known to be public needs the credential:
+      // `/api/scrolls/{id}` answers 401 for a private or shared scroll, and the
+      // catalogue reader has no token at all (desktop/main/town/catalog.ts). The
+      // client this unit replaced sent `Authorization` on every scroll body for
+      // exactly that reason. A scroll the catalogue already listed as public is
+      // still read anonymously, because the validated DTO does not carry
+      // `trigger_context`/`outcome` and the public reading pane renders them.
+      const result = query.kind === "scroll" && this.paired
+        && this.scrollVisibility(str(query.id)) !== "public"
+        ? await this.readScrollBody(query)
+        : await this.api.town(query);
       if (generation !== this.detailRequest) return;
       if (!result.ok) {
         this.detailError = {
@@ -887,6 +948,10 @@ export class TownModel extends Store {
       if (generation === this.detailRequest) {
         this.detailError = {
           message: errorText(error),
+          // A credentialed body read can fail because the pairing is gone, and
+          // then the button has to offer pairing rather than a retry that would
+          // fail the same way (catalog.tsx `DetailError`).
+          auth: this.codeOf(error) === "AUTH_REQUIRED",
           retry: () => void this.loadDetail(query, append),
         };
         this.scenes.update({ status: "error", scope: "详情读取失败" });
