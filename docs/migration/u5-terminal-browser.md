@@ -75,9 +75,10 @@
 | desktop-terminal.cjs → tools/terminal/terminal.ts | 测试通过（18/18） |
 | tools/terminal/types.ts (PtyLike / PtyFactory) | 已移植 |
 | tools/terminal/platform.ts (platform.cjs + consoleEnvironment) | 已移植 |
-| desktop-browser.cjs → tools/browser/browser.ts | 未开始 |
-| tools/browser/host.ts (ElectronBrowserHost) | 未开始 |
-| tools/browser/electron-host.ts | 未开始 |
+| desktop-browser.cjs → tools/browser/browser.ts | 已移植 |
+| tools/browser/types.ts (快照/标签页/页面操作类型) | 已移植 |
+| tools/browser/host.ts (ElectronBrowserHost) | 已移植 |
+| tools/browser/electron-host.ts | 已移植（仅 typecheck，无单测） |
 | tests/tools-terminal-terminal.test.ts | 测试通过（18 条，与原文件一一对应） |
 | tests/tools-browser-browser.test.ts | 未开始 |
 
