@@ -62,3 +62,43 @@
 ## 2. 进度
 
 - [x] 读 i1 / im / i6b / i5 / i7 的 openIssues 与决定
+
+### 1.5 真实代码与 BD 对照物（逐条实读）
+
+**`desktop/main/town/session/session.ts`（600 行，u1 逐行移植自 BD `src/town-session.cjs`）**
+
+- `:348-358` `getMembers`：TTL 60s，只在**成功之后**写缓存；并发调用各开各的请求（无 in-flight 去重）。
+  BD `src/town-session.cjs:273-283` 一模一样 —— 缺陷是继承的，不是移植引入的。
+- `:406-417` `getBonfireMessages`：`Promise.all([request2('/api/bonfire/hear',…), this.getMembers({signal})…])`。
+  BD `src/town-session.cjs:335-336` 同两行。
+- `messagesDto(value, members)`（`:87-105`）里 `members` 的**唯一**用途是
+  `byId = members.find(m => m.id === item.being)`，作为 `beingId` 的**第三顺位兜底**
+  （`town_id` → `being_id` → 目录里按显示名找 → `t_` 前缀自身）。也就是说目录只影响**老载荷**的作者归属，
+  不影响消息本体、不影响 @提及标签（后者在渲染层用 `mentionNames`）。
+- `_request`（`:257-310`）把自己的 `AbortController` 注册进 `this._requests`，所以 `reset()` 能取消一条**不带调用方 signal** 的请求。
+
+**BD `renderer/town-app.js` 的两条规则（本单元第 1、2 条任务的原始出处）**
+
+- `:1607-1610` `loadBonfire`：`Promise.all([readTownMessages('bonfire', '', manual), loadBonfireMembers(manual)])`
+  —— **feed 与目录是两条独立的加载**，`readTownMessages(manual=false)` 走的是 `getTownMessageSnapshot`（纯缓存）。
+- `:1581-1605` `loadBonfireMembers`：**先 `cachedData('getBeingMembers')` 画一次**，再 `call('getBeingMembers')` 覆盖，
+  失败只写 `memberError`，两次都各自 `renderBonfire()`。对应 `test/town-conversation-ui.cjs:98`
+  「cached directory resolves mentions while the fresh directory is pending」与 `:103`
+  「late directory arrival rerenders mention labels without mutating messages」。
+- `:1955-1974` `open()`：**同一次打开里读只发一次** ——
+  `const cachedMessages = … ? readTownMessages('bonfire') : null` 在函数开头起飞，
+  后面是 `await (cachedMessages || readTownMessages('bonfire'))`、`const members = cachedMembers || loadBonfireMembers()`。
+  这就是「同一 in-flight 读合并」在 BD 里的原样：**已经起飞的那一个被复用，而不是再起一个**。
+
+**`/api/messages` 路由（本单元第 4 条任务）：本壳层与 BD 0.8.26 逐字一致，不需要改**
+
+| | BD 0.8.26 | 本壳层 |
+| --- | --- | --- |
+| 客户端路由表 | `src/town-client.cjs:14` `['/api/messages', []]`（**允许的 query 参数为空数组**） | `desktop/main/town/session/client.ts:69` 同一行 |
+| 读法 | `src/town-session.cjs:344-348` `directMessagesDto(await request('/api/messages'))`，**不带任何 query** | `session.ts:419-423` 同 |
+
+没有 `?with=received` / `?with=sent`，两边都没有。`docs/town-sdk-integration.md:40` 的实测记录也是
+「私信：`GET /api/messages` 读收件箱，`POST /api/messages` 发送，均走 client token」。
+**「GET 是否返回已发送的私信」仍然未实测**：同文件 `:93` 明说「Being 提醒公开帮助未明确 GET 私信是否改变已读/投递状态」，
+本机没有真 Town 可连。按任务书「无法实测就以 BD 源码为准并标注未实测」处理 —— 路由不动。
+（I1 的 R4 已经把 `recipient` / `recipient_town_id` 落进 DTO，所以真要是返回了已发送的私信，收件人地址是有的。）
