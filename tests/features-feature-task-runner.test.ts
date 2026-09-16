@@ -176,6 +176,22 @@ describe("feature task runner", () => {
     expect(JSON.stringify(task)).not.toMatch(/private|API_KEY/);
   });
 
+  // Added during review follow-up (not in the source file): pins the CJS `item.status` reading of batch
+  // results so a later rewrite cannot turn a malformed batch into a falsely successful task.
+  it("batch installation counts read plain property values and refuse to summarize a malformed batch", async () => {
+    const counted = setup();
+    const inherited = Object.create({ status: "installed" }) as object;
+    const accessor = Object.defineProperty({}, "status", { get() { return "installed"; } });
+    await counted.runner.run("installEligibleGroveKits", [{}], () => ({ results: [inherited, accessor, { status: "needs_being" }, { status: "failed" }] }));
+    expect(counted.ledger.list()[0].status).toBe("succeeded");
+    expect(counted.ledger.list()[0].summary).toBe("批量检查 4 个 Kit：本机已安装 2 个，需 Being 协助 1 个，失败 1 个。加载状态见工具市场。");
+    const malformed = setup();
+    await expect(malformed.runner.run("installEligibleGroveKits", [{}], () => ({ results: [null] }))).rejects.toThrow(TypeError);
+    expect(malformed.ledger.list()[0].status).toBe("failed");
+    expect(malformed.ledger.list()[0].errorCode).toBe("REQUEST_FAILED");
+    expect(malformed.ledger.list()[0].summary).toBe("");
+  });
+
   it("Channel outcomes distinguish QR authorization, pending, unsupported and confirmed statuses", async () => {
     for (const [result, expected] of [[{ status: "pending" }, "waiting"], [{ status: "unknown" }, "waiting"], [{ status: "pending", qrCodeDataUrl: "data:image/png;base64,private" }, "needs_input"], [{ status: "registered" }, "needs_input"], [{ status: "unsupported" }, "failed"], [{ status: "connected" }, "succeeded"]] as const) {
       const context = setup();
@@ -262,7 +278,10 @@ describe("feature task runner", () => {
     let stopped = false;
     const ledgerError = new Error("Unexpected ledger failure");
     ledger.begin = () => { throw ledgerError; };
-    expect(() => runner.run("stopPortal", [], () => { stopped = true; })).toThrow(ledgerError);
+    let caught: unknown;
+    // The escape hatch must rethrow the ledger error itself, not a look-alike: assert identity, not message.
+    try { runner.run("stopPortal", [], () => { stopped = true; }); } catch (error) { caught = error; }
+    expect(caught).toBe(ledgerError);
     expect(stopped).toBe(false);
   });
 });

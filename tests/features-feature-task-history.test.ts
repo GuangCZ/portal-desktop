@@ -61,13 +61,20 @@ function encryptedStorage(): SafeStorageApi {
 }
 
 const roots: string[] = [];
+const base = path.resolve(os.tmpdir());
 async function directory(): Promise<string> {
-  const result = await mkdtemp(path.join(os.tmpdir(), "feature-task-history-test-"));
+  const result = await mkdtemp(path.join(base, "feature-task-history-test-"));
   roots.push(result);
   return result;
 }
 afterEach(async () => {
-  while (roots.length) await rm(roots.pop() as string, { recursive: true, force: true });
+  while (roots.length) {
+    // Same guards as the source test: never recursively remove anything outside the generated directory.
+    const resolved = path.resolve(roots.pop() as string);
+    expect(path.dirname(resolved)).toBe(base);
+    expect(path.basename(resolved).startsWith("feature-task-history-test-")).toBe(true);
+    await rm(resolved, { recursive: true, force: true });
+  }
 });
 
 function record(beingId = "cz_being") {

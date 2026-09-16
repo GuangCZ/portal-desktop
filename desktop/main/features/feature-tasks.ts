@@ -63,7 +63,7 @@ function safeText(value: unknown, limit: number): string {
   if (value === undefined || value === null) return '';
   if (typeof value !== 'string') throw new TypeError('Task text must be a string');
   return value.slice(0, limit * 8)
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f‪-‮⁦-⁩]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, '')
     .replace(/https?:\/\/[^\s<>\[\]()"']+/gi, '[链接]')
     .replace(/\bBearer\s+[^\s,;"']+/gi, 'Bearer [已隐藏]')
     .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, '[已隐藏]')

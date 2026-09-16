@@ -130,7 +130,9 @@ function finish(name: string, first: RequestHints, result: unknown, ledger: Feat
   }
   const batch = own(result, 'results');
   if (name === 'installEligibleGroveKits' && Array.isArray(batch)) {
-    const items = batch, installed = items.filter(item => own(item, 'status') === 'installed').length, needs = items.filter(item => own(item, 'status') === 'needs_being').length, errors = items.filter(item => own(item, 'status') === 'failed').length;
+    // Faithful to the CJS `item.status`: inherited and accessor values still count, and a malformed
+    // entry (a null element) still throws so the task fails instead of reporting a false success.
+    const items = batch as { status?: unknown }[], installed = items.filter(item => item.status === 'installed').length, needs = items.filter(item => item.status === 'needs_being').length, errors = items.filter(item => item.status === 'failed').length;
     done(`批量检查 ${items.length} 个 Kit：本机已安装 ${installed} 个，需 Being 协助 ${needs} 个，失败 ${errors} 个。加载状态见工具市场。`); return;
   }
   if (['deployPortal', 'startPortal', 'stopPortal'].includes(name)) {

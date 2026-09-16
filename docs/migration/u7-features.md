@@ -19,7 +19,8 @@ portal-desktop 的 TypeScript（`desktop/main/features/*.ts` + `tests/features-*
 | 测试（52 例） | `tests/features-feature-tasks.test.ts`、`tests/features-feature-task-runner.test.ts`、`tests/features-feature-task-history.test.ts`、`tests/features-feature-task-discussion.test.ts` |
 
 门槛：`npm run typecheck` 退出码 0；`npx vitest run` →
-`Test Files  48 passed | 7 skipped (55)` / `Tests  361 passed | 16 skipped (377)`。
+`Test Files  48 passed | 7 skipped (55)` / `Tests  362 passed | 16 skipped (378)`
+（复审收尾后的最终数字；收尾前为 361 通过）。
 未做集成：IPC、renderer、`main.ts` 挂钩留给后续阶段（见文末「注入点」表）。
 
 ---
@@ -680,13 +681,13 @@ const taskRunner=new FeatureTaskRunner({getLedger:()=>featureHistory.ledger});
 | src/loom-town-sync.cjs `normalizeTownSyncRecords`（外部依赖） | 已读，改为注入；测试内附忠实副本 |
 | src/main.cjs boot() 注入面 | 已读，构造参数与调用面对齐 |
 | test/feature-tasks.test.cjs（15 例） | `tests/features-feature-tasks.test.ts` 16 例通过（含 town-error-ipc 账本半） |
-| test/feature-task-runner.test.cjs（21 例） | `tests/features-feature-task-runner.test.ts` 21 例通过 |
+| test/feature-task-runner.test.cjs（21 例） | `tests/features-feature-task-runner.test.ts` 22 例通过（含复审补的批量统计回归） |
 | test/feature-task-history.test.cjs（10 例） | `tests/features-feature-task-history.test.ts` 11 例通过（含 0.8.x 旧格式兼容用例） |
 | test/feature-task-discussion.test.cjs（4 例） | `tests/features-feature-task-discussion.test.ts` 4 例通过 |
 | test/town-error-ipc.test.cjs（1 例相关） | 账本半已移；preload/IPC 半留给集成阶段 |
 
 门槛（2026-09-16）：`npm run typecheck` 通过；`npx vitest run` →
-`Test Files 48 passed | 7 skipped (55)`，`Tests 361 passed | 16 skipped (377)`（基线 309 通过 16 跳过，本单元净增 52 例）。
+`Test Files 48 passed | 7 skipped (55)`，`Tests 362 passed | 16 skipped (378)`（基线 309 通过 16 跳过，本单元净增 53 例）。
 
 ## 注入点（构造参数 → BeingDesktop 对应物）
 
@@ -703,6 +704,12 @@ const taskRunner=new FeatureTaskRunner({getLedger:()=>featureHistory.ledger});
 | `getContext` | `discussFeatureTask` | `() => ({connection, generation, revision, view, configured, status, exiting})` |
 | `prepareDraft` | `discussFeatureTask` | **改为必填**：`src/town.cjs` 的 `prepareLoomDraft`（原为默认值） |
 
+**后续收尾动作（集成阶段必须做）**：Town/Loom 单元把 `normalizeTownSyncRecords` 移植进来之后，
+`tests/features-feature-task-history.test.ts` 必须改为 `import` 该单元导出的实现，并删除文件内
+`normalizeTownSyncRecords` / `libraryRoute` / `detailId` / `RESERVED_SCROLL_IDS` 的本地副本——
+否则「registration uses exact normalized owned records…」这条用例校验的始终是副本，真实实现漂移了也照样绿。
+同样地，`main.ts` 组合根接线时必须把真实实现注入 `FeatureTaskHistory`。
+
 ## 移植中的有意偏差（逐条说明）
 
 1. `FeatureTaskHistory` 增加必填构造参数 `normalizeTownSyncRecords`，并像校验 `onChange` 一样校验它是函数
@@ -714,11 +721,38 @@ const taskRunner=new FeatureTaskRunner({getLedger:()=>featureHistory.ledger});
 4. `finish()` 里原本写 `result.scrolls.length` / `result.scroll.title` / `result.kits.length` / `result.name` /
    `result.results` 的四处，改为先用同一个 `own()` 取值再用局部变量。语义等价：守卫条件本身就是 `own()` 的结果，
    原型链上的同名属性在两种写法下都进不了分支。
-5. `installEligibleGroveKits` 的统计从 `item.status` 改为 `own(item,'status')`，避免在 `unknown` 上取属性；
-   对普通对象结果一致。
+5. ~~`installEligibleGroveKits` 的统计从 `item.status` 改为 `own(item,'status')`~~ —— **复审后已撤销**（见文末「复审收尾」）。
+   现在与 CJS 同为 `item.status`（把数组元素整体 `as { status?: unknown }[]` 以满足 strict TS）：
+   原型链与访问器上的 `status` 照样计入，`results:[null]` 照样抛 `TypeError` 让任务 `failed`/`REQUEST_FAILED`。
 6. 测试目录从仓库内 `.local/` 改为 `os.tmpdir()`（不能往 portal-desktop 仓库写文件），前缀保持
-   `feature-task-history-test-`，清理逻辑改为 `afterEach`。
+   `feature-task-history-test-`，清理逻辑改为 `afterEach`；递归删除前的两条路径守卫（`dirname` 等于基目录、
+   `basename` 以该前缀开头）与原用例一致（复审后补回）。
 7. `ERROR_DETAILS`（feature-tasks）与 `OPERATIONS`（feature-task-runner）保持模块私有，与 BeingDesktop 的导出面一致
    （两者在源码里也未导出；`main.cjs` 的 `featureMethods` 是自己维护的字面量集合，不从 `OPERATIONS` 读取）。
-8. 新增两条用例：`tests/features-feature-tasks.test.ts` 末尾的 Town 传输错误码账本半（来自 town-error-ipc），
-   以及 `tests/features-feature-task-history.test.ts` 末尾的 0.8.x 旧格式读写兼容用例。原有用例一条未减。
+8. 新增三条用例：`tests/features-feature-tasks.test.ts` 末尾的 Town 传输错误码账本半（来自 town-error-ipc）、
+   `tests/features-feature-task-history.test.ts` 末尾的 0.8.x 旧格式读写兼容用例，以及复审后补的
+   `tests/features-feature-task-runner.test.ts` 批量安装统计回归用例。原有用例一条未减。
+
+---
+
+## 复审收尾（2026-09-16，第二次提交 `fix(u7-features): address review findings`）
+
+| 复审发现 | 处理 |
+| --- | --- |
+| medium：`installEligibleGroveKits` 统计用 `own(item,'status')`，`results:[null]` 由「任务 failed + Promise reject」翻转为「任务 succeeded」 | **改代码**，恢复 CJS 的 `item.status`；另补一条回归用例把三种畸形/非普通对象条目的行为钉死 |
+| low：`toThrow(ledgerError)` 只比消息不比引用 | **改测试**，改回 try/catch + `expect(caught).toBe(ledgerError)` |
+| low：临时目录清理丢了 `dirname` / 前缀守卫 | **改测试**，在 `afterEach` 里补回两条守卫（基目录取 `path.resolve(os.tmpdir())`） |
+| low：测试内的 `normalizeTownSyncRecords` 副本将来会与真实实现漂移 | **改记录**，在「注入点」表后加「后续收尾动作」，要求集成阶段改 `import` 并删副本 |
+| `safeText` 正则里写成了字面的双向控制字符 | **改代码**，改回 `\u202a-\u202e\u2066-\u2069` 转义；扫描四个源文件 + 四个测试文件，已无不可见字符 |
+
+实测依据（`node` 直接跑 BeingDesktop 的 CJS 模块，只读不写）：
+
+- `{results:[Object.create({status:'installed'}), 访问器 status, {status:'needs_being'}, {status:'failed'}]}`
+  → CJS 账本 `succeeded`，摘要 `批量检查 4 个 Kit：本机已安装 2 个，需 Being 协助 1 个，失败 1 个。加载状态见工具市场。`
+- `{results:[null]}` → CJS 抛 `TypeError: Cannot read properties of null (reading 'status')`，
+  账本 `failed` / `errorCode=REQUEST_FAILED` / `summary=''`。
+
+新增用例 `batch installation counts read plain property values and refuse to summarize a malformed batch`
+已验证是真守卫：把 `feature-task-runner.ts` 换回 `own()` 版本后该用例失败
+（`本机已安装 0 个` vs `本机已安装 2 个`），换回修复版后 22 例全绿。
+
