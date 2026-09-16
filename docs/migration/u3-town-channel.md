@@ -10,13 +10,13 @@
 
 | 模块 | 来源 | 目标 | 状态 |
 | --- | --- | --- | --- |
-| 注入接口 | （多处调用面） | `desktop/main/town/channel/types.ts` | 未开始 |
-| 支撑函数 | `src/security.cjs` `src/services.cjs` `src/being-chat.cjs` `extensions/being-anywhere/being-client.mjs` | `channel/loom-connection.ts` `sanitize.ts` `sse.ts` `being-client.ts` | 未开始 |
+| 注入接口 | （多处调用面） | `desktop/main/town/channel/types.ts` | 随模块增量补充 |
+| 支撑函数 | `src/security.cjs` `src/services.cjs` `src/being-chat.cjs` | `channel/errors.ts` `loom-connection.ts` `sanitize.ts` `sse.ts` | 已移植（随各模块测试通过） |
 | ChannelBeing | `src/channel-being.cjs` | `channel/channel-being.ts` | 未开始 |
 | TownBackground | `src/town-background.cjs` | `channel/town-background.ts` | 未开始 |
 | TownController | `src/town-controller.cjs` | `channel/town-controller.ts` | 未开始 |
-| Town catalog/drafts | `src/town.cjs` | `channel/town-catalog.ts` | 未开始 |
-| TownPairing 探活 | `src/town-pairing.cjs` | `channel/pairing-probe.ts` | 未开始 |
+| Town catalog/drafts | `src/town.cjs` | `channel/town-catalog.ts` | 测试通过（tests/town-channel-town-catalog.test.ts，18/18） |
+| TownPairing 探活 | `src/town-pairing.cjs` | `channel/pairing-probe.ts` | 测试通过（tests/town-channel-pairing.test.ts，7 通过 + 8 skip） |
 
 ## 阅读摘要
 

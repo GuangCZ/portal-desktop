@@ -27,3 +27,31 @@ export interface TownPairingState {
   busy: boolean;
   errorCode: string;
 }
+
+/* ---------------------------------------------------- Loom view (town.cjs) */
+
+/** Electron WebContents, reduced to what BeingDesktop src/town.cjs actually calls. */
+export interface WebContentsLike {
+  mainFrame: WebFrameLike | null;
+  isDestroyed(): boolean;
+  isLoadingMainFrame(): boolean;
+  getURL(): string;
+}
+
+/** Electron WebFrameMain, reduced to what src/town.cjs actually calls. */
+export interface WebFrameLike {
+  isDestroyed(): boolean;
+  detached: boolean;
+  executeJavaScript(code: string): Promise<unknown>;
+}
+
+/** main.cjs boot(): `() => ({connection, generation, revision: viewRevision, view, configured, status, exiting})`. */
+export interface LoomDraftContext {
+  connection?: { displayUrl: string; url?: string } | null;
+  generation?: unknown;
+  revision?: unknown;
+  view?: { webContents: WebContentsLike } | null;
+  configured?: boolean;
+  status?: string;
+  exiting?: boolean;
+}
