@@ -17,6 +17,7 @@ import { tools } from './tools';
 import { orchestration } from './orchestration';
 import { shellState } from './shell-state';
 import { townDesktop } from './town';
+import { channel } from './channel';
 
 export const desktopChannels = {
   chat,
@@ -26,6 +27,7 @@ export const desktopChannels = {
   orchestration,
   shellState,
   townDesktop,
+  channel,
 };
 // ──────────────────────────────────────────────────────────────────────────────
 
