@@ -272,3 +272,32 @@
 - `DesktopTerminal` | 构造注入 `{getWorkspace, onChange, onData, pty, environment, platform, shellPath}` | 公开 `create({cwd, cols, rows})`、`write({id, data})`、`resize`、`activate`、`close(id)`、`read(id)`、`readSince(id, afterSequence)`、`snapshot()`、`dispose()`
 
 （与源码一致；移植后的 TS 导出面必须逐项对齐这两行。）
+
+### src/main.cjs 与 src/desktop-tools.cjs 里的实例化点（集成阶段要机械对接的形状）
+
+`src/main.cjs`：
+- 顶部 `const {DesktopTerminal} = require('./desktop-terminal.cjs');`（行 56）；`DesktopBrowser` 不在 main.cjs 里直接 new。
+- boot() 里（行 1710 起）：
+  ```js
+  desktopTerminal = new DesktopTerminal({
+    getWorkspace: () => state.workspace.path,
+    onChange: terminalState => { if (win && !win.isDestroyed()) win.webContents.send('being:terminal-state', terminalState); },
+    onData: chunk => { if (win && !win.isDestroyed()) win.webContents.send('being:terminal-data', chunk); },
+  });
+  ```
+  —— 没有传 `pty`，所以运行时走 `require('node-pty')` 的惰性分支；`environment`/`platform`/`shellPath` 也都用默认。
+- IPC：`getTerminalState` → `snapshot()`；`readTerminal` → `read(id)`；`terminalAction` 按 `create/write/resize/activate/close` 分发后返回 `snapshot()`（未知操作抛 `'未知终端操作。'`）；`setBrowserView` → `desktopTools.browser.setViewport(value)`。
+- `DesktopTools` 在 boot 里拿到 electron 的 `WebContentsView`、`session`、`getWindow:()=>win`，并把 `getTerminal:()=>desktopTerminal`、`showTerminal` 一起注入。
+
+`src/desktop-tools.cjs`（另一个单元的范围）：
+```js
+constructor({desktopId, WebContentsView, session, getWindow, getConnection, getWorkspace, onChange, orchestration,
+  getTerminal = () => null, showTerminal = () => {}, Browser = DesktopBrowser, Console = DesktopConsole, ToolLink = DesktopToolLink}) {
+  …
+  this.browser = new Browser({WebContentsView, session, getWindow, onChange: () => this.changed()});
+```
+—— 即 `DesktopBrowser` 的四个构造参数原样来自 electron 的 `WebContentsView` 构造器、`session` 模块、`getWindow`，`onChange` 是 DesktopTools 自己的 `changed()`。
+
+**本单元对应的注入点**：
+- `DesktopTerminal`：`pty`（`PtyFactory`，集成时传 `require('node-pty')`）、`getWorkspace`、`onChange`、`onData`、`environment`、`platform`、`shellPath`。
+- `DesktopBrowser`：`WebContentsView`（构造器）、`session`（`{fromPartition}`）、`getWindow`、`onChange` —— 三个 electron 触点统一为 `ElectronBrowserHost`，真适配在 `tools/browser/electron-host.ts`。
