@@ -631,6 +631,51 @@ Sending a chat message previously waited for the local bridge and a successful p
 now sending only **reports** the local execution policy status, while starting a Worker and presenting results still verify strictly.
 (The stall itself was located in the server model stream — an SSE `error` `LLM stream stalled: no data received for 60s` — not in Desktop tooling.)
 
+### docs/architecture.md §5.5 and docs/interfaces.md §3/§6.3/§7 — contract summary
+
+- Sequence: `desktop_worker_start` -> `DesktopToolLink` -> `Orchestration.run()` (authorize session capability -> `assertEnforced` ->
+  same-workspace serialization) -> `launchAgent(file,args,stdin = execution context + prompt, allow-listed environment)` ->
+  JSONL events -> `normalizeEvent` -> `worker.events` (<=300) -> `being:workers` -> exit -> status ->
+  `callbacks.prepare(worker)` (completion.id, review.requestId/followUpRequestId, flush to disk) ->
+  `POST /api/callback?token=` -> `202 {accepted:true, inbox_id}` -> (Being idle and unreviewed) one continuation message via `/api/chat/stream` ->
+  `desktop_worker_status action=receive` -> `callbacks.receive` -> `read` / `present` / `review` -> report card to the original conversation.
+- Persistence: `workers/<sha256(owner)>.json`, at most 100 records and 16 MB; restart marks active records `interrupted` and never replays.
+- Interfaces §3 constructor/method table matches the ported export surface exactly:
+  `Orchestration({directory,getWorkspace,getSessionIds,onChange,detect,launch,callbacks,getExecutionContext})` with properties
+  `presentation`, `assertEnforced`, `enforcement`, and methods `inspect/configure/selectOwner/context/authorize/run/present/openResult/
+  generateTitle/get/stop/stopAll/tool/flush/snapshot/dispose` plus the `ACTIVE` set;
+  `WorkerCallbacks(manager,{send,resume,ready,toolsReady,report})` + `setTransport` and
+  `start/invalidate/recover/prepare/retained/cancel/pump/retry/receive/review/dispose`, with
+  `callbackPayload/createCallbackSender/createContinuationSender/SOURCE/REVIEWED`;
+  `OrchestrationPolicy({getIdentity,getDesktopId,getBridge,getMode,onChange})` + `configure/syncBridge/inspectForMessage/assertEnforced`.
+- Error code `ORCHESTRATION_NOT_ENFORCED` — "编排模式正在切换或策略未核验，请重发".
+- §6.3 payload shape is the golden fixture reproduced in `callbackPayload`.
+
+### src/main.cjs boot() wiring (integration surface the port must match)
+
+```js
+const orchestration = new Orchestration({
+  getExecutionContext: () => ({desktopId, place: desktopTools?.link.capabilities().place}),
+  directory: path.join(app.getPath('userData'), 'workers'),
+  getWorkspace: () => state.workspace.path,
+  getSessionIds: () => [...new Set([...chatViews.keys(), ...(state.chatSessions?.items||[]).map(i => i.id)])],
+  onChange: snapshot => {win?.webContents.send('being:workers', snapshot); chatSessions?.workersChanged();}});
+orchestration.callbacks.setTransport({
+  send: createCallbackSender({getConnection: () => connection, fetchImpl: net.fetch}),
+  resume: createContinuationSender({getConnection: () => connection, getTarget: () => desktopTools?.link.capabilities().place, fetchImpl: net.fetch}),
+  ready: () => !exitStarted && Boolean(connection) && state.connection.status === 'connected',
+  toolsReady: () => desktopTools?.link.capabilities().tools.includes('desktop_worker_status') === true,
+  report: async (worker, {owner, signal, presentationOnly = false}) => {/* ChatSessions.workersChanged() or Loom deliverWorkerReview */}});
+const orchestrationPolicy = new OrchestrationPolicy({
+  getIdentity: () => connection ? sessionPartition(connection) : '',
+  getDesktopId: () => desktopId, getBridge: () => desktopTools?.link.capabilities(), getMode: () => orchestration.mode,
+  onChange: policy => {orchestration.enforcement = policy; orchestration.notify();}});
+orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
+// elsewhere: orchestration.generateTitle(id, sanitizeText(input,[token,secret]));
+//            nativeWorkerResults(orchestration.workers, id); orchestration.callbacks.retry(id);
+//            orchestration.mode = normalizeMode(disk.orchestration);
+```
+
 ---
 
 ## 进度
