@@ -32,7 +32,7 @@
 | sanitize.ts | 已移植 |
 | candidates.ts | 已移植 |
 | client.ts | 已移植 |
-| session.ts | 未开始 |
+| session.ts | 已移植 |
 
 ### BeingDesktop/docs/town-sdk-integration.md（111 行，已读完）
 
