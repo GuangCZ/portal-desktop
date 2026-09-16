@@ -14,4 +14,6 @@
 // Names must not collide across the files: `export *` silently drops a duplicate
 // rather than failing, so prefix each subsystem's types the way `Chat*` does.
 export * from './chat-types';
+export * from './terminal-types';
+export * from './tool-browser-types';
 // ──────────────────────────────────────────────────────────────────────────────

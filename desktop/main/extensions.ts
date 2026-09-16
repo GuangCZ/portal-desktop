@@ -27,9 +27,13 @@ import type {
   SubsystemInstaller, SubsystemMap, SubsystemRegistry, SubsystemSettings,
 } from './subsystems/types';
 import { installChatSubsystem } from './subsystems/chat';
+import { installTerminalSubsystem } from './subsystems/terminal';
+import { installToolBrowserSubsystem } from './subsystems/tool-browser';
 
 const INSTALLERS: SubsystemInstaller[] = [
   installChatSubsystem,
+  installTerminalSubsystem,
+  installToolBrowserSubsystem,
 ];
 // ──────────────────────────────────────────────────────────────────────────────
 
