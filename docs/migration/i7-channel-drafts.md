@@ -29,3 +29,16 @@
 ## 进度
 
 - [x] 读方案 §3 约定 / §3.7 / §2.1 / §2.4 / §4 / §6 / 附录
+
+### `docs/migration/i0-seams.md` + 真实接缝文件
+
+- `SubsystemContext` 真实成员：`handle / exclusive / window() / store / electron / userData / desktopId / clientVersion /
+  fetchImpl / onError / registry / push`（比方案多 `fetchImpl`）。`store` 是 `SubsystemSettings`：
+  `connection / connectionAddress / settings / extras / saveExtra(patch)`（方案的单一 `settings` 被拆成 `settings` + `extras`）。
+- `DesktopSubsystem` 多了 `linked?()`（全部 installer 跑完后同步跑一趟，用于「赋值给同伴」的场景）。
+- `electron.clipboard` 是 Promise 形态（Electron 44 实测）；`WebContentsView / session / net.request` 是 `unknown`，用处 `as` 一次。
+- `installSubsystems(ctx, installers)` 是可测入口；测试只装本单元需要的 installer。
+- `main/common/` 已收敛：`sanitize.ts`、`platform.ts`、`loom-connection.ts`、`message-context.ts`；I0 已一次性删完副本。
+- 六个一行式冲突点已全部就位；`extensions.ts` 已有 7 个 installer，`preload/channels/index.ts` 有 7 个 key，
+  `slots.tsx` 的 `SHEET_SLOTS` **仍为空数组**（Town 是 `page.tsx` 内置的 `<Town>`），`FEATURE_MODELS` 有 6 项。
+- `tests/architecture.test.ts` 按目录模式写，新目录自动纳入；`main/common/` 只能 import node 内建与同目录。
