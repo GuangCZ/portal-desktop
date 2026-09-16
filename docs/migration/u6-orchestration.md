@@ -682,11 +682,17 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 
 | 模块 | 状态 |
 | --- | --- |
-| types.ts | 未开始 |
-| worker-events.ts | 未开始 |
-| native-worker-results.ts | 未开始 |
-| agent-kits.ts | 未开始 |
-| agent-process.ts | 未开始 |
-| orchestration-policy.ts | 未开始 |
-| worker-callbacks.ts | 未开始 |
-| orchestration.ts | 未开始 |
+| types.ts | 已移植（typecheck 通过，测试未写） |
+| vendored.ts (sanitizeText / desktopEnvironment / consoleEnvironment) | 已移植 |
+| worker-events.ts | 已移植 |
+| native-worker-results.ts | 已移植 |
+| agent-kits.ts | 已移植 |
+| agent-process.ts | 已移植 |
+| orchestration-policy.ts | 已移植 |
+| worker-callbacks.ts | 已移植 |
+| orchestration.ts | 已移植 |
+
+测试（tests/orchestration-*.test.ts）：全部未开始。
+
+已恢复：上一轮会话在最后一次 WIP 提交后写出了全部 9 个 TS 模块但未提交；本轮先落盘（`npm run typecheck` 通过），
+再逐模块对照 BeingDesktop 源码校验保真度，然后写测试。
