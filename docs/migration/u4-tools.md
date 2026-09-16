@@ -266,7 +266,7 @@ ToolLink=DesktopToolLink}`。
 | console | src/desktop-console.cjs | desktop/main/tools/console.ts | 已移植 |
 | tool-link | src/desktop-tool-link.cjs | desktop/main/tools/tool-link.ts | 已移植 |
 | types（注入接口） | — | desktop/main/tools/types.ts | 已移植 |
-| desktop-tools | src/desktop-tools.cjs | desktop/main/tools/desktop-tools.ts | 未开始 |
+| desktop-tools | src/desktop-tools.cjs | desktop/main/tools/desktop-tools.ts | 测试通过 |
 | terminal-tools | src/desktop-terminal-tools.cjs | desktop/main/tools/terminal-tools.ts | 测试通过 |
 | worker-presentation | src/worker-presentation.cjs | desktop/main/tools/worker-presentation.ts | 测试通过 |
 
@@ -277,7 +277,7 @@ ToolLink=DesktopToolLink}`。
 | network | test/desktop-network.test.cjs | tests/tools-network.test.ts | 未开始 |
 | console | test/desktop-console.test.cjs | tests/tools-console.test.ts | 未开始 |
 | tool-link | test/desktop-tool-link.test.cjs | tests/tools-tool-link.test.ts | 未开始 |
-| desktop-tools | test/desktop-tools.test.cjs | tests/tools-desktop-tools.test.ts | 未开始 |
+| desktop-tools | test/desktop-tools.test.cjs | tests/tools-desktop-tools.test.ts | 测试通过（16/16） |
 | terminal-tools | test/desktop-terminal-tools.test.cjs | tests/tools-terminal-tools.test.ts | 测试通过（4/4） |
 | worker-presentation | test/worker-presentation.test.cjs | tests/tools-worker-presentation.test.ts | 测试通过（6/6） |
 | console 集成 | test/desktop-console-integration.cjs | tests/tools-console-integration.test.ts | 未开始 |
@@ -292,3 +292,9 @@ ToolLink=DesktopToolLink}`。
   被测输入只有 http(s)，所以只需要 navigationUrl 这一支。
 - 浏览器夹具的 `activeTabId` 写成 `tabs.at(-1)?.id ?? null`（原文件是 `?.id`，会得到
   `undefined`）：`BrowserSnapshot.activeTabId` 是 `string | null`，两者在所有断言里等价。
+- `DesktopTools` 的 `Browser` 与 `desktopPortalName` 在 TS 版里是**必填**构造参数（BeingDesktop 里是
+  `require` 进来的默认值）：`src/desktop-browser.cjs` 与 `src/desktop-identity.cjs` 不在本 worktree。
+  `Console`/`ToolLink` 保留默认值，指向本单元移植出的 `DesktopConsole` / `DesktopToolLink`。
+- `target=tab.url || tab.title` 保留原表达式，只加了 `as string`（不是 `|| ''`），保证 url/title 都为空时
+  运行期取值与 BeingDesktop 一致。
+- `desktop-tools` 测试里的 `desktopPortalName` 夹具逐行抄自 `src/desktop-identity.cjs` 5..10 行。
