@@ -2,6 +2,15 @@
 // External links and denied native popups become tabs of the built-in browser.
 // `normalizeBrowserUrl` lives in src/desktop-browser.cjs, which another unit owns,
 // so it is injected here. See docs/architecture.md §7「Loom 视图」外链转内置浏览器.
+//
+// THE SHELL HAS A SECOND ADDRESS PARSER, AND THIS IS NOT IT. `desktop/main/
+// browser/url.ts` (`browserURL`/`browserAddress`) parses what a PERSON typed into
+// the shell's own browser: bare text is treated as a host name and credential
+// parameters are stripped for display. `normalizeBrowserUrl` parses what a BEING
+// sent: only http(s), localhost and hostname-shaped input are accepted and
+// anything else is refused rather than guessed. The two are deliberately kept
+// apart (integration plan §3.2「要收敛的副本」), and a link arriving from a Being
+// must go through this one.
 import type { BrowserTabOpener, NormalizeBrowserUrl } from './types';
 
 export interface BrowserLinksOptions {

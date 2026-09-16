@@ -110,7 +110,6 @@ export interface DesktopAPI {
   // contract fails typecheck there.
   /** Being Desktop's native conversations (desktop-types.ts). */
   chat: ChatAPI;
-  /** The desktop tool bridge: browser, console and the approval queue (desktop-types.ts). */
   tools: DesktopToolsAPI;
   // ────────────────────────────────────────────────────────────────────────────
 }
