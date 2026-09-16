@@ -168,3 +168,44 @@
 - 收尾：`_context(ctx)`；`aborted||failed||!complete||码不合法` → PAIRING_INCOMPLETE；`client.pair({code})`；`_context(ctx)`；`_set({status:'complete', errorCode:''})`；返回 pair 的结果。
 - catch：**先 `_context(ctx)`（可能抛 SESSION_CHANGED 覆盖原错误）**；`code = error.code || (dispatched ? 'PAIRING_INCOMPLETE' : 'READINESS_UNKNOWN')`；`_set({status:'manual_required', errorCode: code})`；`throw errors[code] ? fail(code) : error`。
 - finally：cancel response body、abort controller、若 `_controller === controller` 则置 null 并 `_set({busy:false})`。
+
+### 支撑函数的精确实现（已抄录，后续不必再读原文件）
+`src/security.cjs`：
+- `SESSION_IDENTITY_VERSION = 'v1'`。
+- `parseConnection(input)`：非 string 或 >8192 → `'请输入有效的 Loom 连接地址。'`；`new URL(input.trim())` 失败 → `'连接地址格式不正确。'`；local = hostname ∈ {127.0.0.1, localhost, [::1]}；非 https 且非（http+local）或有 username/password → `'Loom 地址须使用 HTTPS；本机回环地址可使用 HTTP。'`；`url.hash=''`；`api = new URL(searchParams.get('api') || `${origin}${pathname.replace(/\/+$/,'')}`)`；api.origin≠url.origin 或 api.search/hash/username/password → `'Loom 和 API 必须位于同一来源，避免将连接凭据发送到其他网站。'`；`token = searchParams.get('token') || ''`；`secret = relay_secret || secret || token`；返回 `{url: url.href, apiBase: api.href.replace(/\/+$/,''), token, secret, displayUrl: `${origin}${pathname}`, beingName: decodeURIComponent(pathname.split('/').filter(Boolean).pop() || 'Being')}`。
+- `sessionPartition(connection)`：`identity = JSON.stringify(['v1', displayUrl, apiBase, token, secret])`；返回 `persist:loom-v1-<sha256(identity) hex 前32>`。
+
+`src/services.cjs` `sanitizeText(value, secrets = [])`：`String(value ?? '')` → 去 ANSI `/\x1b\[[0-?]*[ -/]*[@-~]/g` → 对每个长度≥4 的 string secret split/join `[redacted]` → URL 正则 `\b(?:https?|wss?):\/\/[^\s<>"']+` 去 username/password/search/hash（URL 解析失败用 `[redacted URL]`）→ header/Bearer/`key=value`/`sk-`/JWT/`[a-f0-9]{32,}`/`[a-zA-Z0-9_+/=-]{48,}` 依次 redact → 去控制字符 `[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]` → `slice(0, 2000)`。
+
+`src/being-chat.cjs`：
+- `MAX_BYTES = 4*1024*1024`；`MESSAGES`：NOT_CONNECTED `'请先连接 Being。'`、SESSION_CHANGED `'Being 连接已变化，旧请求已取消。'`、INVALID_REQUEST `'请求参数无效。'`、INVALID_RESPONSE `'Being 返回格式无效。'`、NETWORK_ERROR `'与 Being 的连接中断，请稍后重试。'`、SERVICE_ERROR `'Being 服务暂时不可用。'`、AUTH_REQUIRED `'Being 连接凭据无效，请重新连接。'`、ABORTED `'请求已取消。'`、RESULT_UNKNOWN `'发送结果未确认，请刷新后核对再决定是否重发。'`。
+- `consumeEvents(body, onEvent)`：无 body → INVALID_RESPONSE；`TextDecoder('utf-8',{fatal:true})`；行分隔 `/\r\n|\r(?!$)|\n/`；空行 flush（`JSON.parse(data.join('\n'))` 失败 → INVALID_RESPONSE，`onEvent(type || 'message', parsed)`）；`:` 开头忽略；`event:`/`data:`（去一个前导空格）；单事件累计 size 或 `pending.length + size` 超 MAX_BYTES → INVALID_RESPONSE；**截断的尾事件丢弃**；finally cancel reader。
+
+### test/town-pairing.test.cjs（157 行，13 个 test）
+前 7 个（第 25–86 行）测的是 **TownClient**（`src/town-client.cjs`），不属于本单元 → 以同名 `it.skip` 保留并记入 openIssues：
+1. `current SDK confirm response persists Town ID and display without requiring removed being_id`
+2. `Town-prefixed identities use the town_id confirm field`
+3. `a saved Town binding is checked even before the background stream has loaded it`
+4. `invalid or conflicting confirm identities cannot replace saved credentials`
+5. `a new token survives storage failure in memory and retry never consumes another code`
+6. `pair errors distinguish consumed-code uncertainty, invalid code, and rate limit without retry`
+7. `changing Being while confirm is pending cannot save or publish its response`
+8. `credential diagnostics distinguish missing, unreadable and unavailable storage without secrets`
+（共 8 个 TownClient 用例，第 101 行起才是 TownPairing。）
+
+TownPairing 的 5 个用例（全部移植）：
+9. `one click pairs once from a complete, scene-bound reply and exposes no code or credential`
+10. `content_block_delta supports fragmented codes and ignores reasoning and tool results`
+11. `foreign, unscoped, incomplete, ambiguous and errored replies never authorize a client`
+12. `202 queues only one request and falls back without extracting or resending`
+13. `busy Being and unavailable safe storage block before sending a chat message`
+14. `concurrent clicks and switching Being cannot confirm a stale code`
+15. `a timeout ignores a late response and never repeats the chat or confirm request`
+（TownPairing 实为 7 个用例；合计 15 个 test。）
+
+`pairingFixture({events, response, active = () => new Response(null,{status:204}), timeoutMs = 90000})`：
+- context = `{connected: true, connection: 'https://echo.example/alice?token=loom-fixture', revision: 1}`。
+- client 假对象 = `{store:{assertAvailable(){}}, state: () => ({}), pair: async value => {pairs.push(value); return {paired:true};}}`。
+- fetchImpl：`/active` → `active()`；否则若有 `response` 用它；否则从 body 取 `scene_id`，默认帧 `[['meta',{scene_id}],['text',{text:'AB0'}],['text',{text:'1XY'}],['done',{}]]`，拼成 `event: X\ndata: {...}\n\n` 的 `text/event-stream` Response。
+- `switch()`：context → `{revision: 2, connection: 'https://echo.example/bob?token=other'}` 并 `pairing.reset()`。
+- `json(value, status=200)`、`tick = () => new Promise(r => setImmediate(r))`。
