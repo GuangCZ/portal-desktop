@@ -692,7 +692,17 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 | worker-callbacks.ts | 已移植 |
 | orchestration.ts | 已移植 |
 
-测试（tests/orchestration-*.test.ts）：全部未开始。
+测试（tests/orchestration-*.test.ts）：
+
+| 测试文件 | 来源 | 用例数 | 状态 |
+| --- | --- | --- | --- |
+| tests/orchestration-policy.test.ts | test/orchestration-policy.test.cjs | 7 / 7 | 通过 |
+| tests/orchestration-agent-process.test.ts | test/agent-process.test.cjs | 4 / 4 | 通过 |
+| tests/orchestration-worker-events.test.ts | test/orchestration.test.cjs 的事件映射用例 | — | 未开始 |
+| tests/orchestration-agent-kits.test.ts | test/orchestration.test.cjs 的检测用例 | — | 未开始 |
+| tests/orchestration-manager.test.ts | test/orchestration.test.cjs 其余用例 | — | 未开始 |
+| tests/orchestration-worker-callbacks.test.ts | test/worker-callbacks.test.cjs | — | 未开始 |
+| tests/orchestration-native-results.test.ts | test/native-orchestration.test.cjs | — | 未开始 |
 
 ### 保真度复核（2026-09-16，逐行对照源文件重读一遍）
 
