@@ -11,9 +11,11 @@
 // a channel file that drifts from its contract fails typecheck here rather than
 // at runtime in the renderer.
 import { chat } from './chat';
+import { shellState } from './shell-state';
 
 export const desktopChannels = {
   chat,
+  shellState,
 };
 // ──────────────────────────────────────────────────────────────────────────────
 

@@ -27,9 +27,11 @@ import type {
   SubsystemInstaller, SubsystemMap, SubsystemRegistry, SubsystemSettings,
 } from './subsystems/types';
 import { installChatSubsystem } from './subsystems/chat';
+import { installShellStateSubsystem } from './subsystems/shell-state';
 
 const INSTALLERS: SubsystemInstaller[] = [
   installChatSubsystem,
+  installShellStateSubsystem,
 ];
 // ──────────────────────────────────────────────────────────────────────────────
 
