@@ -594,6 +594,43 @@ The remaining ten cases belong to the chat-core / message-frame units and are ca
 - Tool target is `being-desktop-tools-<desktopId>`; another Desktop cannot dispatch, read or cancel with a matching session ID alone.
   Mode changes never read or write Being's shared model endpoint.
 
+### docs/worker-callback-design.md (60 lines) — implementation boundary
+
+- Implemented 2026-09-09; **inbox acceptance and task acceptance stay separate states**. Uses Heart's existing `POST /api/callback`
+  with the Loom token as a query parameter (no Heart change, no task registration, no extra gateway permission).
+- Live transport evidence: missing/wrong token -> 403; a fresh unregistered task -> 202 `{accepted:true, inbox_id}`; an exact duplicate
+  returns the same inbox id.
+- `WorkerCallbacks.prepare` creates the stable receipt id after natural completion or failure; the terminal result and the notification are
+  **flushed before sending**. Envelope: `source=being-desktop-worker`, `task_id=worker.id`, `result.protocol=being-desktop-worker-result/1`,
+  plus receipt id, original conversation id, start request id and terminal state. No session token, no full output, no instructions.
+- Only accepted JSON with an inbox id counts as acceptance. Network errors, 429 and 5xx retry the same task/receipt ids and never rerun the CLI.
+  Cancellation suppresses continuation; mode-off pauses delivery; identity changes abort in-flight delivery; restart recovers interrupted sends
+  and mints current capabilities without replaying CLI execution.
+- `desktop_worker_status` operations table: `receive` (callback id + advertised Portal target -> validate saved receipt, current Being,
+  original conversation, terminal task and strict mode, return a current capability and the original task context);
+  `read` (default; session id + token + worker id + target); `review` (read binding + outcome/summary/evidence, persisted once and delivered);
+  `present` (read binding + exactly one of artifactPath or url).
+  A payload-supplied conversation id can never grant access. Worker output is data.
+- Outcomes `passed|failed|needs_verification`; missing evidence must not become a pass. Follow-ups carry `parentWorkerId` and the supplied stable
+  `followUpRequestId`; repeated dispatch returns the existing child; each parent supports one follow-up (chain through the child for further stages).
+- Presentation belongs to Desktop: no builds, scripts or app commands; static assets on loopback in Desktop's embedded browser; the static server
+  survives Worker exit and stops on shutdown or identity change. Read states: loading, loaded, failed, closed, navigated (+ visibility).
+  Loading a page does not prove interaction tests passed. Presentation never overwrites an earlier review.
+- Continuation: state is flushed before the POST; a busy Being is left alone; a response lost after submission is `uncertain` and never blindly reposted;
+  restart preserves that uncertainty. An HTTP success is not proof of evaluation — the reader also inspects SSE `error` events.
+  Explicit HTTP/SSE 429 and 5xx allow **up to three** evaluation attempts with **10/20-second backoff**; a failed in-progress evaluation returns to
+  `pending` while completed evaluations stay immutable. Retries never restart the CLI. Model API errors are shown as a compact HTTP-status message
+  rather than upstream HTML.
+
+### docs/orchestration-native-capabilities-diagnosis.md (40 lines)
+
+2026-09-09 fix: delegation covers code, workspace investigation, files, commands, tests and browser operations, while native communication,
+memory, identity and self-management (including the reads and HTTP calls they need) run directly under the user's authorization.
+Native HTTP must not bypass local execution limits and Being credentials must not be handed to a Worker.
+Sending a chat message previously waited for the local bridge and a successful policy check, so a dropped bridge blocked native tasks too;
+now sending only **reports** the local execution policy status, while starting a Worker and presenting results still verify strictly.
+(The stall itself was located in the server model stream — an SSE `error` `LLM stream stalled: no data received for 60s` — not in Desktop tooling.)
+
 ---
 
 ## 进度
