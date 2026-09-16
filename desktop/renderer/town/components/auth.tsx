@@ -33,6 +33,7 @@ export function TownAuth({ model }: { model: TownModel }) {
             onClick={() => town.closeAuth()}
           ></button>
         </div>
+        <div className="dialog-body">
         <p className="connection-description">
           {town.authLoading ? '正在读取连接信息…' : town.authManual
             ? '输入 Town ID 或 Being 名和配对码，连接篝火、围炉和私信。'
@@ -114,6 +115,7 @@ export function TownAuth({ model }: { model: TownModel }) {
         <p id="town-auth-error" className="form-error" role="alert">
           {town.authError}
         </p>
+        </div>
         <div className="dialog-footer">
           <button
             type="button"

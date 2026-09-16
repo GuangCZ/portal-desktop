@@ -962,10 +962,6 @@ export class TownModel extends Store {
         ? `消息已发送，但部分 @ 提及未解析成功：${result.warnings.join('；')}。请核对目标，无需重复发送原消息。`
         : "";
       this.sendOpen = Boolean(this.sendNotice);
-      if (target.kind === "dm") {
-        this.tab = "sent";
-        this.tabs.mail = "sent";
-      }
       await this.load();
     } catch (error) {
       if (target === this.sendTarget) this.sendError = errorText(error);
