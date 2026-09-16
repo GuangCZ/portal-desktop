@@ -268,7 +268,7 @@ ToolLink=DesktopToolLink}`。
 | types（注入接口） | — | desktop/main/tools/types.ts | 已移植 |
 | desktop-tools | src/desktop-tools.cjs | desktop/main/tools/desktop-tools.ts | 未开始 |
 | terminal-tools | src/desktop-terminal-tools.cjs | desktop/main/tools/terminal-tools.ts | 测试通过 |
-| worker-presentation | src/worker-presentation.cjs | desktop/main/tools/worker-presentation.ts | 未开始 |
+| worker-presentation | src/worker-presentation.cjs | desktop/main/tools/worker-presentation.ts | 测试通过 |
 
 | 测试 | 源文件 | 目标 | 状态 |
 | --- | --- | --- | --- |
@@ -279,5 +279,16 @@ ToolLink=DesktopToolLink}`。
 | tool-link | test/desktop-tool-link.test.cjs | tests/tools-tool-link.test.ts | 未开始 |
 | desktop-tools | test/desktop-tools.test.cjs | tests/tools-desktop-tools.test.ts | 未开始 |
 | terminal-tools | test/desktop-terminal-tools.test.cjs | tests/tools-terminal-tools.test.ts | 测试通过（4/4） |
-| worker-presentation | test/worker-presentation.test.cjs | tests/tools-worker-presentation.test.ts | 未开始 |
+| worker-presentation | test/worker-presentation.test.cjs | tests/tools-worker-presentation.test.ts | 测试通过（6/6） |
 | console 集成 | test/desktop-console-integration.cjs | tests/tools-console-integration.test.ts | 未开始 |
+
+### 移植期补充记录（2026-09-16 第二段）
+- `TerminalScope` 在 TS 里写成 type alias 而非 interface，好让它能直接展开进带索引签名的
+  `TerminalToolArguments`（interface 没有隐式索引签名）。运行时语义不变。
+- `WorkerPresentation` 构造里的 `Object.assign(this,{…})` 改成三行显式赋值：TS 的
+  `strictPropertyInitialization` 不认 `Object.assign`。语义不变。
+- `worker-presentation` 测试里的 `normalizeBrowserUrl` 由 `navigationUrl` 夹具代入
+  （逐行抄自 `src/desktop-browser.cjs` 16..24 行），因为 desktop-browser 归浏览器单元。
+  被测输入只有 http(s)，所以只需要 navigationUrl 这一支。
+- 浏览器夹具的 `activeTabId` 写成 `tabs.at(-1)?.id ?? null`（原文件是 `?.id`，会得到
+  `undefined`）：`BrowserSnapshot.activeTabId` 是 `string | null`，两者在所有断言里等价。
