@@ -163,7 +163,7 @@ export class WorkerCallbacks {
       w.presentation && !w.presentation.reported && this.report
       || w.review?.summary && !w.review.reported && this.report
       || !REVIEWED.has(w.review?.status as string) && ['pending', 'retrying'].includes(w.completion.state) && w.completion.nextAttemptAt <= this.now()
-      || this.resume && this.toolsReady() && w.review?.status === 'pending' && w.completion.state === 'accepted' && (!w.completion.continuation || w.completion.continuation.state === 'retrying' && (w.completion.continuation.nextAttemptAt ?? 0) <= this.now())));
+      || this.resume && this.toolsReady() && w.review?.status === 'pending' && w.completion.state === 'accepted' && (!w.completion.continuation || w.completion.continuation.state === 'retrying' && w.completion.continuation.nextAttemptAt! <= this.now())));
     if (!worker) return;
     const controller = new AbortController(), owner = m.owner, revision = m.revision;
     this.pending = { controller, workerId: worker.id };

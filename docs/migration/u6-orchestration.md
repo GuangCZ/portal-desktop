@@ -694,5 +694,23 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 
 测试（tests/orchestration-*.test.ts）：全部未开始。
 
+### 保真度复核（2026-09-16，逐行对照源文件重读一遍）
+
+全部 9 个模块逐行对照 BeingDesktop 源码复核通过。发现并修正 1 处：
+`worker-callbacks.ts` pump 候选条件里 `continuation.nextAttemptAt ?? 0` 会把未设置的 `nextAttemptAt` 当成 0（可续），
+源码是 `undefined <= now` 为 false（不可续）。已改回 `nextAttemptAt!`（编译后即源码写法）。
+
+有意的偏离（单元边界造成，集成阶段需要接回）：
+1. `agent-process.ts` 的 `WINDOWS_RUNNER` 归 DesktopTerminal 单元，改为构造参数 `windowsRunner` 注入；
+   win32 且未注入时抛 `'Windows worker 运行脚本未注入，无法启动 worker。'`（源码里直接用模块常量，没有这条分支）。
+   `agentEnvironment` 同样多了一个可选的 `consoleEnvironment` 参数（默认为 vendored 副本）。
+2. `orchestration-policy.ts` 的 `validDesktopId` / `desktopPortalName` 归身份单元，改为构造参数注入，默认值逐行照抄。
+3. `worker-callbacks.ts` 的 `parseConnection` / `sessionPartition`（src/security.cjs）改为
+   `createCallbackSender` / `createContinuationSender` 的必填构造参数。
+4. `vendored.ts` 是 `sanitizeText` / `desktopEnvironment` / `consoleEnvironment` 的逐行副本，
+   集成时应改指向各自单元的正式移植版本。
+5. `final = event.success === true`（源码 `final = event.success`）：`success` 在 normalizeEvent 里恒为 boolean，
+   且只在布尔上下文使用，语义等价，仅为 strict 类型收敛。
+
 已恢复：上一轮会话在最后一次 WIP 提交后写出了全部 9 个 TS 模块但未提交；本轮先落盘（`npm run typecheck` 通过），
 再逐模块对照 BeingDesktop 源码校验保真度，然后写测试。
