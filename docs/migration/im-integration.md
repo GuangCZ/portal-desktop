@@ -667,3 +667,10 @@ Error: 浏览器已经关闭。
    （约 10 条）**仍未被执行过**，挡在第 2 条 openIssue 后面。
 9. `tests/sbs-refresh.mjs`（I6b）、`tests/electron-smoke.mjs`（I5）、`tests/portal-runtime-e2e.mjs`（I7）
    本单元**没有跑**：它们要重写，重写者是并行组 B 的其它单元。
+
+## 9. `npm run test:all` 的现状
+
+流水线是 fail-fast 的（每一步 `await`，抛出即中止）。三个新步骤排在 `package` 之后、`browser-e2e` 之后，
+位置正确；但**第 85 行的 `town-sdk` 会先失败**（openIssue 1），所以整条流水线现在停在那一步，
+`report.status` 是 `failed`。本单元验证三个新步骤的方式是**单独跑**（§4.3 第 1–3 行，全绿）。
+`summary.md` 的 `skipped` 名单由脚本自己打印的 `SKIPPED:` 标记生成，本单元**只增加步骤，没有让任何一步变成 skip**。
