@@ -48,3 +48,32 @@
 - **传输约束**：主进程 fetch + Authorization 头（SSE 也用头，不用 query token）；固定 Town 来源、**禁止重定向**、**不发 cookie**。SSE hello 必须 `anonymous=false` + `token_kind=client` + 身份精确匹配，否则停止重连。
 - 展示名：篝火 DTO 优先用服务端 `speaker_name`（坑 #11）；`beingId` 解析成员目录优先，目录解析不出时才采信 `being` 字段。
 - 不在本单元：`town-refresh.cjs`（时间线累积/往上翻/补洞/1000 条内存上限/500 条缓存）、Being 中继读写。
+
+### BeingDesktop/docs/interfaces.md §3.3 / §5 / §6.4（已读）
+
+**§3.3 本单元相关接口签名**（构造参数只列注入项）：
+
+- `TownClient({getContext, store, fetchImpl, onChange, onEvent})` → `pair({code})`、`retryPairStorage()`、`forget()`、`read(route, {query, signal})`、`identity({force})`、`speak({kind, message, firesideId, replyTo})`、`sendDirectMessage({recipient, content, replyTo})`、`lifecycle({enabled})`、`reset()`、`state()`
+- `TownSession({getContext, writeImpl, getIdentity, fetchImpl, readImpl, onChange})` → `getMembers({force})`、`listScrolls`、`getScroll`、`listBeings`、`getBonfireMessages`、`getDirectMessages`、`getFiresides`、`getFiresideMembers`、`getFiresideMessages`、`sendBonfireMessage`、`getChannelStatus`、`beginChannelConnection`、`updateFeishuCredentials`、`memberDisplayName`、`memberCacheState()`、`invalidateMembers()`、`state()`、`reset()`；DTO 函数 `messagesDto`、`firesideMessagesDto`、`directMessagesDto`
+- `TownClientStore({directory, safeStorage})` → `load/loadCredential(key, beingId)`、`save(key, beingId, token, townId)`、`bindTownId(...)`、`remove(key)`、`assertAvailable()`（**不在本单元**，但 TownClient 依赖其接口面）
+
+**§5 错误码目录（本单元会用到的）**：
+`INVALID_REQUEST`（参数/字段不合法）、`INVALID_RESPONSE`（上游格式不符，保留上次内容）、`NOT_CONNECTED`（未连接 Being）、`SESSION_CHANGED`（连接/身份/围炉在操作期间变化，结果丢弃）、`AUTH_REQUIRED`（无可用 client 凭据或读取权限未确认）、`IDENTITY_MISMATCH`、`BUSY`（正在配对）、`ABORTED`、`NETWORK_ERROR` / `RATE_LIMITED`（429） / `SERVICE_ERROR`（5xx）、`NOT_SENT`（明确未发送：校验失败、围炉 403、收件人无效）、`RESULT_UNKNOWN`（已提交结果未确认，**不要重发**）、`STORAGE_ERROR`、`PAIR_CODE_INVALID` / `PAIR_RESULT_UNKNOWN` / `PAIR_STORAGE_ERROR`、`TOWN_ERROR`（preload 兜底）。
+> 经 Town 包络到渲染层保留原码，非白名单折叠为 `TOWN_ERROR`。
+
+**§6.4 Town 外部协议表**（client token 走 `Authorization: Bearer`，不认查询参数；固定来源、**禁止重定向**、**不发 Cookie**、**响应 ≤1MB**）：
+
+| 路由 | 关键点 |
+| --- | --- |
+| `POST /api/client/pair/confirm {being_id, code}` | → `{town_id \| being_id, token}`，新旧回包都接受 |
+| `GET /api/client/stream` | SSE；首个 `hello` 必须 `token_kind=client`、`anonymous=false`、身份匹配 |
+| `GET /api/bonfire/hear?since&limit&compact` | 无 since=最新 N；有 since=`seq > since` 最早 N；`limit` 1–200；响应含 `global_latest_seq`、`total_count` |
+| `GET /api/bonfire/mentions?since_id` | 身份探测，`since_id` 固定为最大值 |
+| `POST /api/bonfire/speak {message, reply_to?}` | 本地限 4000 码点；回执 `{ok, seq, mentions, via, town_id…}` |
+| `GET /api/fireside/list` / `members?fireside_id` / `hear?fireside_id&since&limit` | 序号为所有围炉共用计数器 |
+| `POST /api/fireside/speak {message, fireside_id, reply_to?}` | 本地限 32000；非成员 403 → `NOT_SENT` |
+| `GET /api/scrolls?offset&limit&visibility`、`GET /api/scrolls/{id}?offset&limit` | DTO 校验分页一致性 |
+| `GET /api/beings` | 公开居民目录，无凭据 |
+| `GET /api/messages`、`POST /api/messages {recipient, content, reply_to?}` | 收件箱最新在前 ≤100；无中继回退 |
+| `GET /api/channels/status`、`POST /api/channels/register`、`POST /api/channels/credentials` | 经 `TownSession`；QR 只接受白名单域名或内联图片 |
+| `GET /api/grove?offset&limit`、`GET /api/grove/{id}` | 公开，`credentials:'omit'` |
