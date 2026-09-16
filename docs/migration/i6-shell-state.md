@@ -74,12 +74,51 @@
 - `sidebar.tsx` 消费点：`organizer.metadata/pin/archive/move/projects/groups/search`，`ProjectGroup` 的折叠是组件内 `useState(true)`，
   新建会话后 `conversation.create().then(id => organizer.move(id, project.path))`。
 
+### BeingDesktop 0.8.26 源（只读）
+
+**`src/sidebar-state.cjs`（37 行，逐行移植的对象）**
+
+- `validPath(value)`：string && ≤4096 && 无 `\x00-\x1f` && （posix 绝对 或 win32 绝对）。
+- `sidebarState(saved, scope, workspace='')`：
+  `projects = [...new Set((Array.isArray(saved?.projects) ? saved.projects : [workspace]).filter(validPath))].slice(0,100)`
+  ——**只有 `projects` 字段缺失时才回退到 `[workspace]`**，空数组不回退（`remove-project` 后不会把工作区加回来）。
+  `tasks` 取 `saved.owners[scope].tasks` 的前 10000 项，键必须匹配 `/^[0-9a-f-]{36}$/i`，值必须是对象；
+  归一化成 `{pinned: v.pinned===true, archived: v.archived===true, project: projects.includes(v.project)?v.project:'', touchedAt: Number.isFinite(v.touchedAt)?v.touchedAt:0}`
+  ——未知字段（如 `credential`）被丢弃，输入对象不被改动。`scope` 为空时 `tasks` 为 `{}`。
+- `updateSidebar(saved, scope, workspace, action, sessionIds=[], now=Date.now())`：
+  首行守卫 `if (action?.scope !== scope || (!scope && action.type !== 'remove-project')) throw new Error('连接已变化，请重试。')`
+  ——**未连接（scope 为空）时只允许 `remove-project`**。
+  `remove-project`：项目必须存在（否则 `项目不存在。`），移除后把该项目下的任务 `project` 清空。
+  其余：`id` 必须是 UUID 且在 `sessionIds` 里（否则 `会话不存在。`）；
+  `pin` 取反且置顶时清 `archived`；`archive` 取反且归档时清 `pinned`；
+  `move` 的 `project` 必须是 `''` 或已存在项目（否则 `项目不存在。`）；`touch` 写 `touchedAt=now`；其它 `侧栏操作无效。`。
+  返回 `{...saved, projects, owners: scope ? {...saved?.owners, [scope]:{tasks}} : {...saved?.owners}}`。
+
+**`test/sidebar-state.test.cjs`（5 个 test）**：身份隔离 + 陈旧请求拒绝；归档保留项目归属且可逆；非法项目拒绝 + 删项目保留任务；
+读取归一化不改动入参（含 `credential:'never exposed'` 被丢弃、`'C:\\work'` 被 win32 认成绝对路径、`relative` 与 `/bad\0path` 被剔除）；
+未连接时删除当前项目不会被工作区回退加回来。
+
+**`src/main.cjs` 装配段**
+- 140：`serialized.add('sidebarAction')`；141：`serialized.add('selectSavedProject')`。
+- 567（`publicState`）：`sidebar: sidebarState(disk.sidebar, connection ? sessionPartition(connection) : '', state.workspace.path)`。
+- 569：`saveSidebarAction(action, ids = state.chatSessions?.items.map(i=>i.id) || [])`——写 `disk.sidebar` → `persist()`，**失败回滚 `disk.sidebar=previous` 再抛**。
+- 574：`selectSavedProject(selected)`——先校验 `sidebarState(disk.sidebar,'',workspace).projects.includes(selected)`（错误文案「项目不存在，请重新选择文件夹。」），
+  再 `safeListWorkspace`，再写 `disk.workspace` + persist（失败回滚）。
+- 1139：`handle('sidebarAction', async action => { await saveSidebarAction(action); broadcast(); return publicState(); })`。
+- 1140：`handle('selectSavedProject', async selected => { await selectSavedProject(selected); broadcast(); return publicState(); })`。
+- 1491（`selectWorkspace`）：`disk.sidebar={...disk.sidebar, projects:[...new Set([...sidebarState(disk.sidebar,'',state.workspace.path).projects, selected])]}` 再写 `disk.workspace`，persist 失败整体回滚。
+
+**`docs/interfaces.md`**：§1「工作区与侧栏」四行（`selectWorkspace` / `listWorkspace` / `openWorkspace` / `sidebarAction` / `selectSavedProject`）；
+§2 模块表 332 行 `sidebar-state.cjs` 的导出面；§3 状态表 361 行 `sidebar` 字段 = `{scope, projects, tasks:{[id]:{pinned,archived,project,touchedAt}}}`；
+353 行 `runtime.sideBySide:{configured, active}`；513 行 settings.json 有 `sidebar{projects[], owners{[scope]:{tasks}}}`（本壳层落在 `extras.sidebar`，同名同形）。
+
 ## 3. 进度
 
 - [x] 读方案 §3 约定 / §3.6 / §2.1 / §2.4 / §1.2 / §4 / 附录
 - [x] 读 `docs/migration/i0-seams.md`
 - [x] 读接缝真实代码（subsystems / preload channels / slots / registry / desktop-types）
 - [x] 读 `renderer/conversation/models/organizer.ts` 与 `renderer/app/components/sidebar.tsx`
+- [x] 读 BD `src/sidebar-state.cjs`、`test/sidebar-state.test.cjs`、`src/main.cjs` 装配段、`docs/interfaces.md` §1/§2/§3
 
 ## 4. 决定与偏差
 
