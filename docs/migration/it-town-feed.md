@@ -327,6 +327,22 @@ TownClient 的带 token 读，公共目录读走不到那条链路。合并之�
 
 反向打包那一轮的完整日志：`scratchpad/it-reverse.log`；正向四个脚本：`scratchpad/it-final-e2e.log`。
 
+### 6.2 复审回合后重新打包重跑（2026-09-17）
+
+复审的五条修复里有三条会进打包产物（收件箱重投、`refreshLabel`、目录时限与宽限），所以重新打包、重签、重跑：
+
+| 项 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 绿 |
+| `npx vitest run` | **128 文件通过 / 8 跳过；1426 通过 / 24 跳过**（上一轮 128 / 1420，本轮 +6：`town-conversation-rules` +2、`town-session-session` +4） |
+| 打包 + `codesign --force --deep --sign -` | 成功（第一次仍撞上 `@electron/get` 取校验文件的 `connect ETIMEDOUT`，重试即过，与 §6 记录的间歇故障一致） |
+| `npm run test:town-ui` | **18 过 1 红**，与复审前逐条一致；红的仍是 `an ambiguous recipient offers the choices Town returned`（contextBridge，**待 IN**）。`the pending directory did not stop the feed read` 在收紧成 `>= 1 && <= 2` 之后**实测通过**（这一轮量到的就是 1） |
+| `npm run test:town-sdk` | **13 过 4 红**，四条全是同一个 contextBridge，**待 IN**；与基线一模一样 |
+| `npm run test:town-names` | **PASS**（它正好覆盖「收到/寄出私信的确切回信地址」，也就是 §4.6 那条修复的真窗口一侧） |
+| `npm run test:seed-garden` | **PASS** |
+
+日志：`scratchpad/it-town-ui.log`、`it-town-sdk.log`、`it-town-names.log`、`it-seed-garden.log`、`it-package2.log`。
+
 ---
 
 ## 7. 未做事项 / 存疑（openIssues）
