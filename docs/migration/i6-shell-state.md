@@ -112,12 +112,28 @@
 §2 模块表 332 行 `sidebar-state.cjs` 的导出面；§3 状态表 361 行 `sidebar` 字段 = `{scope, projects, tasks:{[id]:{pinned,archived,project,touchedAt}}}`；
 353 行 `runtime.sideBySide:{configured, active}`；513 行 settings.json 有 `sidebar{projects[], owners{[scope]:{tasks}}}`（本壳层落在 `extras.sidebar`，同名同形）。
 
+### 本壳层的真实代码（决定了下面的四条偏差）
+
+- `desktop/main/main.ts:342` 的 `snapshot()` 是 `{settings, desktopId, portal, background, notice}`——**`beings:snapshot` 的构造点在 main.ts 里，而 main.ts 是 I0 之后任何单元都不得修改的文件**。
+- `desktop/shared/types.ts` 的 `Settings.workspace` 是 **Portal 工作目录**（对应 BD 的 `managedPortal.workspace` / `portalWorkspace`）；
+  BD 的顶层 `workspace`（Desktop 项目目录，也就是 `sidebarState` 的第三个参数）在本壳层叫 `Settings.projectWorkspace`，注释写着「读入并保留，本壳层尚未使用」。
+- `beings:save`（main.ts:441）会重新验证连接并跑 Portal 接管/重启；`beings:choose('workspace')`（main.ts:475）只是一个目录对话框，没有副作用。
+- `desktop/main/app/settings.ts` 的 `SettingsStore.extras` / `saveExtra(patch)` 已经就位，注释明确「侧栏账本走这里，不要给 `Settings` 加字段」；
+  `merge()` 的注释也把 `sidebar` 列进「本客户端不拥有、原样保留」的键——**BD 的 `settings.json` 里就是 `sidebar{projects[], owners{[scope]:{tasks}}}`，键名与形状可以直接复用**。
+- `runtime` 在本壳层**根本不存在**：`chat/ready.ts` 只读 `/api/status` 的 `being_name`，读完即丢；`sideBySide` 在 BD 里唯一的来源是 `/api/llm/config` 的 `sbs_enabled`（`src/runtime.cjs:22`）。
+- `tests/conversation-model.test.ts` 有 7 条既有测试直接同步调用 `organizer.pin/move/archive/setProjects`（且用 `"new"`、`"old"` 这样的非 UUID id），
+  它们一条都不能删或弱化——`OrganizerModel` 必须在「未绑定主进程」时保持原来的同步内存行为。
+- `tests/architecture.test.ts`：renderer 不得 import main/preload/node/electron，也不得出现 `fetch`/`WebSocket` 等标识符；
+  `main/common/` 只能 import node 内建；`main/subsystems/` 不得 import electron。
+
 ## 3. 进度
 
 - [x] 读方案 §3 约定 / §3.6 / §2.1 / §2.4 / §1.2 / §4 / 附录
 - [x] 读 `docs/migration/i0-seams.md`
 - [x] 读接缝真实代码（subsystems / preload channels / slots / registry / desktop-types）
 - [x] 读 `renderer/conversation/models/organizer.ts` 与 `renderer/app/components/sidebar.tsx`
+- [x] 读 BD `test/sidebar-ui.cjs`（BD 规则集）、BD `renderer/sidebar.js`、BD `src/runtime.cjs`
+- [x] 读本壳层 `main/main.ts` 装配段、`app/settings.ts`、`app/ipc.ts`、`shared/types.ts`、`app/models/app.ts`、`app/page.tsx`、`app/components/settings.tsx`、`tests/architecture.test.ts`
 - [x] 读 BD `src/sidebar-state.cjs`、`test/sidebar-state.test.cjs`、`src/main.cjs` 装配段、`docs/interfaces.md` §1/§2/§3
 
 ## 4. 决定与偏差
