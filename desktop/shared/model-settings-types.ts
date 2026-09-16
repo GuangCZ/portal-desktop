@@ -124,6 +124,10 @@ export interface ModelRuntimeState {
  * own channel instead — the same choice I6 made for the sidebar ledger
  * (docs/migration/i6-shell-state.md §4.1). Nothing was added to `Snapshot`. */
 export interface ModelSettingsState {
+  /** Whether a Being is bound at all. Pushed rather than inferred: the settings
+   * page would otherwise have to read it from `beings:snapshot`, whose arrival is
+   * not ordered against this channel's. */
+  connected: boolean;
   /** The epoch this state belongs to, so a page holding an older one can tell. */
   connectionId: number;
   runtime: ModelRuntimeState;

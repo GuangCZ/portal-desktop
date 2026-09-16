@@ -106,6 +106,22 @@ export function readRuntime(results: [Settled, Settled, Settled], checkedAt: str
   return next;
 }
 
+/** The other half of `updateRuntimeConfig`: a read that did NOT come back.
+ *
+ * It is `readRuntime`'s own else branch (above), lifted so a failure can be
+ * recorded without pretending to have read `/api/status` too — and it resets the
+ * configuration values rather than leaving the last ones on screen, because the
+ * sentence it sets says「当前值未知」and a stale Side by Side state contradicting
+ * that is exactly the bug tests/sbs-refresh.mjs was written to catch. */
+export function failRuntimeConfig(runtime: RuntimeState, checkedAt: string): RuntimeState {
+  const empty = emptyRuntime();
+  return {
+    ...runtime, configStatus: 'error', configError: '模型与并肩配置读取失败，当前值未知；重新读取成功后更新。',
+    configCheckedAt: checkedAt, model: empty.model, provider: empty.provider, baseUrl: empty.baseUrl,
+    sideBySide: { ...empty.sideBySide },
+  };
+}
+
 /** A confirmed read replaces the configuration half and nothing else: it says
  * nothing about whether the Being is reachable or streaming. */
 export function updateRuntimeConfig(runtime: RuntimeState, snapshot: RuntimeConfigSnapshot): RuntimeState {

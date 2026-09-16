@@ -36,7 +36,7 @@
 import { parseConnection, sessionPartition, type LoomConnection } from '../common/loom-connection';
 import { ModelConfig } from '../model-settings/config';
 import { modelSettingsPush, registerModelSettingsIpc } from '../model-settings/ipc';
-import { emptyRuntime, modelRuntimeState, updateRuntimeConfig, type RuntimeState } from '../model-settings/runtime';
+import { emptyRuntime, failRuntimeConfig, modelRuntimeState, updateRuntimeConfig, type RuntimeState } from '../model-settings/runtime';
 import type { ModelConfigDto, ModelPatchInput, ModelSettingsState } from '../../shared/model-settings-types';
 import type { DesktopSubsystem, SubsystemContext } from './types';
 
@@ -62,7 +62,7 @@ export function installModelSettingsSubsystem(ctx: SubsystemContext): ModelSetti
     fetchImpl: ctx.fetchImpl,
   });
 
-  const state = (): ModelSettingsState => ({ connectionId, runtime: modelRuntimeState(runtime) });
+  const state = (): ModelSettingsState => ({ connected: Boolean(connection), connectionId, runtime: modelRuntimeState(runtime) });
   const publish = () => {
     try { push(state()); }
     catch (error) { ctx.onError('model-settings-publish', error); }
@@ -81,10 +81,35 @@ export function installModelSettingsSubsystem(ctx: SubsystemContext): ModelSetti
     return dto;
   };
 
+  /** Codes that say nothing about the Being's configuration: the epoch moved on
+   * (the state was reset with it), a write is in flight (its own result will
+   * publish, and 0.8.26 protects a write's snapshot from a concurrent read —
+   * src/main.cjs line 977), or nothing is bound at all. Anything else means the
+   * read did not come back and the values on screen are no longer claimed. */
+  const STALE = new Set(['SESSION_CHANGED', 'BUSY', 'NOT_CONNECTED']);
+
+  /** DEVIATION, and the reason it exists. 0.8.26 leaves a failed `getModelConfig`
+   * silent and lets the next `doRefresh` poll (src/main.cjs line 972) record the
+   * failure — it re-reads all three routes on a timer. This client has no such
+   * timer for `/api/llm/config`: this subsystem is its only reader. So the failure
+   * is recorded here instead, which keeps the observable rule the E2E pins:
+   * a 503 or a malformed answer puts Side by Side back to「未知」and a later
+   * successful refresh restores it (tests/sbs-refresh.mjs). */
+  const readConfig = async (): Promise<ModelConfigDto> => {
+    try { return accept(await model.get()); }
+    catch (error) {
+      if (!STALE.has(String((error as { code?: unknown } | null)?.code))) {
+        runtime = failRuntimeConfig(runtime, new Date().toISOString());
+        publish();
+      }
+      throw error;
+    }
+  };
+
   registerModelSettingsIpc({
     handle: ctx.handle,
     exclusive: ctx.exclusive,
-    read: async () => accept(await model.get()),
+    read: readConfig,
     save: async (patch: ModelPatchInput) => accept(await model.save(patch)),
     setSideBySide: async (enabled: boolean, id: number) => accept(await model.setSideBySide(enabled, id)),
   });
@@ -99,7 +124,7 @@ export function installModelSettingsSubsystem(ctx: SubsystemContext): ModelSetti
       dto => { if (epoch === connectionId) accept(dto); },
       error => {
         if (epoch !== connectionId) return;
-        runtime = { ...runtime, configStatus: 'error', configError: '模型与并肩配置读取失败，当前值未知；重新读取成功后更新。' };
+        runtime = failRuntimeConfig(runtime, new Date().toISOString());
         publish();
         ctx.onError('model-settings-refresh', error);
       },
