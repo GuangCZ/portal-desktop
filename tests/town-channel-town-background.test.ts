@@ -1,13 +1,15 @@
 // Ported from BeingDesktop test/town-background.test.cjs on 2026-09-16. Fixtures copied verbatim.
 //
 // BeingDesktop ran these against the real TownRefresh (src/town-refresh.cjs, 531 lines), which a
-// different migration unit ports. Here TownRefresh is injected, and the double below implements
-// only the call surface TownBackground drives. Cases whose subject is TownRefresh itself —
-// polling schedule, staleness, failure counters, reason strings, snapshot merging and cache
-// receipts — keep their original names as it.skip and are listed in this unit's open issues;
-// they must be re-enabled against the real TownRefresh at integration time.
+// different migration unit ported; integration unit I1 brought it in as
+// desktop/main/town/timeline/refresh.ts, so `createRefresh` now builds the real one and the
+// fifteen cases whose subject IS TownRefresh — polling schedule, staleness, failure counters,
+// reason strings, snapshot merging and cache receipts — are live again rather than carried as
+// it.skip. `FakeRefresh` below is kept for the one case that needs a refresh double it can hold
+// open; every other case drives the real scheduler through the fake clock.
 import { expect, it } from "vitest";
 import { TownBackground } from "../desktop/main/town/channel/town-background";
+import { TownRefresh } from "../desktop/main/town/timeline/refresh";
 import type { TownIdentity, TownRefreshLike, TownRefreshOptions, TownSnapshot } from "../desktop/main/town/channel/types";
 
 function deferred() {
@@ -46,6 +48,11 @@ function snapshot(content: string, id = 1): TownSnapshot {
 }
 
 const EMPTY = (): TownSnapshot => ({ messages: [], latestSeq: null, identity: null });
+
+/** `TownSnapshot.messages` is `unknown[]` in the injection contract — the message
+ * DTO belongs to the session unit, not to this one — so a body read says so once
+ * here rather than casting at every assertion. */
+const body = (value: unknown) => (value as { content?: string } | undefined)?.content;
 
 /**
  * Stand-in for TownRefresh. It performs exactly one read per refresh/requestRead, stores the
@@ -110,18 +117,95 @@ function harness({ read = () => snapshot("Town message"), readCachedSnapshot, bo
     getBonfireMessages: (value: any, options: any) => call("bonfire", value, options),
     getFiresideMessages: (value: any, options: any) => call("fireside", value, options),
   };
-  const background = new TownBackground({
+  const background: TownBackground = new TownBackground({
     townSession, getIdentity: () => identity, clock, bonfireCache, getCacheKey, ...(readCachedSnapshot ? { readCachedSnapshot } : {}),
-    createRefresh: (options) => new FakeRefresh(options),
+    createRefresh: (options) => new TownRefresh(options as unknown as ConstructorParameters<typeof TownRefresh>[0]) as unknown as TownRefreshLike,
     onUpdate(value) { updates.push(structuredClone(value)); onUpdate?.(value); },
     onStatus() { statuses.push(background.metadata()); },
   });
   return { background, clock, calls, updates, statuses, setIdentity(value: TownIdentity | null) { identity = value; } };
 }
 
-it.skip("startup restores persistent Bonfire messages before polling or an explicit Being read", () => { /* TownRefresh: cache merge and staleness */ });
-it.skip("Fireside restores its own persistent messages before polling and an explicit read", () => { /* TownRefresh: restoreCache merge and receipts */ });
-it.skip("Fireside cache survives switching rooms and reconnects with the current identity", () => { /* TownRefresh: cache merge */ });
+it("startup restores persistent Bonfire messages before polling or an explicit Being read", async () => {
+  const disk = deferred(), upstream = deferred(), events: string[] = [];
+  const cached = { ...snapshot("Saved before exit", 7), capturedAt: 500, revision: "manual:1", manual: true };
+  const { background, calls, updates } = harness({
+    bonfireCache: { load: () => disk.promise, save: () => {} }, getCacheKey: () => "alice-session",
+    readCachedSnapshot: () => { events.push("poll"); return upstream.promise; },
+    onUpdate: (value) => { if (value.snapshot.messages[0]?.content === "Saved before exit") events.push("restored"); },
+  });
+  try {
+    background.lifecycle({ enabled: true });
+    const requested = background.requestRead({ kind: "bonfire" });
+    await settle();
+    expect(calls.length).toBe(0);
+    expect(events).toEqual([]);
+    disk.resolve(cached);
+    await background.restore();
+    expect(body(background.snapshot({ kind: "bonfire" }).snapshot.messages[0])).toBe("Saved before exit");
+    expect(events[0]).toBe("restored");
+    await requested;
+    expect(calls.length).toBe(1);
+    expect(updates.some((value) => value.snapshot.messages[0]?.content === "Saved before exit" && value.status.stale)).toBe(true);
+    expect(body(background.snapshot({ kind: "bonfire" }).snapshot.messages[0])).toBe("Town message");
+    upstream.resolve({ ...snapshot("Older collection"), capturedAt: 100, revision: "sbs:old" });
+    await settle();
+    expect(body(background.snapshot({ kind: "bonfire" }).snapshot.messages[0])).toBe("Town message");
+  } finally { background.stop(); }
+});
+
+it("Fireside restores its own persistent messages before polling and an explicit read", async () => {
+  const disk = deferred(), poll = deferred(), saved: { key: string; value: any }[] = [], events: string[] = [];
+  const cached = { ...snapshot("Saved room seven", 7), capturedAt: 500, revision: "room-seven", manual: true };
+  const { background, calls } = harness({
+    bonfireCache: { load: (key) => key.endsWith(":fireside:7") ? disk.promise : null, save: (key, value) => saved.push({ key, value }) },
+    getCacheKey: () => "alice-session",
+    readCachedSnapshot: (value) => { if (value.kind === "fireside") events.push("poll"); return poll.promise; },
+    onUpdate: (value) => { if (value.snapshot.messages[0]?.content === "Saved room seven") events.push("restored"); },
+  });
+  try {
+    background.lifecycle({ enabled: true }); await background.restore();
+    background.reconcileRooms({ owned: [{ id: 7 }], joined: [] });
+    const restoring = background.cachedSnapshot({ kind: "fireside", firesideId: "7" });
+    const requested = background.requestRead({ kind: "fireside", firesideId: "7" });
+    await settle();
+    expect(calls.length).toBe(0);
+    expect(events).toEqual([]);
+    disk.resolve(cached);
+    const restored = await restoring;
+    expect(body(restored.snapshot.messages[0])).toBe("Saved room seven");
+    expect(events[0]).toBe("restored");
+    await requested;
+    expect(saved.map((value) => value.key)).toEqual(["alice-session:fireside:7"]);
+    expect(saved[0].value.messages[0].content).toBe("Town message");
+  } finally { background.stop(); }
+});
+
+it("Fireside cache survives switching rooms and reconnects with the current identity", async () => {
+  const records = new Map<string, any>();
+  let key = "alice-session";
+  const { background, setIdentity } = harness({
+    bonfireCache: { load: async (name: string) => records.get(name), save: (name, value) => records.set(name, structuredClone(value)) },
+    getCacheKey: () => key,
+    read: (call) => snapshot(`Private room ${call.value.firesideId}`, Number(call.value.firesideId)),
+  });
+  try {
+    background.lifecycle({ enabled: true }); await background.restore();
+    await background.requestRead({ kind: "fireside", firesideId: "7" });
+    await background.requestRead({ kind: "fireside", firesideId: "8" });
+    expect(body((await background.cachedSnapshot({ kind: "fireside", firesideId: "7" })).snapshot.messages[0])).toBe("Private room 7");
+    const identity = { beingId: "alice", connectionRevision: 2, identityRevision: 1 };
+    setIdentity(identity); background.lifecycle({ enabled: true }); await background.restore();
+    const restored = await background.cachedSnapshot({ kind: "fireside", firesideId: "8" });
+    expect(body(restored.snapshot.messages[0])).toBe("Private room 8");
+    expect(restored.snapshot.identity).toEqual(identity);
+    key = "another-alice-session";
+    setIdentity({ ...identity, connectionRevision: 3, identityRevision: 2 });
+    background.lifecycle({ enabled: true }); await background.restore();
+    expect((await background.cachedSnapshot({ kind: "fireside", firesideId: "8" })).snapshot.messages).toEqual([]);
+    expect(records.size).toBe(2);
+  } finally { background.stop(); }
+});
 
 it("switching rooms while disk restore is pending rejects the old request before it can read or publish", async () => {
   const disk = deferred();
@@ -166,8 +250,51 @@ it("reconciled room removal prevents an outstanding or later persistent restore"
   } finally { background.stop(); }
 });
 
-it.skip("persisted receipt stays paired with validated messages and errors never replace the disk record", () => { /* TownRefresh: cacheRecord */ });
-it.skip("reconnect restores the same connection cache with current revisions and switching sessions isolates it", () => { /* TownRefresh: cache merge and staleness */ });
+it("persisted receipt stays paired with validated messages and errors never replace the disk record", async () => {
+  const saved: { key: string; record: any }[] = [];
+  let value: any = { ...snapshot("Fresh collection", 8), capturedAt: 600, revision: "sbs:8" };
+  const { background } = harness({
+    bonfireCache: { load: async () => null, save: (key, record) => saved.push({ key, record }) },
+    getCacheKey: () => "alice-session",
+    readCachedSnapshot: async () => { if (value instanceof Error) throw value; return value; },
+  });
+  try {
+    background.lifecycle({ enabled: true }); await background.restore(); await settle();
+    expect(saved.length).toBe(1);
+    expect(saved[0]).toEqual({ key: "alice-session", record: { ...snapshot("Fresh collection", 8), capturedAt: 600, revision: "sbs:8", manual: false } });
+    value = Object.assign(new Error("Unavailable"), { code: "WAITING_SBS" });
+    expect(await rejection(background.refresh({ kind: "bonfire" }))).toMatchObject({ code: "WAITING_SBS" });
+    expect(saved.length).toBe(1);
+    expect(body(background.snapshot({ kind: "bonfire" }).snapshot.messages[0])).toBe("Fresh collection");
+    value = { messages: [], latestSeq: 8, capturedAt: 800, revision: "sbs:empty" };
+    await background.refresh({ kind: "bonfire" });
+    expect(saved.at(-1)!.record).toEqual({ ...value, manual: false });
+  } finally { background.stop(); }
+});
+
+it("reconnect restores the same connection cache with current revisions and switching sessions isolates it", async () => {
+  const records = new Map<string, any>();
+  let key = "alice-session";
+  const { background, setIdentity } = harness({
+    bonfireCache: { load: async (name: string) => records.get(name), save: (name, value) => records.set(name, structuredClone(value)) },
+    getCacheKey: () => key,
+  });
+  try {
+    background.lifecycle({ enabled: true }); await background.restore();
+    await background.requestRead({ kind: "bonfire" });
+    const identity = { beingId: "alice", connectionRevision: 2, identityRevision: 1 };
+    setIdentity(identity); background.lifecycle({ enabled: true }); await background.restore();
+    const restored = background.snapshot({ kind: "bonfire" });
+    expect(body(restored.snapshot.messages[0])).toBe("Town message");
+    expect(restored.snapshot.identity).toEqual(identity);
+    expect(restored.status.stale).toBe(true);
+    key = "another-alice-session";
+    setIdentity({ ...identity, connectionRevision: 3, identityRevision: 2 });
+    background.lifecycle({ enabled: true }); await background.restore();
+    expect(background.snapshot({ kind: "bonfire" }).snapshot.messages).toEqual([]);
+    expect(records.size).toBe(1);
+  } finally { background.stop(); }
+});
 
 it("late disk loads and reads cannot cross a connection change or restart work after stop", async () => {
   const old = deferred();
@@ -198,8 +325,67 @@ it("late disk loads and reads cannot cross a connection change or restart work a
   expect(stopped.background.snapshot({ kind: "bonfire" }).snapshot.messages).toEqual([]);
 });
 
-it.skip("connecting, selecting rooms, recovering and advancing minutes never wake Being", () => { /* TownRefresh: poll schedule, intervalMs, reason */ });
-it.skip("one selected room shares in-flight reads and switching aborts only the previous room", () => { /* TownRefresh: in-flight sharing */ });
+it("connecting, selecting rooms, recovering and advancing minutes never wake Being", async () => {
+  const { background, clock, calls } = harness();
+  try {
+    background.lifecycle({ enabled: true });
+    await settle();
+    expect(background.metadata().bonfire!.reason).toBe("manual");
+    background.snapshot({ kind: "fireside", firesideId: "7" });
+    await clock.advance(600000);
+    background.snapshot({ kind: "fireside", firesideId: "8" });
+    background.lifecycle({ enabled: false, reason: "offline" });
+    background.lifecycle({ enabled: true });
+    background.lifecycle({ enabled: false, reason: "suspended" });
+    background.lifecycle({ enabled: true });
+    await clock.advance(600000);
+    expect(calls.length).toBe(0);
+    expect(clock.pending()).toBe(0);
+    expect(background.metadata().fireside!.reason).toBe("manual");
+    expect(background.metadata().bonfire!.nextRefreshAt).toBe(null);
+    await background.refresh({ kind: "bonfire" });
+    expect(calls.length).toBe(1);
+    expect(calls[0].kind).toBe("bonfire");
+    expect(calls[0].value).toEqual({ limit: 10 });
+    expect(calls[0].signal instanceof AbortSignal).toBe(true);
+    await clock.advance(600000);
+    expect(calls.length).toBe(1);
+    expect(clock.pending()).toBe(0);
+    expect(background.metadata().bonfire!.reason).toBe("manual");
+    expect(background.metadata().bonfire!.intervalMs).toBe(60000);
+  } finally { background.stop(); }
+});
+
+it("one selected room shares in-flight reads and switching aborts only the previous room", async () => {
+  const oldRoom = deferred();
+  const { background, calls, updates, clock } = harness({
+    read: (call) => call.value.firesideId === "7" ? oldRoom.promise : snapshot(call.kind === "fireside" ? "Room eight" : "Bonfire"),
+  });
+  try {
+    background.lifecycle({ enabled: true }); await settle();
+    await background.refresh({ kind: "bonfire" });
+    background.snapshot({ kind: "fireside", firesideId: "7" });
+    await settle();
+    const first = rejection(background.refresh({ kind: "fireside", firesideId: "7" }));
+    const second = rejection(background.refresh({ kind: "fireside", firesideId: "7" }));
+    await clock.advance(60000);
+    expect(calls.filter((call) => call.value.firesideId === "7").length).toBe(1);
+    const oldCall = calls.find((call) => call.value.firesideId === "7")!;
+    const updateCount = updates.length;
+    background.snapshot({ kind: "fireside", firesideId: "8" }); await settle();
+    await background.refresh({ kind: "fireside", firesideId: "8" });
+    expect(oldCall.signal.aborted).toBe(true);
+    expect(calls.filter((call) => call.value.firesideId === "8").length).toBe(1);
+    oldRoom.resolve(snapshot("OLD PRIVATE ROOM"));
+    expect(await first).toMatchObject({ code: "SESSION_CHANGED" });
+    expect(await second).toMatchObject({ code: "SESSION_CHANGED" });
+    await settle();
+    expect(updates.slice(updateCount).every((update) => update.firesideId !== "7")).toBe(true);
+    expect(JSON.stringify(updates.slice(updateCount)).includes("OLD PRIVATE ROOM")).toBe(false);
+    expect(body(background.snapshot({ kind: "fireside", firesideId: "8" }).snapshot.messages[0])).toBe("Room eight");
+    expect(background.metadata().bonfire!.status).toBe("ready");
+  } finally { background.stop(); }
+});
 
 it("repeated snapshots of the current room stay local before and after a manual read", async () => {
   const { background, calls } = harness();
@@ -237,7 +423,31 @@ it("a room change after transport completion cannot relabel the new room as the 
   } finally { background.stop(); }
 });
 
-it.skip("offline and sleep pauses retain stale data without reading on resume", () => { /* TownRefresh: paused status and staleness */ });
+it("offline and sleep pauses retain stale data without reading on resume", async () => {
+  const { background, calls, clock } = harness();
+  try {
+    background.lifecycle({ enabled: true }); await settle();
+    background.snapshot({ kind: "fireside", firesideId: "7" }); await settle();
+    await background.refresh({ kind: "bonfire" });
+    await background.refresh({ kind: "fireside", firesideId: "7" });
+    background.lifecycle({ enabled: false, reason: "offline" });
+    expect(background.metadata().bonfire!.status).toBe("paused");
+    expect(background.metadata().fireside!.status).toBe("paused");
+    expect(background.metadata().bonfire!.stale).toBe(true);
+    expect(background.snapshot({ kind: "fireside", firesideId: "7" }).snapshot.messages.length).toBe(1);
+    await clock.advance(180000);
+    expect(calls.length).toBe(2);
+    expect(await rejection(background.refresh({ kind: "bonfire" }))).toMatchObject({ code: "NOT_CONNECTED" });
+    background.lifecycle({ enabled: true }); await settle();
+    expect(calls.length).toBe(2);
+    background.lifecycle({ enabled: true }); await settle();
+    expect(calls.length).toBe(2);
+    background.lifecycle({ enabled: false, reason: "suspended" });
+    expect(background.metadata().bonfire!.reason).toBe("suspended");
+    await clock.advance(180000);
+    expect(calls.length).toBe(2);
+  } finally { background.stop(); }
+});
 
 it("disconnect clears all cached messages and reconnect cannot expose the previous identity", async () => {
   const { background, setIdentity, calls, updates, clock } = harness({ read: () => snapshot("PRIVATE ALICE MESSAGE") });
@@ -302,9 +512,66 @@ it("removal from the room list discards its cache without any further private re
   } finally { background.stop(); }
 });
 
-it.skip("diagnostic metadata omits messages and observer mutations cannot change cached data", () => { /* TownRefresh: snapshot copying */ });
-it.skip("authorization failures require manual retry using only the read transport", () => { /* TownRefresh: failure state machine */ });
-it.skip("busy and transient failures never enqueue an automatic retry", () => { /* TownRefresh: retry scheduling */ });
+it("diagnostic metadata omits messages and observer mutations cannot change cached data", async () => {
+  const { background, statuses } = harness({
+    read: () => ({ ...snapshot("PRIVATE MESSAGE"), token: "PRIVATE_TOKEN" }),
+    onUpdate: (value) => { value.snapshot.messages.splice(0); value.snapshot.identity = { beingId: "attacker" }; },
+  });
+  try {
+    background.lifecycle({ enabled: true }); await settle();
+    await background.refresh({ kind: "bonfire" });
+    expect(JSON.stringify({ metadata: background.metadata(), statuses }).includes("PRIVATE")).toBe(false);
+    const result = background.snapshot({ kind: "bonfire" });
+    expect(body(result.snapshot.messages[0])).toBe("PRIVATE MESSAGE");
+    expect(result.snapshot.identity!.beingId).toBe("alice");
+    expect((result.snapshot as Record<string, unknown>).token).toBeUndefined();
+  } finally { background.stop(); }
+});
+
+it("authorization failures require manual retry using only the read transport", async () => {
+  let allowed = false;
+  const { background, calls, clock } = harness({
+    read: () => {
+      if (!allowed) throw Object.assign(new Error("REMOTE_PRIVATE_DETAIL"), { code: "AUTH_REQUIRED" });
+      return snapshot("Now authorized");
+    },
+  });
+  try {
+    background.lifecycle({ enabled: true }); await settle();
+    expect(await rejection(background.refresh({ kind: "bonfire" }))).toMatchObject({ code: "AUTH_REQUIRED" });
+    expect(background.metadata().bonfire!.errorCode).toBe("AUTH_REQUIRED");
+    expect(background.metadata().bonfire!.status).toBe("paused");
+    await clock.advance(600000);
+    expect(calls.length).toBe(1);
+    allowed = true;
+    const result = await background.refresh({ kind: "bonfire" });
+    expect(body(result.snapshot.messages[0])).toBe("Now authorized");
+    expect(calls.length).toBe(2);
+    expect(calls.every((call) => call.kind === "bonfire")).toBe(true);
+    expect(JSON.stringify(result).includes("REMOTE_PRIVATE_DETAIL")).toBe(false);
+  } finally { background.stop(); }
+});
+
+it("busy and transient failures never enqueue an automatic retry", async () => {
+  for (const code of ["BUSY", "NETWORK_ERROR", "INCOMPLETE_RESULT", "RESULT_SOURCE_UNAVAILABLE"]) {
+    const { background, calls, clock } = harness({ read: () => { throw Object.assign(new Error("Remote failure"), { code }); } });
+    try {
+      background.lifecycle({ enabled: true });
+      const error = await rejection(background.refresh({ kind: "bonfire" })) as { code: string; message: string };
+      expect(error.code).toBe(code);
+      // A manual read never promises an automatic retry it will not perform.
+      expect(error.message.includes("自动重试")).toBe(false);
+      await clock.advance(1800000);
+      background.lifecycle({ enabled: false });
+      background.lifecycle({ enabled: true });
+      await clock.advance(1800000);
+      expect(calls.length).toBe(1);
+      expect(clock.pending()).toBe(0);
+      expect(background.metadata().bonfire!.reason).toBe("manual");
+      expect(background.metadata().bonfire!.nextRefreshAt).toBe(null);
+    } finally { background.stop(); }
+  }
+});
 
 it("malformed read selectors reject getters and extra keys without starting requests", async () => {
   const { background, calls } = harness();
@@ -345,9 +612,89 @@ it("stop and restart preserve selected room metadata without starting reads", as
   } finally { background.stop(); }
 });
 
-it.skip("SBS polling, navigation and refresh only read cached results over multiple minutes", () => { /* TownRefresh: poll schedule and lastCheckedAt */ });
-it.skip("explicit reads supersede a pending cache read and cannot be overwritten by old cache", () => { /* TownRefresh: read supersession */ });
-it.skip("missing or failed cached results never fall back to a Being chat request", () => { /* TownRefresh: failure reasons and counters */ });
+it("SBS polling, navigation and refresh only read cached results over multiple minutes", async () => {
+  const cachedCalls: any[] = [];
+  const { background, calls, clock } = harness({
+    readCachedSnapshot: async (value) => {
+      cachedCalls.push(value);
+      return { ...snapshot(`Cached ${value.kind}`), capturedAt: 500, revision: `${value.kind}:${value.firesideId}:1` };
+    },
+  });
+  try {
+    background.lifecycle({ enabled: true }); await settle();
+    background.snapshot({ kind: "fireside", firesideId: "7" }); await settle();
+    await clock.advance(3 * 60000);
+    expect(cachedCalls.length).toBe(8);
+    expect(calls.length).toBe(0);
+    expect(cachedCalls.every((value) => value.limit === 10 && value.signal instanceof AbortSignal)).toBe(true);
+    await background.refresh({ kind: "bonfire" });
+    expect(cachedCalls.length).toBe(9);
+    background.snapshot({ kind: "fireside", firesideId: "8" }); await settle();
+    background.lifecycle({ enabled: false, reason: "offline" });
+    await clock.advance(120000);
+    background.lifecycle({ enabled: true }); await settle();
+    await clock.advance(120000);
+    expect(calls.length).toBe(0);
+    expect(background.metadata().bonfire!.reason).toBe("sbs");
+    expect(background.metadata().bonfire!.lastSuccessAt).toBe(500);
+    expect(background.metadata().bonfire!.lastCheckedAt).toBe(clock.now());
+  } finally { background.stop(); }
+});
+
+it("explicit reads supersede a pending cache read and cannot be overwritten by old cache", async () => {
+  const cacheGate = deferred(), manualGate = deferred();
+  const cachedCalls: any[] = [];
+  const { background, calls, clock } = harness({
+    read: () => manualGate.promise,
+    readCachedSnapshot: async (value) => {
+      cachedCalls.push(value);
+      return cachedCalls.length === 1 ? cacheGate.promise : { ...snapshot("OLD CACHE"), capturedAt: 500, revision: "cache:old" };
+    },
+  });
+  try {
+    background.lifecycle({ enabled: true }); await settle();
+    const first = background.requestRead({ kind: "bonfire" });
+    const second = background.requestRead({ kind: "bonfire" });
+    await settle();
+    expect(calls.length).toBe(1);
+    expect(cachedCalls[0].signal.aborted).toBe(true);
+    manualGate.resolve(snapshot("EXPLICIT RESULT", 2));
+    await Promise.all([first, second]);
+    cacheGate.resolve({ ...snapshot("LATE CACHE"), capturedAt: 500, revision: "cache:late" }); await settle();
+    expect(body(background.snapshot({ kind: "bonfire" }).snapshot.messages[0])).toBe("EXPLICIT RESULT");
+    expect(background.metadata().bonfire!.reason).toBe("manual");
+    const capturedAt = background.metadata().bonfire!.lastSuccessAt;
+    await clock.advance(120000);
+    expect(calls.length).toBe(1);
+    expect(cachedCalls.length).toBe(3);
+    expect(background.metadata().bonfire!.lastSuccessAt).toBe(capturedAt);
+    expect(body(background.snapshot({ kind: "bonfire" }).snapshot.messages[0])).toBe("EXPLICIT RESULT");
+  } finally { background.stop(); }
+});
+
+it("missing or failed cached results never fall back to a Being chat request", async () => {
+  for (const code of ["WAITING_SBS", "SBS_NOT_CONFIGURED", "NETWORK_ERROR", "INCOMPLETE_RESULT", "RESULT_SOURCE_UNAVAILABLE"]) {
+    let checks = 0;
+    const { background, calls, clock } = harness({
+      readCachedSnapshot: () => { checks++; throw Object.assign(new Error("Private cache detail"), { code }); },
+    });
+    try {
+      background.lifecycle({ enabled: true }); await settle();
+      await clock.advance(5 * 60000);
+      expect(await rejection(background.refresh({ kind: "bonfire" }))).toMatchObject({ code });
+      expect(calls.length).toBe(0);
+      expect(checks > 1).toBe(true);
+      expect(JSON.stringify(background.metadata()).includes("Private")).toBe(false);
+      if (["WAITING_SBS", "SBS_NOT_CONFIGURED"].includes(code)) {
+        expect(background.metadata().bonfire!.reason).toBe(code === "WAITING_SBS" ? "waiting_sbs" : "sbs_not_configured");
+        expect(background.metadata().bonfire!.failureCount).toBe(0);
+        expect(background.metadata().bonfire!.lastSuccessAt).toBe(null);
+        expect(background.metadata().bonfire!.lastCheckedAt).toBe(clock.now());
+        expect(background.snapshot({ kind: "bonfire" }).snapshot.messages).toEqual([]);
+      }
+    } finally { background.stop(); }
+  }
+});
 
 it("late cached and explicit private reads cannot cross room or identity changes", async () => {
   const cacheGate = deferred(), manualGate = deferred();
@@ -377,4 +724,21 @@ it("late cached and explicit private reads cannot cross room or identity changes
   } finally { background.stop(); }
 });
 
-it.skip("an accepted explicit read is never replayed while cache polling continues", () => { /* TownRefresh: pending-request state */ });
+it("an accepted explicit read is never replayed while cache polling continues", async () => {
+  let checks = 0;
+  const { background, calls, clock } = harness({
+    read: () => { throw Object.assign(new Error("Accepted"), { code: "REQUEST_ACCEPTED" }); },
+    readCachedSnapshot: () => { checks++; throw Object.assign(new Error("Not captured yet"), { code: "WAITING_SBS" }); },
+  });
+  try {
+    background.lifecycle({ enabled: true }); await settle();
+    expect(await rejection(background.requestRead({ kind: "bonfire" }))).toMatchObject({ code: "REQUEST_ACCEPTED" });
+    expect(background.metadata().bonfire!.reason).toBe("being_pending");
+    expect(background.metadata().bonfire!.failureCount).toBe(0);
+    await clock.advance(5 * 60000);
+    expect(calls.length).toBe(1);
+    expect(checks).toBe(6);
+    expect(background.metadata().bonfire!.reason).toBe("waiting_sbs");
+    expect(background.metadata().bonfire!.failureCount).toBe(0);
+  } finally { background.stop(); }
+});

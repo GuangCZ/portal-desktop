@@ -1,22 +1,176 @@
 // Ported from BeingDesktop test/town-pairing.test.cjs on 2026-09-16. Fixtures copied verbatim.
 import { expect, it } from "vitest";
 import { TownPairing } from "../desktop/main/town/channel/pairing-probe";
+import { TownClient } from "../desktop/main/town/session/client";
 import type { PairingClient, PairingConnectionContext } from "../desktop/main/town/channel/types";
+import type { TownClientContext, TownCredentialStore } from "../desktop/main/town/session/types";
 
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-// The first eight cases of the BeingDesktop file exercise TownClient (src/town-client.cjs),
-// which another migration unit ports. Their names are kept so no case is silently dropped.
-it.skip("current SDK confirm response persists Town ID and display without requiring removed being_id", () => {});
-it.skip("Town-prefixed identities use the town_id confirm field", () => {});
-it.skip("a saved Town binding is checked even before the background stream has loaded it", () => {});
-it.skip("invalid or conflicting confirm identities cannot replace saved credentials", () => {});
-it.skip("a new token survives storage failure in memory and retry never consumes another code", () => {});
-it.skip("pair errors distinguish consumed-code uncertainty, invalid code, and rate limit without retry", () => {});
-it.skip("changing Being while confirm is pending cannot save or publish its response", () => {});
-it.skip("credential diagnostics distinguish missing, unreadable and unavailable storage without secrets", () => {});
+// The first eight cases of the BeingDesktop file exercise TownClient
+// (src/town-client.cjs). They were carried as `it.skip` until that module had a
+// port; integration unit I1 brought it in as
+// desktop/main/town/session/client.ts, so they are live again, against the real
+// client and with BeingDesktop's fixtures copied verbatim.
+const token = "b".repeat(64);
+interface ClientFixtureOptions {
+  reply?: Record<string, unknown>;
+  confirm?: () => Promise<Response> | Response;
+  save?: (...args: unknown[]) => Promise<void>;
+  beingId?: string;
+}
+function clientFixture({
+  reply = { ok: true, token, town_id: "t_alice", display: "Alice (t_alice)" },
+  confirm, save, beingId = "alice",
+}: ClientFixtureOptions = {}) {
+  let context: TownClientContext = { connected: true, key: "loom-a", beingId, revision: 1 };
+  const calls: { route: string; options: RequestInit }[] = [];
+  const saved: unknown[][] = [];
+  const store: TownCredentialStore = {
+    assertAvailable() {},
+    loadCredential: async () => null,
+    save: async (...args: unknown[]) => { saved.push(args); if (save) await save(...args); },
+  };
+  const client = new TownClient({
+    getContext: () => context, store,
+    fetchImpl: (async (url: string, options: RequestInit) => {
+      const route = new URL(url).pathname;
+      calls.push({ route, options });
+      if (route.endsWith("/confirm")) return confirm ? confirm() : json(reply);
+      // The one-time token is persisted BEFORE another connection is opened; a
+      // stream request that arrives first means a token was minted and lost.
+      expect(saved.length > 0).toBe(true);
+      if (route.endsWith("/stream")) return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`event: hello\ndata: ${JSON.stringify({ town_id: reply.town_id, anonymous: false, token_kind: "client" })}\n\n`));
+          options.signal!.addEventListener("abort", () => { try { controller.close(); } catch { /* already closed */ } });
+        },
+      }), { headers: { "Content-Type": "text/event-stream" } });
+      throw new Error("Unexpected request");
+    }) as unknown as typeof fetch,
+  });
+  return {
+    client, calls, saved, store,
+    switch() { context = { ...context, key: "loom-b", beingId: "bob", revision: 2 }; client.reset(); },
+  };
+}
+
+it("current SDK confirm response persists Town ID and display without requiring removed being_id", async () => {
+  const f = clientFixture();
+  try {
+    const result = await f.client.pair({ code: "AB01XY" });
+    await tick();
+    expect(result.townId).toBe("t_alice");
+    expect(result.loomBeingId).toBe("alice");
+    expect(f.saved[0].slice(0, 5)).toEqual(["loom-a", "alice", token, "t_alice", "Alice (t_alice)"]);
+    expect(JSON.parse(String(f.calls[0].options.body))).toEqual({ being_id: "alice", code: "AB01XY" });
+    expect((f.calls[0].options.headers as Record<string, string>).Authorization).toBeUndefined();
+    expect(f.client.state().status).toBe("connected");
+    expect(JSON.stringify(f.client.state()).includes(token)).toBe(false);
+  } finally { f.client.reset(); }
+});
+
+it("Town-prefixed identities use the town_id confirm field", async () => {
+  const f = clientFixture({ beingId: "t_alice" });
+  try {
+    await f.client.pair({ code: "AB3XY9" });
+    expect(JSON.parse(String(f.calls[0].options.body))).toEqual({ town_id: "t_alice", code: "AB3XY9" });
+  } finally { f.client.reset(); }
+});
+
+it("a saved Town binding is checked even before the background stream has loaded it", async () => {
+  const f = clientFixture();
+  try {
+    f.store.loadCredential = async () => ({ token: "a".repeat(64), townId: "t_other" });
+    await expect(f.client.pair({ code: "AB3XY9" })).rejects.toMatchObject({ code: "IDENTITY_MISMATCH" });
+    expect(f.saved).toHaveLength(0);
+    expect(f.client.state().pairErrorCode).toBe("IDENTITY_MISMATCH");
+  } finally { f.client.reset(); }
+});
+
+it("invalid or conflicting confirm identities cannot replace saved credentials", async () => {
+  for (const reply of [
+    { ok: true, token, town_id: null },
+    { ok: true, token, town_id: "alice" },
+    { ok: true, token, town_id: "t_alice", being_id: "bob" },
+    { ok: true, token },
+    { ok: true, town_id: "t_alice", token: 123 },
+  ]) {
+    const f = clientFixture({ reply });
+    try {
+      await expect(f.client.pair({ code: "AB3XY9" })).rejects.toThrow();
+      expect(f.saved).toHaveLength(0);
+      expect(f.calls).toHaveLength(1);
+    } finally { f.client.reset(); }
+  }
+});
+
+it("a new token survives storage failure in memory and retry never consumes another code", async () => {
+  let failed = true;
+  const f = clientFixture({ save: async () => { if (failed) throw new Error("disk full"); } });
+  try {
+    await expect(f.client.pair({ code: "AB3XY9" })).rejects.toMatchObject({ code: "PAIR_STORAGE_ERROR" });
+    expect(f.client.state().pairingPending).toBe(true);
+    expect(f.calls).toHaveLength(1);
+    expect(JSON.stringify(f.client.state()).includes(token)).toBe(false);
+    await expect(f.client.pair({ code: "NEW123" })).rejects.toMatchObject({ code: "PAIR_STORAGE_ERROR" });
+    failed = false;
+    await f.client.retryPairStorage();
+    expect(f.calls.filter(call => call.route.endsWith("/confirm"))).toHaveLength(1);
+    expect(f.saved).toHaveLength(2);
+    expect(f.saved[1][2]).toBe(token);
+    expect(f.client.state().pairingPending).toBe(false);
+  } finally { f.client.reset(); }
+});
+
+it("pair errors distinguish consumed-code uncertainty, invalid code, and rate limit without retry", async () => {
+  const cases: [() => Response, string][] = [
+    [() => json({ error: "invalid" }, 400), "PAIR_CODE_INVALID"],
+    [() => json({ error: "rate" }, 429), "RATE_LIMITED"],
+    [() => { throw new Error("connection lost"); }, "PAIR_RESULT_UNKNOWN"],
+  ];
+  for (const [confirm, code] of cases) {
+    const f = clientFixture({ confirm });
+    try {
+      await expect(f.client.pair({ code: "AB3XY9" })).rejects.toMatchObject({ code });
+      expect(f.calls).toHaveLength(1);
+      expect(f.saved).toHaveLength(0);
+    } finally { f.client.reset(); }
+  }
+});
+
+it("changing Being while confirm is pending cannot save or publish its response", async () => {
+  let resolve!: (value: Response) => void;
+  const f = clientFixture({ confirm: () => new Promise<Response>(done => { resolve = done; }) });
+  try {
+    const pending = f.client.pair({ code: "AB3XY9" });
+    await tick();
+    f.switch();
+    resolve(json({ ok: true, token, town_id: "t_alice" }));
+    await expect(pending).rejects.toMatchObject({ code: "SESSION_CHANGED" });
+    expect(f.saved).toHaveLength(0);
+  } finally { f.client.reset(); }
+});
+
+it("credential diagnostics distinguish missing, unreadable and unavailable storage without secrets", async () => {
+  for (const reason of ["NO_SAVED_CREDENTIAL", "CREDENTIAL_UNREADABLE", "SECURE_STORAGE_UNAVAILABLE"]) {
+    const f = clientFixture();
+    try {
+      f.store.loadCredential = async () => {
+        if (reason === "NO_SAVED_CREDENTIAL") return null;
+        throw Object.assign(new Error("private error"), { code: "AUTH_REQUIRED", reason });
+      };
+      f.client.lifecycle({ enabled: true });
+      await tick();
+      expect(f.client.state().authReason).toBe(reason);
+      expect(f.client.state().paired).toBe(false);
+      expect(f.calls).toHaveLength(0);
+      expect(JSON.stringify(f.client.state()).includes("private")).toBe(false);
+    } finally { f.client.reset(); }
+  }
+});
 
 type Frame = [string, Record<string, unknown>];
 interface PairingFixtureOptions {
