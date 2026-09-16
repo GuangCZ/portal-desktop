@@ -11,7 +11,9 @@ export interface TerminalToolsOptions {
   showTerminal: (terminalId: string) => unknown;
 }
 /** The session binding a message carries so retries stay inside one conversation. */
-export interface TerminalScope { sessionId: string; sessionToken: string }
+// A type alias, not an interface: TS grants it the implicit index signature that
+// lets a scope be spread straight into TerminalToolArguments at call sites.
+export type TerminalScope = { sessionId: string; sessionToken: string };
 export interface TerminalToolArguments {
   sessionId?: string;
   sessionToken?: string;
