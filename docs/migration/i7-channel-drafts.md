@@ -96,3 +96,35 @@
   `serialized`（136 行）含 `prepareTownFeature` / `prepareTownAssistance` / `prepareFiresideDraft`（**不含 prepareTownPairing**）。
 - `channelBeing.reset()` 出现在 711（身份分区变化）、1482（disconnect）、1484（reconnect）、1590。
 - `townState()` 523-527：`result.access.channel = channel.status`、`result.channel = channel`。
+
+### BD `docs/channel-sessions.md`（实测记录，优先于源码推断）
+
+- 每个 (Being, Desktop, channel) 一个稳定会话 ID；创建发生在**首次请求发送前**，不改变当前会话或草稿；
+  重启保持、重命名不改变关联；切 Being 换一组。
+- 请求从第一条起带 `scene_id` / `scene_meta` / `client_ref`，不依赖服务端 `session_id`；
+  回复必须属于该 scene 且通过 requestId / beingId / route / channel 校验才更新状态；**202 或中断后不重发**。
+- 打开页面 / 切渠道 / 刷新**只读**查询已有绑定（`inspectChannelStatus`），不创建会话、不发 Being 消息、不重新登记；
+  `ready` 布尔：就绪＝已连接，未就绪的已有记录＝已登记；已连接时不再显示向导或新建连接按钮。
+- 读不到就显示「未能确认状态」，**不判定未绑定**；已有确认结果保留。
+
+### BD `renderer/town-app.js` 的 Channel 页（900-1040）与 `renderer/app.js` 的 Town 目录（815-1010）
+
+- Channel 是 Town app 里的一个**整页** `section.ta-module.ta-channel`，三张卡片
+  `feishu 飞书/连接飞书机器人`、`wechat 微信/检查可用连接方式`、`wecom 企业微信/暂不支持`。
+- 卡片副标题规则：wecom 恒为「暂不支持」；connected→「已连接」；registered/pending/waiting→「已有渠道登记」；否则「查看绑定状态」。
+- 切卡片：`channelRequest+1`、清三个 busy、重置 `{wizard:false,qr:'',detail:'',readError:'',status:'unknown',step:0}` 后并入 `channelStates` 记忆，非 wecom 自动 `inspectChannelStatus`。
+- 三态正文：wecom 说明页；已连接 →「{name}已连接，无需重复绑定。」+ 刷新绑定状态 / 请 Being 核对状态；
+  未开向导 → 正文默认句（registered 时「{name}已有渠道登记，可继续核对连接状态。」，否则
+  「尚未确认已有绑定状态，不代表未绑定。已绑定时无需配置新连接。」）+「请 Being 核对绑定状态」+（非 registered 才有）「配置新连接」；
+  向导 → 三步条（飞书 `请求 Being/配置说明/确认状态`、微信 `请求 Being/查看回复/确认状态`）+ 说明 + 二维码 +「请 Being 检查状态」。
+- `applyChannelResult`：`status` 默认 unknown；`detail` 回退到 `statusNames[status]` 或「连接状态待确认」；
+  pending 时改写成「Being 已收到请求，实际连接状态仍待确认。…」；二维码只认 data:image/(png|jpeg|webp);base64 且 ≤2000000 字节；
+  expired/connected/disconnected/disabled 清空二维码；`step = status==='connected' ? 2 : 1`。
+- `inspectChannelStatus` 读回 unknown 而本地已有 connected/registered/pending/waiting → 只写
+  `readError='当前接口未能确认最新状态，暂时保留上次确认结果。'`，**不覆盖状态**。
+  inspect 抛错 → `readError = '{保留上次确认的状态。}{Desktop 暂无权限直接读取渠道状态。|暂时未能读取渠道状态。}这不代表未绑定，无需重复连接。可请 Being 核对绑定状态。'`；
+  非 inspect 抛错 → `status='error'`、`detail=errorText(error)`。
+- 竞态三重闸：`sameEpoch(requestEpoch) && request===channelRequest && selected===model.channel.selected`。
+- Town 目录（`renderer/app.js:819-1010`）：`getTownCatalog()` 读回后**校验 9 个 id 齐全且 mode ∈ {being,web,local,app}**，
+  不合格抛「Town 功能目录不完整或格式不正确，请重新读取。」；点击按 mode 分流：
+  app→打开对应模块、local→Portal 设置、web→`openTownPage(id)`、being→切到对话页 + `prepareTownFeature(id)` + toast「已填入对话草稿，补充需求后发送」。
