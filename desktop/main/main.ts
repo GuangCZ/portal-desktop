@@ -4,6 +4,7 @@ import { clientUserData, profileOverride } from './app/profile';
 import type { ClientBrowser } from './browser/browser';
 import { createMainWindow } from './app/window';
 import { configureLocalSession, registerLocalProtocol } from './app/protocol';
+import { createTrustedHandle } from './app/ipc';
 import { createApplicationTray, installApplicationMenu } from './app/tray';
 import path from 'node:path';
 import os from 'node:os';
@@ -218,16 +219,11 @@ async function ready() {
   }
   let startupDeferred = false;
   // Only the trusted top-level local shell can control local capabilities.
-  const handle = (channel: string, callback: (...args: any[]) => unknown) => {
-    ipcMain.handle(channel, async (event, ...args) => {
-      const frame = event.senderFrame;
-      if (!window || event.sender !== window.webContents || frame !== window.webContents.mainFrame || frame.url !== shellURL()) throw new Error('Untrusted IPC sender');
-      if (quitting && !['beings:browser-bounds', 'beings:diagnostics'].includes(channel)) throw new Error('客户端正在退出，请稍候。');
-      if (recoveryBlocked && ['beings:save', 'beings:portal-start', 'beings:portal-stop'].includes(channel)) throw new Error('Portal 升级恢复尚未完成，请重新启动客户端完成恢复。');
-      try { return await callback(...args); }
-      catch (error) { throw new Error(errorLog.report(channel, error)); }
-    });
-  };
+  const handle = createTrustedHandle({
+    register: (channel, listener) => { ipcMain.handle(channel, listener); },
+    window: () => window, shellURL, quitting: () => quitting, recoveryBlocked: () => recoveryBlocked,
+    report: (channel, error) => errorLog.report(channel, error),
+  });
   handle('beings:client-startup', (enabled?: boolean) => clientStartup(app, process.platform, process.execPath, enabled));
   handle('beings:quit', () => { setImmediate(() => app.quit()); });
   handle('beings:browser-state', () => browser?.state);
@@ -455,7 +451,18 @@ async function ready() {
       });
       await publishCurrentPortal();
     } catch (error) {
-      if (previousConnection) await store.save({ ...previous, connectionLink: previousAddress || previousConnection.link + '&relay_secret=' + encodeURIComponent(previousConnection.relaySecret) });
+      if (previousConnection) {
+        await store.save({ ...previous, connectionLink: previousAddress || previousConnection.link + '&relay_secret=' + encodeURIComponent(previousConnection.relaySecret) });
+        // `verifyConnection` has already pointed the conversation layer at the
+        // Being this save was switching to (it ends in `connectionVerified`), and
+        // a takeover failing afterwards is an ordinary path — a runtime bundle
+        // that will not load, `background.enable` refused, `portal.start` timing
+        // out. Rolling the store back without saying so leaves chat bound to the
+        // Being that was just rejected, holding its token: the next message the
+        // user sends goes there. The restored connection was verified when it was
+        // first bound, so re-announcing it is what puts the two back in step.
+        extensions?.connectionVerified(store.connection);
+      }
       throw error;
     }
     townLive?.dispose();

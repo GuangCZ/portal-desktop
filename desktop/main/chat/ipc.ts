@@ -16,6 +16,16 @@
 // the call is refused before it reaches the session layer. Anything that would be
 // merely sanitized (text length, image envelope, reference totals) is checked
 // where the measured limits live — in `ChatSessions.send` — so one place owns them.
+//
+// Five of the nine channels answer a failure with an envelope instead of
+// throwing: `chat-view`, `chat-send`, `chat-stop`, `chat-reload` and
+// `chat-forget-session` are exactly BeingDesktop's `townMethods` members among
+// the conversation methods (src/main.cjs line 125), and docs/interfaces.md §1.2
+// marks those same rows「Town 包络」. It is the only way a `code` reaches the
+// renderer — see desktop/shared/chat-errors.ts. The other four stay bare, as
+// `changeChatSession`, `renameChatSession` and `getChatComposerData` are in
+// 0.8.26: their callers branch on nothing but success.
+import { chatErrorEnvelope } from '../../shared/chat-errors';
 import type {
   ChatComposerData, ChatEventPayload, ChatReloadResult, ChatSendRequest, ChatSendResult,
   ChatState, ChatStopResult, ChatView,
@@ -67,6 +77,14 @@ export function registerChatIpc({ handle, exclusive, sessions, blocked }: ChatIp
     if (!current || !current.open) throw Object.assign(new Error(blocked?.() || '请先连接 Being。'), { code: 'NOT_CONNECTED' });
     return current;
   };
+  /** Registration for a channel that resolves with `{__townError:true, code,
+   * message}` rather than throwing. main.ts's wrapper flattens a thrown Error to
+   * its message, and Electron would strip the `code` field even if it did not. */
+  const enveloped = (channel: string, callback: (...args: any[]) => unknown) =>
+    handle(channel, async (...args: any[]) => {
+      try { return await callback(...args); }
+      catch (error) { return chatErrorEnvelope(error); }
+    });
   const idle: ChatState = { open: false, version: 0, identityKey: '', active: '', cursor: 0, seeded: false, degraded: false, sessions: [], recovery: { phase: 'idle' } };
 
   handle('beings:chat-sessions', (): ChatState => {
@@ -74,9 +92,9 @@ export function registerChatIpc({ handle, exclusive, sessions, blocked }: ChatIp
     return current ? current.snapshot() : idle;
   });
 
-  handle('beings:chat-view', (id: unknown): ChatView => require().view(sessionId(id)));
+  enveloped('beings:chat-view', (id: unknown): ChatView => require().view(sessionId(id)));
 
-  handle('beings:chat-send', (input: unknown): Promise<ChatSendResult> => {
+  enveloped('beings:chat-send', (input: unknown): Promise<ChatSendResult> => {
     const request = fields(input, ['sessionId', 'text', 'images', 'references'], '发送');
     const id = sessionId(request.sessionId);
     if (typeof request.text !== 'string') throw invalid('消息不能为空。');
@@ -86,17 +104,23 @@ export function registerChatIpc({ handle, exclusive, sessions, blocked }: ChatIp
     return require().send({ sessionId: id, text: request.text, images: request.images, references: request.references });
   });
 
-  handle('beings:chat-stop', (input: unknown): Promise<ChatStopResult> => {
+  enveloped('beings:chat-stop', (input: unknown): Promise<ChatStopResult> => {
     const request = fields(input, ['sessionId', 'force'], '停止');
     const id = sessionId(request.sessionId);
     if (request.force !== undefined && typeof request.force !== 'boolean') throw invalid('停止参数无效。');
     return require().stop({ sessionId: id, force: request.force === true });
   });
 
-  handle('beings:chat-reload', (): Promise<ChatReloadResult> => require().reload());
+  enveloped('beings:chat-reload', (): Promise<ChatReloadResult> => require().reload());
 
-  // `null` means "a new conversation", matching BeingDesktop's changeChatSession
-  // (docs/interfaces.md §1.2). Both branches return the id that is now active.
+  // `null` means "a new conversation", as in BeingDesktop's changeChatSession.
+  // DEVIATION from docs/interfaces.md §1.2 line 88 and src/main.cjs line 1177,
+  // which both answer `{ok:true}` and leave the caller to read the new id back
+  // out of `publicState().chatSessions.active`: both branches here return the id
+  // that is now active. The renderer is being rewritten, so the extra round trip
+  // buys nothing — see docs/migration/p1-sessions-fix.md「偏差清单」. The other
+  // deviation on this channel is the refusal text: 0.8.26 says「会话标识无效。」
+  // for a malformed id, this file says「会话不存在。」on every channel alike.
   handle('beings:chat-change-session', (id: unknown): Promise<string> => exclusive(async () => {
     const current = require();
     if (id === null || id === undefined) return current.create({ title: '新会话' });
@@ -106,12 +130,20 @@ export function registerChatIpc({ handle, exclusive, sessions, blocked }: ChatIp
   }));
 
   handle('beings:chat-rename-session', (id: unknown, title: unknown): Promise<boolean> => exclusive(async () => {
+    // Reproduced from BeingDesktop 0.8.26 src/main.cjs line 1152 rather than
+    // delegated, because `ChatSessions.rename` cannot express it: it measures the
+    // *collapsed* title (sessions.ts `normalize` folds every whitespace run to one
+    // space), so `'x'.repeat(78) + '   ' + 'y'` — 82 characters as typed, which
+    // 0.8.26 refuses — would fit in 80, and JS `\s` covers neither NUL nor BEL nor
+    // DEL, so a control character would reach the encrypted cache and the sidebar
+    // verbatim. docs/interfaces.md line 89:「`title` 1–80 字符，无控制字符」.
+    if (typeof title !== 'string' || !title.trim() || title.trim().length > 80 || /[\u0000-\u001f\u007f]/.test(title))
+      throw invalid('会话名须为 1–80 个字符，且不能包含换行。');
     const target = sessionId(id);
-    if (typeof title !== 'string') throw invalid('会话名须为 1–80 个字符。');
     return require().rename(target, title);
   }));
 
-  handle('beings:chat-forget-session', (id: unknown): boolean => require().forget(sessionId(id)));
+  enveloped('beings:chat-forget-session', (id: unknown): boolean => require().forget(sessionId(id)));
 
   // The kit catalogue and the Town member directory are separate subsystems that
   // arrive in a later stage. Returning the empty shape now keeps the renderer

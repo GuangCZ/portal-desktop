@@ -7,6 +7,7 @@
 // `chat-event` carries one event of a conversation's stream, `chat-state` a new
 // session snapshot.
 import { ipcRenderer } from 'electron';
+import { chatErrorFromEnvelope, isChatErrorEnvelope } from '../shared/chat-errors';
 import type { ChatAPI, ChatEventPayload, ChatState } from '../shared/desktop-types';
 
 function subscribe<T>(channel: string, callback: (value: T) => void): () => void {
@@ -15,15 +16,25 @@ function subscribe<T>(channel: string, callback: (value: T) => void): () => void
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
+/** The five conversation channels answer a failure with data rather than an
+ * Error, because a `code` cannot survive the trip (desktop/shared/chat-errors.ts).
+ * This is the other half: BeingDesktop's src/preload.cjs lines 60-76, which turns
+ * the envelope back into an Error the renderer branches on. */
+async function enveloped<T>(channel: string, ...args: unknown[]): Promise<T> {
+  const result: unknown = await ipcRenderer.invoke(channel, ...args);
+  if (isChatErrorEnvelope(result)) throw chatErrorFromEnvelope(result);
+  return result as T;
+}
+
 export const chat: ChatAPI = {
   sessions: () => ipcRenderer.invoke('beings:chat-sessions'),
-  view: sessionId => ipcRenderer.invoke('beings:chat-view', sessionId),
-  send: request => ipcRenderer.invoke('beings:chat-send', request),
-  stop: input => ipcRenderer.invoke('beings:chat-stop', input),
-  reload: () => ipcRenderer.invoke('beings:chat-reload'),
+  view: sessionId => enveloped('beings:chat-view', sessionId),
+  send: request => enveloped('beings:chat-send', request),
+  stop: input => enveloped('beings:chat-stop', input),
+  reload: () => enveloped('beings:chat-reload'),
   changeSession: sessionId => ipcRenderer.invoke('beings:chat-change-session', sessionId),
   renameSession: (sessionId, title) => ipcRenderer.invoke('beings:chat-rename-session', sessionId, title),
-  forgetSession: sessionId => ipcRenderer.invoke('beings:chat-forget-session', sessionId),
+  forgetSession: sessionId => enveloped('beings:chat-forget-session', sessionId),
   composerData: () => ipcRenderer.invoke('beings:chat-composer-data'),
   onEvent: callback => subscribe<ChatEventPayload>('beings:chat-event', callback),
   onState: callback => subscribe<ChatState>('beings:chat-state', callback),

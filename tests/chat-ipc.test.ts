@@ -7,9 +7,12 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "vitest";
+import { createTrustedHandle } from "../desktop/main/app/ipc";
 import { sceneId } from "../desktop/main/chat/being-chat";
 import { beingIdentityKey } from "../desktop/main/chat/connection";
 import { installDesktopExtensions } from "../desktop/main/extensions";
+import { chatErrorEnvelope, chatErrorFromEnvelope, isChatErrorEnvelope } from "../desktop/shared/chat-errors";
+import { publicErrorMessage } from "../desktop/shared/errors";
 import type { Connection } from "../desktop/main/chat/connection";
 
 const DESKTOP = "11111111-1111-4111-8111-111111111111";
@@ -20,6 +23,12 @@ const CHANNELS = [
   "beings:chat-sessions", "beings:chat-view", "beings:chat-send", "beings:chat-stop", "beings:chat-reload",
   "beings:chat-change-session", "beings:chat-rename-session", "beings:chat-forget-session", "beings:chat-composer-data",
 ];
+// The five BeingDesktop 0.8.26 answers with `{__townError:true, code, message}`
+// instead of throwing (src/main.cjs line 125 `townMethods`; docs/interfaces.md
+// §1.2「Town 包络」). Only these can tell the renderer *why* a call failed: the
+// wrapper around every channel replaces a thrown Error with its message alone.
+const ENVELOPED = new Set(["beings:chat-view", "beings:chat-send", "beings:chat-stop", "beings:chat-reload", "beings:chat-forget-session"]);
+const SHELL = "beings://desktop/";
 const json = (value: unknown, status = 200) => () =>
   new Response(value === null ? null : JSON.stringify(value), { status, headers: value === null ? {} : { "Content-Type": "application/json" } });
 const sse = (frames: [string, unknown][]) => () =>
@@ -43,16 +52,29 @@ async function fixture({ desktopId = DESKTOP, address = ADDRESS }: { desktopId?:
   always("/api/history", json({ messages: [] }));
   always("/api/stream/active", json(null, 204));
 
-  const handlers = new Map<string, (...args: any[]) => any>();
+  const handlers = new Map<string, (event: any, ...args: any[]) => Promise<unknown>>();
   const pushes: { channel: string; payload: any }[] = [];
   const errors: { scope: string; error: unknown }[] = [];
-  let destroyed = false;
-  const window = { isDestroyed: () => destroyed, webContents: { isDestroyed: () => destroyed, send: (channel: string, payload: unknown) => { pushes.push({ channel, payload }); } } };
+  let destroyed = false, quitting = false;
+  const mainFrame = { url: SHELL };
+  const webContents = { mainFrame, isDestroyed: () => destroyed, send: (channel: string, payload: unknown) => { pushes.push({ channel, payload }); } };
+  const window = { isDestroyed: () => destroyed, webContents };
   const store = { connection: null as Connection | null, connectionAddress: "" };
   const secretStorage = { isEncryptionAvailable: () => true, encryptString: (value: string) => Buffer.from(value), decryptString: (value: Buffer) => value.toString() };
+  // The wrapper production registers through, not a re-creation of it: main.ts
+  // hands `createTrustedHandle` to `installDesktopExtensions`, and its catch
+  // replaces whatever a handler throws with `new Error(errorLog.report(channel,
+  // error))` — which is `publicErrorMessage`, a short string and nothing else.
+  // Calling the raw callbacks instead would let a `code` assertion pass on a path
+  // that does not exist in the running client.
+  const handle = createTrustedHandle({
+    register: (channel, listener) => { handlers.set(channel, listener); },
+    window: () => window, shellURL: () => SHELL,
+    quitting: () => quitting, recoveryBlocked: () => false,
+    report: (_channel, error) => publicErrorMessage(error),
+  });
   const extensions = installDesktopExtensions({
-    handle: (channel, callback) => { handlers.set(channel, callback); },
-    exclusive: operation => operation(),
+    handle, exclusive: operation => operation(),
     window: () => window, store, secretStorage, userData: directory, desktopId,
     clientVersion: "0.9.0", fetchImpl, onError: (scope, error) => { errors.push({ scope, error }); },
   });
@@ -63,10 +85,22 @@ async function fixture({ desktopId = DESKTOP, address = ADDRESS }: { desktopId?:
     extensions.connectionVerified(store.connection);
     await extensions.ready; await settle();
   };
-  const call = async (channel: string, ...args: unknown[]) => handlers.get(channel)!(...args);
+  /** One `ipcRenderer.invoke`, from the sender the client trusts. */
+  const invoke = (channel: string, ...args: unknown[]) =>
+    handlers.get(channel)!({ sender: webContents, senderFrame: mainFrame }, ...args);
+  /** The renderer's view of the same call: desktop/preload/desktop-channels.ts
+   * turns the envelope the five enveloped channels resolve with back into an
+   * Error carrying `code`, and leaves every other channel alone. */
+  const call = async (channel: string, ...args: unknown[]) => {
+    const result = await invoke(channel, ...args);
+    if (ENVELOPED.has(channel) && isChatErrorEnvelope(result)) throw chatErrorFromEnvelope(result);
+    return result as any;
+  };
   return {
-    extensions, handlers, pushes, errors, calls, on, always, connect, call, directory, store,
+    extensions, handlers, pushes, errors, calls, on, always, connect, call, invoke, directory, store,
     destroy: () => { destroyed = true; },
+    quit: () => { quitting = true; },
+    untrusted: (channel: string, ...args: unknown[]) => handlers.get(channel)!({ sender: {}, senderFrame: { url: "https://elsewhere.example/" } }, ...args),
     cleanup: async () => { await extensions.quitting(); await rm(directory, { recursive: true, force: true }); },
   };
 }
@@ -85,7 +119,13 @@ test("the bridge registers the documented channel set and refuses to work before
       ["beings:chat-stop", [{ sessionId: id }]], ["beings:chat-reload", []],
       ["beings:chat-change-session", [null]], ["beings:chat-rename-session", [id, "名字"]],
       ["beings:chat-forget-session", [id]],
-    ] as [string, unknown[]][]) await expect(f.call(channel, ...args)).rejects.toMatchObject({ code: "NOT_CONNECTED", message: "请先连接 Being。" });
+    ] as [string, unknown[]][]) {
+      // Every channel refuses with the same sentence; only the enveloped five
+      // still carry the code that says it was the connection, and that is the
+      // split BeingDesktop 0.8.26 ships.
+      if (ENVELOPED.has(channel)) await expect(f.call(channel, ...args)).rejects.toMatchObject({ code: "NOT_CONNECTED", message: "请先连接 Being。" });
+      else await expect(f.call(channel, ...args)).rejects.toThrow("请先连接 Being。");
+    }
     expect(f.calls).toEqual([]);
   } finally { await f.cleanup(); }
 });
@@ -137,8 +177,10 @@ test("input the renderer should never send is refused before it reaches the netw
     await f.connect();
     const id = (await f.call("beings:chat-sessions")).active;
     const before = f.calls.length;
-    const refuse = async (channel: string, ...args: unknown[]) =>
-      expect(f.call(channel, ...args)).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    const refuse = async (channel: string, ...args: unknown[]) => {
+      const rejects = expect(f.call(channel, ...args)).rejects;
+      await (ENVELOPED.has(channel) ? rejects.toMatchObject({ code: "INVALID_REQUEST" }) : rejects.toThrowError(Error));
+    };
     // A session id that is not a UUID never reaches the store.
     for (const bad of ["", "not-a-uuid", 7, null, { id }, `${id}\n`]) await refuse("beings:chat-view", bad);
     await refuse("beings:chat-change-session", "not-a-uuid");
@@ -162,8 +204,17 @@ test("input the renderer should never send is refused before it reaches the netw
     await refuse("beings:chat-send", { sessionId: id, text: "早", references: [{ text: "x".repeat(60001) }] });
     // 200000 code points, not UTF-16 units: an emoji counts once.
     await refuse("beings:chat-send", { sessionId: id, text: "🙂".repeat(200001) });
-    await expect(f.call("beings:chat-rename-session", id, "  ")).rejects.toMatchObject({ code: "INVALID_REQUEST", message: "会话名须为 1–80 个字符。" });
-    await expect(f.call("beings:chat-rename-session", id, "名".repeat(81))).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    // BeingDesktop 0.8.26 src/main.cjs line 1152 and docs/interfaces.md line 89:
+    // 1–80 characters, no control characters. Both halves have to be checked
+    // before the title is collapsed — `ChatSessions.rename` folds whitespace runs
+    // first, which would let 82 typed characters through as 80, and JS `\s`
+    // covers none of NUL, BEL or DEL, so those would land in the encrypted cache
+    // and the sidebar verbatim.
+    const TITLE_REFUSAL = "会话名须为 1–80 个字符，且不能包含换行。";
+    for (const bad of ["  ", "名".repeat(81), "a\u0000b", "a\u0007b", "a\u007fb", "a\nb", `${"x".repeat(78)}   y`])
+      await expect(f.call("beings:chat-rename-session", id, bad)).rejects.toThrow(TITLE_REFUSAL);
+    // …and 80 characters that are only long, not malformed, are still a title.
+    expect(await f.call("beings:chat-rename-session", id, "名".repeat(80))).toBe(true);
     expect(f.calls.length).toBe(before);
   } finally { await f.cleanup(); }
 });
@@ -238,5 +289,45 @@ test("the cache is filed under BeingDesktop 0.8.x's own identity, and quitting f
     // A window that has gone away is not a place to push to.
     f.destroy();
     await f.extensions.connectionCleared();
+  } finally { await f.cleanup(); }
+});
+
+test("a conversation channel answers a refusal with data, because a code thrown from a handler does not survive", async () => {
+  const f = await fixture();
+  try {
+    await f.connect();
+    // What actually crosses IPC on the five enveloped channels, byte for byte:
+    // BeingDesktop 0.8.26 returns this object from its own handler rather than
+    // throwing (src/main.cjs line 741), and src/preload.cjs line 60 rebuilds the
+    // Error from it.
+    expect(await f.invoke("beings:chat-view", "not-a-uuid")).toEqual({ __townError: true, code: "INVALID_REQUEST", message: "会话不存在。" });
+    await f.extensions.connectionCleared();
+    expect(await f.invoke("beings:chat-reload")).toEqual({ __townError: true, code: "NOT_CONNECTED", message: "请先连接 Being。" });
+    // The same refusal on a bare channel is what the envelope exists to avoid:
+    // `createTrustedHandle` rebuilds the Error out of `report()` alone, so by the
+    // time the renderer sees it the code is gone and only the sentence is left.
+    const bare = await f.call("beings:chat-change-session", null).then(() => null, (error: Error & { code?: string }) => error);
+    expect(bare).toMatchObject({ message: "请先连接 Being。" });
+    expect(bare!.code).toBeUndefined();
+    // A code from somewhere else is not forwarded, and neither is its text.
+    expect(chatErrorEnvelope(Object.assign(new Error("内部细节"), { code: "SOMETHING_ELSE" })))
+      .toEqual({ __townError: true, code: "TOWN_ERROR", message: "Town 操作未完成，请稍后重试。" });
+    expect(chatErrorFromEnvelope({ __townError: true, code: "TOWN_ERROR", message: "内部细节" }).message).toBe("Town 操作未完成，请稍后重试。");
+  } finally { await f.cleanup(); }
+});
+
+test("the wrapper every channel is registered through refuses an untrusted sender and a client that is quitting", async () => {
+  const f = await fixture();
+  try {
+    await f.connect();
+    const reads = f.calls.length;
+    // A frame that is not the trusted shell's own main frame gets no answer at
+    // all — not even the empty session list this channel hands the renderer.
+    await expect(f.untrusted("beings:chat-sessions")).rejects.toThrow("Untrusted IPC sender");
+    f.quit();
+    // Both guards run before the handler, so their refusal is a plain Error on
+    // every channel alike: there is no handler result left to put in an envelope.
+    for (const channel of CHANNELS) await expect(f.call(channel)).rejects.toThrow("客户端正在退出，请稍候。");
+    expect(f.calls.length).toBe(reads);
   } finally { await f.cleanup(); }
 });
