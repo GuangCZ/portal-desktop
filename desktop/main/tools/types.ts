@@ -11,6 +11,11 @@ export interface ToolImageContent { type: 'image'; mimeType: string; data: strin
 export type ToolContent = ToolTextContent | ToolImageContent;
 export interface ToolResult { content: ToolContent[]; isError?: boolean }
 
+/** The live browser's own snapshot, re-exported under a name that says which of
+ * the two shapes in this file it is. */
+export type { BrowserSnapshot as LiveBrowserSnapshot } from './browser/types';
+import type { BrowserSnapshot as LiveBrowserSnapshot } from './browser/types';
+
 /** Context handed to the tool host for one `tools/call`. */
 export interface ToolCallContext { signal?: AbortSignal; requestKey?: string }
 export type InvokeTool = (name: string, args: Record<string, unknown>, context: ToolCallContext) => ToolResult | Promise<ToolResult>;
@@ -42,14 +47,21 @@ export interface PrepareActionRequest { id: string; selector: string; expectedRe
 export interface PreparedAction { targetToken?: string; summary?: string }
 export interface BrowserScreenshot { mimeType: string; data: string }
 
-/** The DesktopBrowser surface DesktopTools drives. */
+/** The DesktopBrowser surface DesktopTools drives.
+ *
+ * Its three snapshot-returning members answer with the REAL browser's snapshot
+ * (./browser/types), not the loose shape above: `DesktopTools.snapshot()` hands
+ * this straight to the renderer, and a renderer that has to guess whether
+ * `canGoBack` is there cannot draw a back button. The loose `BrowserSnapshot`
+ * stays for `BrowserTabOpener` and `PresentationBrowser` below, whose callers
+ * genuinely accept a lighter host. I2, 2026-09-16. */
 export interface DesktopBrowserLike {
-  snapshot(): BrowserSnapshot;
+  snapshot(): LiveBrowserSnapshot;
   /** A live browser answers every navigation with its whole snapshot, `newTab`
    * included (src/desktop-browser.cjs, and ./browser/browser.ts after it). The
    * declaration used to say `NewTabResult`, which only the lighter
    * `BrowserTabOpener` below actually returns. I2, 2026-09-16. */
-  newTab(options: { url?: string; active?: boolean }): BrowserSnapshot;
+  newTab(options: { url?: string; active?: boolean }): LiveBrowserSnapshot;
   activateTab(id: string): unknown;
   closeTab(id: string): unknown;
   navigate(options: { id?: string; url?: string }): unknown;
@@ -62,6 +74,11 @@ export interface DesktopBrowserLike {
   click(options: { id: string; selector: string; expectedRevision?: number; targetToken?: string }): Promise<unknown>;
   fill(options: { id: string; selector: string; text: string; expectedRevision?: number; targetToken?: string }): Promise<unknown>;
   screenshot(id: string, expectedRevision?: number): Promise<BrowserScreenshot>;
+  /** Pin the native view to a rectangle of the window, or detach it. The panel
+   * drives this over `beings:tools-browser-view`; no tool ever calls it, which is
+   * why it was missing from the surface the migration unit wrote. I2,
+   * 2026-09-16. */
+  setViewport(options: { visible?: unknown; bounds?: unknown }): LiveBrowserSnapshot;
   destroy(): void;
 }
 /** The narrow browser surface browser-links and worker presentation need. */

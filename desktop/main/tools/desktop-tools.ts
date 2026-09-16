@@ -13,7 +13,7 @@ import type { ToolLinkCapabilities, ToolLinkOptions, ToolLinkSnapshot } from './
 import { DesktopTerminalTools } from './terminal-tools';
 import type { ElectronBrowserHost } from './browser/host';
 import type {
-  BrowserSnapshot, DesktopBrowserLike, DesktopPortalName, DesktopTerminalLike,
+  DesktopBrowserLike, DesktopPortalName, DesktopTerminalLike, LiveBrowserSnapshot,
   OrchestrationLike, PreparedAction, ToolCallContext, ToolResult,
 } from './types';
 
@@ -53,7 +53,7 @@ export interface DesktopToolsRequestView {
 }
 export interface DesktopToolsRequestResult { id: string; status: 'completed' | 'failed'; message: string }
 export interface DesktopToolsSnapshot {
-  browser: BrowserSnapshot;
+  browser: LiveBrowserSnapshot;
   console: ConsoleSnapshot;
   link: ToolLinkSnapshot;
   workspace: string;
