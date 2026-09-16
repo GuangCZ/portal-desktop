@@ -24,9 +24,13 @@
 // `QUIT_ALLOWED` (desktop/main/app/ipc.ts) refuses once the client is quitting.
 // DEVIATION: `beings:tools-browser-view` is NOT on that list, while the shell
 // browser's `beings:browser-bounds` is, so a viewport update sent while the
-// window is closing is refused rather than applied. The panel's layout call
-// already swallows its own failures, and 0.8.26 had no guard on `setBrowserView`
-// at all — see docs/migration/i2-tools.md「决定与偏差」.
+// window is closing is refused rather than applied. 0.8.26 had no guard on
+// `setBrowserView` at all. The panel swallows its own failures AND bounds its
+// retries (`VIEWPORT_RETRIES`, renderer/tools/models/tools.ts) precisely because
+// this refusal lasts for the whole of a quit — without the bound, a refusal
+// re-renders the shell and the re-render sends again, forever. Adding the channel
+// to `QUIT_ALLOWED` would be the other fix; it edits a shared file and belongs to
+// whoever owns app/ipc.ts. See docs/migration/i2-tools.md「决定与偏差」.
 import { IDLE_TOOLS_STATE } from '../../shared/tools-types';
 import type {
   DesktopToolsBrowserState, DesktopToolsPane, DesktopToolsState,
