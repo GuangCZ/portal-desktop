@@ -64,16 +64,18 @@ export interface ToolLinkOptions {
 // `ws` ships no TypeScript declarations, and the relay only needs the narrow
 // surface above. Resolve it lazily so an injected transport never loads it.
 //
-// PACKAGING CONTRACT (measured 2026-09-16, not inferred): `ws` must be a runtime
-// dependency of the packaged app. It currently sits in devDependencies, which
-// @electron/packager prunes out of the asar, so this require would fail with
-// MODULE_NOT_FOUND in a release build; BeingDesktop 0.8.26 keeps "ws" in
-// dependencies. Integration must move it there — bundling `ws` into the main
-// chunk instead does NOT work: Vite replaces ws's unresolvable optional peer
+// PACKAGING CONTRACT (measured 2026-09-16, not inferred): `ws` is a runtime
+// dependency of the packaged app, pinned to 8.21.3 as BeingDesktop 0.8.26 pins
+// it. The I0 seam stage moved it out of devDependencies, which
+// @electron/packager prunes out of the asar — this require would have failed
+// with MODULE_NOT_FOUND in a release build. Do NOT "fix" that by bundling `ws`
+// into the main chunk instead: Vite replaces ws's unresolvable optional peer
 // deps with empty stubs (__viteOptionalPeerDep_bufferutil_ws), so ws's own
 // try/catch never fires and the first outbound frame throws
-// "TypeError: bufferUtil.mask is not a function". See docs/migration/u4-tools.md
-// 「未完成 / 存疑」.
+// "TypeError: bufferUtil.mask is not a function". It must stay external to the
+// bundle and present inside the asar, which is why vite.main.config.ts lists it
+// in `rollupOptions.external`. See docs/migration/u4-tools.md「未完成 / 存疑」
+// and docs/migration/i0-seams.md.
 const nodeRequire = createRequire(import.meta.url);
 const defaultWebSocket = (): ToolSocketFactory => nodeRequire('ws').WebSocket as ToolSocketFactory;
 
