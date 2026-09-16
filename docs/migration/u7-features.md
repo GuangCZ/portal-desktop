@@ -589,6 +589,23 @@ prepareDraft: async (text, getContext) => { getContext(); drafts.push(text); }}`
 4. `identity and connection are checked again during asynchronous preparation` —
    对 `['changeLedger','changeContext']`：`prepareDraft = async (_prompt, current) => { f[kind](); current(); }` → 拒绝匹配 `/变化/`。
 
+### test/town-error-ipc.test.cjs（49 行）—— 已读完，仅第 1 个用例涉及 FeatureTasks
+
+- 用例 1 `Town transport failures survive the production preload and task ledger without becoming format errors`：
+  用 `vm.runInNewContext` 把 **真实的 src/preload.cjs** 跑在假 `electron` 上拿到 `api`，再对
+  `['TOWN_TOOL_NOT_CALLED','RESULT_SOURCE_NOT_CONFIGURED','READINESS_UNKNOWN','RESULT_UNCONFIRMED']` 逐个：
+  `tasks.begin({feature:'bonfire',operation:'read',title:'读取篝火消息',execution:'being'})`，
+  响应 `{__townError:true, code, message:'固定诊断信息'}`，断言 preload 抛出的 error 保留 `code`/`message`，
+  并且 `tasks.fail(task.id, error)` 得到 `status 'failed'` + `errorCode === code`。
+  最后一段（`code:'UNTRUSTED'` → `TOWN_ERROR` 且不泄漏 `PRIVATE_REMOTE_DETAIL`）**纯粹是 preload 行为，与账本无关**。
+- 用例 2 `pairing and persistence retry retain actionable errors through the production preload` 与本单元无关（配对 IPC）。
+
+**移植决定**：preload/IPC 不在本单元范围（也没有可移植的 preload 目标文件），故只移植账本那一半——
+在 `tests/features-feature-tasks.test.ts` 末尾补一个用例
+`Town transport failure codes survive the task ledger without becoming format errors`，
+对同样 4 个 code 断言 `fail()` 的 `status`/`errorCode`（错误对象用 `Object.assign(new Error('固定诊断信息'), {code})` 模拟 preload 抛出的形状）。
+preload 那一半计入 openIssues，由后续集成阶段接管。
+
 ## 进度
 
 | 模块 | 状态 |
@@ -603,7 +620,7 @@ prepareDraft: async (text, getContext) => { getContext(); drafts.push(text); }}`
 | test/feature-task-runner.test.cjs | 已读（21 个用例） |
 | test/feature-task-history.test.cjs | 已读（10 个用例） |
 | test/feature-task-discussion.test.cjs | 已读（4 个用例） |
-| test/town-error-ipc.test.cjs（feature-tasks 相关用例） | 未开始 |
+| test/town-error-ipc.test.cjs（feature-tasks 相关用例） | 已读（只有 1 个用例相关，取其账本一半） |
 | src/loom-town-sync.cjs `normalizeTownSyncRecords`（外部依赖） | 已读 |
 | src/main.cjs boot() 注入面 | 未开始 |
 
