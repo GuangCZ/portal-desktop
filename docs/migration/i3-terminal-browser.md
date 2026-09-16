@@ -205,3 +205,25 @@ disableStdin:readonly, drawBoldTextInBrightColors:false, minimumContrastRatio:1,
 `reveal(id)`：`accept(await getTerminalState())` → 没有这个 id 返回 false → `setSelected` → `show()` →
 等一帧 → 返回 `visible && selected===key && host 的宽高都 >0`。
 主题变化靠 `window 'being-theme-change'` 事件 + `prefers-reduced-motion` 的 change 事件重新 fit。
+
+### 1.10 壳层真实代码（renderer / IPC 基础设施）
+
+- `desktop/main/app/ipc.ts` 的 `createTrustedHandle`：已包含来源校验、`quitting()` 守卫（抛「客户端正在退出，请稍候。」）
+  与 `report(channel, error)` 脱敏——**BD 的 `if(exitStarted) throw '桌面端正在退出。'` 不需要在子系统里重写**。
+- `desktop/main/chat/ipc.ts` 是 IPC 层的风格样板：`plain()` / `fields(value, allowed, what)` 白名单校验、
+  `invalid(msg)` 带 `code:'INVALID_REQUEST'`、`chatPush(target)` 把通道名收在同一文件。
+- `desktop/renderer/main.tsx` **不在允许触碰的共享文件里** → 新的 CSS 只能从本单元自己的组件 `import './styles.css'`。
+- vitest 没有 DOM environment（`vitest.config.ts` 未设 `environment`）→ **renderer 侧只能测 model，不能挂载组件**。
+- `desktop/renderer/browser/page.tsx`（外壳浏览器）是「把 DOM 矩形回报给主进程去挂 WebContentsView」的样板：
+  `getBoundingClientRect()` → `browserBounds({x,y,width,height,visible})`，用 ResizeObserver + MutationObserver(`open`/`hidden`)
+  + `window resize` 触发，`visible` 还要排除拖拽中与任何 `dialog[open]`。
+- `desktop/main/tools/browser/host.ts` 的 `ElectronBrowserHost = {WebContentsView, session, getWindow}`；
+  `electron-host.ts` 是唯一 import electron 的文件——**但 `tests/architecture.test.ts` 禁止 `main/subsystems/` 直接 import electron**，
+  所以子系统改为从 `ctx.electron` 造 host 并在使用处 `as` 一次（i0-seams §A 明确要求这么做）。
+- `DesktopBrowser` 构造参数校验：`WebContentsView` 必须是函数、`session.fromPartition` 必须是函数、`getWindow`/`onChange` 必须是函数，
+  否则抛 `TypeError('浏览器依赖无效。')`——**`ctx.electron.WebContentsView` 在测试上下文里默认是 `null`，所以子系统必须优雅降级。**
+
+### 1.11 基线门槛（本 worktree 实测，9794cab）
+
+- `npm run typecheck` 退出码 0。
+- `npx vitest run`：**96 文件通过 / 8 跳过，1071 通过 / 58 跳过（共 1129）**。
