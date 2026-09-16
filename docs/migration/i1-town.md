@@ -324,6 +324,8 @@ string / `mention|name|display_name|query|token|input` / `message|reason|warning
 5. 用户需要重新配对（无凭据迁移器），已写进 `MIGRATION.md`。
 6. `MIGRATION.md` 里原本没有「每个集成单元一行」的表，所以本单元建了表头（标题 + 一行说明 + 表头 + 分隔行 + 自己的一行，共 4 行内容）。
    后续单元只需要在表里追加一行。这比约定的「只追加一行」多，记在这里以便合回时知道多出来的是什么。
+7. （复审后补记）`tests/town-names.mjs` 与 `tests/seed-garden.mjs` 曾被本单元改坏，现已重写并真跑通过，见 §10.1；
+   它们在 `scripts/test-all.mjs` 里排在打包之前，坏着合回会让 `npm run test:all` 在第 5、6 步就失败。
 
 ---
 
@@ -453,4 +455,29 @@ R2 +2（`renderer-state`）、R3/R4 +10（新建 `tests/town-feed.test.ts`）。
 `session/{types,session}.ts` 属于 u1 已合入的移植模块，不在任何单元的独占目录里；I7（`main/town/channel/`）在并行组 B，
 与这两个文件不重叠。改动是纯增量字段，合回时应无冲突。
 
-§7 的真机项（两个 E2E、打包 smoke、手工点篝火）仍然**没有执行**，条件与 §7、§8 记的一样（本机无 `cargo`）。
+### 10.1 复审之外发现并修好的一件事：两个浏览器 E2E 脚本被本单元改坏了
+
+复审只看了 `desktop/` 与 `tests/*.test.ts`。核对 `scripts/test-all.mjs` 时发现，它在**打包之前**就会跑两个
+Playwright 脚本，而这两个脚本都被本单元的重写打坏了，§7 一个字都没提：
+
+| 脚本 | 坏在哪 | 处理 |
+| --- | --- | --- |
+| `tests/town-names.mjs` | `import { collectMentionNames }`——该函数已随成员目录改写更名为 `mentionNames`；整份 fixture 还在用旧的 `TownModel(api={townAuth,sendTown})`、`model.live`、`TownFeed data={{messages}}` 与 Town 原始信封 | 按新 DTO 与新构造签名重写，**已真跑通过** |
+| `tests/seed-garden.mjs` | fixture 只给了 `town`/`townAuth`；篝火/围炉/私信已经不走 `beings:town`，place switcher 的「每次切换都重新读」断言必然为 0 | fixture 增加 `townDesktop` 假实现（转调同一个 `/query`，保留那 150ms 延迟），**已真跑通过** |
+
+这两个脚本本机可跑（`playwright` + 系统 Chrome 都在），不需要打包。它们是本单元**唯一**的真实 DOM 级验证：
+
+| 脚本 | 结果 |
+| --- | --- |
+| `node tests/town-names.mjs` | **PASS**（显示名/地址分离、我发出的信回给另一端 `t_RiverB`、无地址的信不给回复、旧格式地址、配对文案、三个视图的 @ 渲染） |
+| `node tests/seed-garden.mjs` | **PASS**（种子花园阅读、卷轴链接布局、切换都重新读、慢响应不覆盖后选的视图、窄屏暗色导航） |
+| `node tests/menu-keyboard.mjs` | **PASS**（未受本单元影响，确认用） |
+| `node tests/update-progress.mjs` | **PASS**（同上） |
+| `npm run test:sbs-refresh` | **SKIPPED**（既有缺口：仍驱动已退休的 `beings://chat` iframe，MIGRATION.md P1） |
+
+其中「我发出的信回给另一端」这一条在真浏览器里点了回复按钮、看了收件人输入框、读了实际发出的 `speak` 载荷
+（`{kind:'dm', recipient:'t_RiverB', replyTo:'outgoing'}`），是 R4 的端到端证据；R4 修好之前这条会在
+「找不到回复按钮」处超时。
+
+§7 的其余真机项（`town-ui.mjs`、`town-sdk.mjs`、打包 smoke、手工点篝火）仍然**没有执行**，条件与 §7、§8 记的一样
+（本机无 `cargo` → 没有安装包）。
