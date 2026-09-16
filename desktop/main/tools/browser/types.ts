@@ -4,8 +4,6 @@
 // them from IPC and renderer contracts (docs/interfaces.md 1.2 / 3.6).
 // Reading digest: docs/migration/u5-terminal-browser.md.
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 import type { BrowserView } from './host';
 
 /** One row of DesktopBrowser.snapshot().tabs. Key order is asserted by tests. */

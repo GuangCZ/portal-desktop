@@ -5,8 +5,6 @@
 // browser.ts can stay unit-testable, and electron-host.ts binds the real APIs.
 // Reading digest: docs/migration/u5-terminal-browser.md.
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 export interface BrowserBounds {
   x: number;
   y: number;

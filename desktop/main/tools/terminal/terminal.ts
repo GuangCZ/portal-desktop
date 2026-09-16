@@ -187,7 +187,7 @@ export class DesktopTerminal {
             try { processHandle.kill(); } catch { item.nativeReleased = false; }
           };
           processHandle.on('error', onError as (...args: never[]) => void);
-          item.subscriptions.push({ dispose: () => processHandle.removeListener?.('error', onError as (...args: never[]) => void) });
+          item.subscriptions.push({ dispose: () => processHandle.removeListener!('error', onError as (...args: never[]) => void) });
         }
       } catch (error) {
         try { processHandle.kill(); } catch { /* Only this owned pseudoconsole may be stopped. */ }

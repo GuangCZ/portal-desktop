@@ -65,23 +65,6 @@
 
 移植注意：`_agent.inSocket` / `_agent._conoutSocketWorker` 是 node-pty 内部字段，TS 里要在 PtyLike 上声明为可选的 unknown 形状。
 
-
----
-
-## 进度
-
-| 模块 | 状态 |
-| --- | --- |
-| desktop-terminal.cjs → tools/terminal/terminal.ts | 测试通过（18/18） |
-| tools/terminal/types.ts (PtyLike / PtyFactory) | 已移植 |
-| tools/terminal/platform.ts (platform.cjs + consoleEnvironment) | 已移植 |
-| desktop-browser.cjs → tools/browser/browser.ts | 已移植 |
-| tools/browser/types.ts (快照/标签页/页面操作类型) | 已移植 |
-| tools/browser/host.ts (ElectronBrowserHost) | 已移植 |
-| tools/browser/electron-host.ts | 已移植（仅 typecheck，无单测） |
-| tests/tools-terminal-terminal.test.ts | 测试通过（18 条，与原文件一一对应） |
-| tests/tools-browser-browser.test.ts | 未开始 |
-
 ### src/platform.cjs（33 行，terminal 的依赖）
 
 导出 `{desktopPlatform, desktopEnvironment, shellPath}`。
@@ -326,3 +309,47 @@ constructor({desktopId, WebContentsView, session, getWindow, getConnection, getW
 | 页面注入 | 无 | 隔离世界 1004 的 `__beingBrowserDocument` / `__beingBrowserTargets` 与 revision 校验 |
 
 **可能的复用点**（留给后续集成阶段，本单元不做）：两者最终应共用一个 partition 与一套脱敏工具；`url.ts` 的 `browserURL` 与 `normalizeBrowserUrl` 语义不同，不可互换（ClientBrowser 把裸文本当域名，DesktopBrowser 会拒绝），合并时必须以 DesktopBrowser 的更严格语义为准并回归 `tests/browser-url.test.ts`。`ClientBrowser.layout()` 的 zoomFactor 缩放是 portal-desktop 特有的，DesktopBrowser 的 `_syncView()` 没有；集成到同一个窗口时需要决定是否补上。
+
+---
+
+## 进度
+
+| 模块 | 状态 |
+| --- | --- |
+| desktop-terminal.cjs → tools/terminal/terminal.ts | 测试通过（18/18） |
+| tools/terminal/types.ts (PtyLike / PtyFactory) | 已移植 |
+| tools/terminal/platform.ts (platform.cjs + consoleEnvironment) | 已移植 |
+| desktop-browser.cjs → tools/browser/browser.ts | 测试通过（17 条移植 + 1 条守卫） |
+| tools/browser/types.ts (快照/标签页/页面操作类型) | 已移植 |
+| tools/browser/host.ts (ElectronBrowserHost) | 已移植 |
+| tools/browser/electron-host.ts | 已移植（仅 typecheck，无单测） |
+| tests/tools-terminal-terminal.test.ts | 测试通过（18 条，与原文件一一对应） |
+| tests/tools-browser-browser.test.ts | 测试通过（18/18） |
+
+---
+
+## 移植结果与偏差说明（2026-09-16）
+
+### 产出文件
+- `desktop/main/tools/terminal/types.ts` — `PtyLike` / `PtyFactory` / `PtyDisposable` / `PtyExitEvent` / `PtyAgent` / `PtySpawnOptions`，以及终端快照、回放、增量读、会话记录与 `DesktopTerminalOptions`。
+- `desktop/main/tools/terminal/platform.ts` — `desktopPlatform` / `desktopEnvironment` / `shellPath` / `consoleEnvironment`（逐行照搬 src/platform.cjs 与 desktop-console.cjs 的同名函数）。
+- `desktop/main/tools/terminal/terminal.ts` — `DesktopTerminal`，另导出 `setDefaultPtyFactory`。
+- `desktop/main/tools/browser/host.ts` — `ElectronBrowserHost` 及其全部子接口（WebContents / View / Session / webRequest / NativeImage / 宿主窗口）。
+- `desktop/main/tools/browser/types.ts` — 快照、标签页记录、页面元素与各操作参数/返回类型。
+- `desktop/main/tools/browser/browser.ts` — `DesktopBrowser`、`BROWSER_PARTITION`、`MAX_BROWSER_TABS`、`normalizeBrowserUrl`；不 import electron。
+- `desktop/main/tools/browser/electron-host.ts` — 唯一 `import 'electron'` 的适配：`createElectronBrowserHost(getWindow)`、`createElectronBrowser(getWindow, onChange)`。
+- `tests/tools-terminal-terminal.test.ts`（18 条，与原文件一一对应）
+- `tests/tools-browser-browser.test.ts`（17 条原样移植 + 1 条新增的序列化守卫）
+
+### 有意的偏差（其余逐行保真）
+1. **node-pty 不装**。BeingDesktop 在 `create()` 里 `this.pty ||= require('node-pty')`。移植版改为 `this.pty ||= loadPtyFactory()`，由 `setDefaultPtyFactory()` 在集成阶段注册真模块。仍在同一个 try 块里，所以未注册时抛出的仍是 `无法启动 ${shell} 交互终端，请检查终端组件与系统安装。`（带 cause），与原来 require 失败的表现一致。
+2. **platform.ts 是本单元内的副本**。`desktopPlatform` / `desktopEnvironment` / `shellPath` 属于 src/platform.cjs，`consoleEnvironment` 属于 src/desktop-console.cjs（`DesktopConsole` 归并行单元）。因为并行单元的文件互不可见且不允许在 `desktop/main/tools/` 顶层建文件，这里在 `tools/terminal/platform.ts` 里放了一份逐行副本。集成阶段需要与 console 单元的副本合并成一份共享模块。
+3. **文件系统未做注入**。BeingDesktop 的 `create()` 直接用 `node:fs/promises` 的 `realpath`/`stat`，其测试也依赖真实目录；为保持构造面一致，移植版同样直接 import `node:fs/promises`（主进程允许 node 内建导入，`tests/architecture.test.ts` 只禁止 renderer/shared）。
+4. **测试夹具的两处类型化调整**（运行时行为不变）：`Contents.capturePage` 用 `!` 声明而不赋值（与原夹具一样默认 undefined，只有截图用例才挂上），`Contents.executeJavaScriptInIsolatedWorld` 从零参方法改写成同签名的属性函数以便被用例替换。
+5. **新增 1 条守卫用例**（BeingDesktop 没有）：`injected page function survives the TypeScript build`。`pageOperation` 是靠 `Function.prototype.toString()` 送进隔离世界执行的，TS→JS 构建链路是这次移植新引入的风险，用例断言注入代码以 `(function pageOperation(` 开头、含 `__beingBrowserDocument`、以正确的实参结尾并且能被 `new Function` 解析。
+6. `processHandle.removeListener!(...)` 用非空断言而不是可选调用，保持与 BeingDesktop 相同的失败方式。
+
+### 不在本单元范围、需要后续阶段处理
+- `test/desktop-terminal-integration.cjs`、`test/desktop-terminal-electron.cjs`、`test/desktop-browser-electron.cjs` 三个真实 pty / 真实 electron 的集成测试没有移植（本单元只做纯移植，且 portal-desktop 的 e2e 走 `tests/*.mjs` + playwright 体系）。
+- IPC（`getTerminalState` / `readTerminal` / `terminalAction` / `setBrowserView` / `desktopAction`）、renderer 面板（`terminal-panel.js`、`desktop-tools.js`）、`DesktopTools` 与工具桥的挂接，全部留给集成阶段。
+- `tools/browser/browser.ts` 与既有 `desktop/main/browser/`（ClientBrowser）的去重（分区、脱敏、地址解析、zoomFactor 缩放）留给集成阶段，本单元未改动 ClientBrowser。
