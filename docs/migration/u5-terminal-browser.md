@@ -95,7 +95,7 @@
 
 本单元处理：把 `desktopPlatform / desktopEnvironment / shellPath / consoleEnvironment` 逐行移植到 `desktop/main/tools/terminal/platform.ts`（本单元目录内，避免与并行单元的 tools 顶层文件撞名）；集成阶段若 console 单元也移植了同名函数，应合并到一份共享模块。
 
-### test/desktop-terminal.test.cjs（282 行，16 个用例）
+### test/desktop-terminal.test.cjs（282 行，18 个用例）
 
 **它注入假 pty，不起真 node-pty**（`fixture()` 里 `pty = { spawn: (...args) => {...new FakePty(1000 + calls.length)} }`），因此全部用例都能在 vitest 下跑，无需 it.skip。
 
@@ -123,4 +123,4 @@
 17. `native stream errors are handled inside the owning session` — 手动触发 `handle.errors` 里的监听；read 匹配 `/连接已中断/`；snapshot status 为 `'exited'`（onError 置 'failed' 后 kill → FakePty.end(1) → onExit 覆写为 'exited'）；`kills === 1`；dispose 后 `handle.errors.size === 0`。
 18. `natural shell exit releases its pinned node-pty worker and pipe without touching another session` — 建两个会话；给 `calls[0].handle` 挂 `_agent = { inSocket: {destroy}, _conoutSocketWorker: {dispose} }`；`end(0)` 后 pipes/workers 各 1、第二个会话 kills 0；再 `end(0)` 不重复（didExit 守卫），pipes 仍为 1。
 
-（实际 `test(...)` 调用共 16 个；上面 1–18 的编号里 5/10 等为连续编号，清点以 `test(` 出现次数为准 = 16。）
+（`test(` 出现次数 = 18，与上表一一对应；移植后 vitest 用例数必须 ≥ 18。）
