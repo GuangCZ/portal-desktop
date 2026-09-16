@@ -362,18 +362,33 @@ try {
   await page.locator('#town-send-dialog').waitFor({ state: 'hidden' });
 
   // Enough messages for the list to actually scroll, then the same background
-  // update again. `#town-view` is the scrolling element (app/styles.css:126).
+  // update again. Which element scrolls is a layout detail — several ancestors
+  // carry `overflow:auto` and only one of them ends up taller than its box — so
+  // it is found rather than assumed, and a run where nothing scrolls fails
+  // loudly on `scrolled > 0` instead of passing vacuously.
   await app.evaluate(() => { globalThis.town.bulk = true; });
   await page.locator('#town-refresh').click();
   await page.waitForFunction(() => document.querySelectorAll('.social-message').length > 10);
-  await page.locator('#town-view').evaluate(element => { element.scrollTop = Math.floor(element.scrollHeight / 3); });
-  const scrolled = await page.locator('#town-view').evaluate(element => element.scrollTop);
+  const scroller = () => page.evaluate(() => {
+    for (let node = document.querySelector('.social-messages'); node; node = node.parentElement)
+      if (node.scrollHeight - node.clientHeight > 40) return node.className || node.id;
+    return '';
+  });
+  const scrollerName = await scroller();
+  const setScroll = (name, value) => page.evaluate(([key, top]) => {
+    const node = document.getElementById(key) || document.getElementsByClassName(key)[0];
+    if (top !== null) node.scrollTop = top;
+    return node.scrollTop;
+  }, [scrollerName, value]);
+  await setScroll(scrollerName, await page.evaluate(key => {
+    const node = document.getElementById(key) || document.getElementsByClassName(key)[0];
+    return Math.floor((node.scrollHeight - node.clientHeight) / 3);
+  }, scrollerName));
+  const scrolled = await setScroll(scrollerName, null);
   const scrollUpdated = await backgroundUpdate();
   await page.waitForTimeout(200);
-  console.log('PROBE scrolled=' + scrolled + ' updated=' + scrollUpdated + ' after=' + (await page.locator('#town-view').evaluate(element => element.scrollTop)) + ' count=' + (await page.locator('.social-message').count()) + ' h=' + (await page.locator('#town-view').evaluate(e => e.scrollHeight + '/' + e.clientHeight)));
   check('a background update leaves the list where the reader left it',
-    scrolled > 0 && scrollUpdated
-    && (await page.locator('#town-view').evaluate(element => element.scrollTop)) === scrolled);
+    scrolled > 0 && scrollUpdated && (await setScroll(scrollerName, null)) === scrolled);
 
   // The strip that says where background collection stands. BeingDesktop
   // renderer/town-app.js `refreshLabel` (:163); the wording table is asserted
