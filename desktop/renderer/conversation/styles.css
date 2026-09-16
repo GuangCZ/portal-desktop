@@ -107,6 +107,57 @@
 :root[data-theme=dark] .hljs-title,:root[data-theme=dark] .hljs-number,:root[data-theme=dark] .hljs-section,:root[data-theme=dark] .hljs-literal{color:#79c0ff}
 :root[data-theme=dark] .hljs-bullet{color:#e3b341}
 
+/* ---- a finished Worker's result --------------------------------------
+   BeingDesktop 0.8.26 renderer/chat-app.css lines 200-206. The card sits in an
+   ordinary Being bubble, so it inherits the meta line and the reading width. */
+
+.chat-worker-result{display:grid;gap:10px;padding:14px 16px;border:1px solid var(--line);border-radius:12px}
+.chat-worker-result h3{margin:0;font-size:15px}
+.chat-worker-status{font-size:12px;color:var(--muted)}
+.chat-worker-summary,.chat-worker-evidence>div{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65}
+.chat-worker-open{justify-self:start;padding:7px 12px;border:1px solid var(--line);border-radius:8px;color:inherit;background:var(--surface)}
+.chat-worker-evidence{font-size:12px}
+.chat-worker-evidence summary{cursor:pointer}
+
+/* ---- the selection toolbar and the explanation card -------------------
+   BeingDesktop 0.8.26 renderer/chat-app.css lines 119-178. The toolbar is
+   positioned in script (components/selection.tsx) so that it never covers the
+   passage it is about; everything here is the look. */
+
+.chat-selection-toolbar{position:fixed;z-index:60;display:flex;max-width:calc(100vw - 32px);overflow:hidden;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--text);box-shadow:0 4px 18px #0002;user-select:none}
+.chat-selection-toolbar button{padding:9px 14px;font:inherit;font-size:14px;font-weight:500;white-space:nowrap;color:inherit}
+.chat-selection-toolbar button+button{border-left:1px solid var(--line)}
+.chat-selection-toolbar button:hover:not(:disabled){background:var(--hover)}
+.chat-selection-toolbar button:disabled{opacity:.45}
+.chat-selection-toolbar button:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
+
+.chat-detail-card{position:absolute;z-index:40;right:18px;top:18px;bottom:18px;display:flex;flex-direction:column;box-sizing:border-box;width:min(460px,calc(100% - 36px));padding:18px;border:1px solid var(--line);border-radius:22px;background:var(--bg);color:var(--text);box-shadow:0 12px 56px #0004}
+.chat-detail-header{display:flex;flex:none;align-items:center;gap:10px}
+.chat-detail-header strong{font-size:16px;font-weight:550}
+.chat-detail-badge{padding:2px 7px;border:1px solid var(--line);border-radius:6px;font-size:11px;color:var(--muted)}
+.chat-detail-close{margin-left:auto;width:28px;height:28px;border-radius:50%;font-size:22px;line-height:1;color:var(--muted)}
+.chat-detail-close:hover:not(:disabled){background:var(--hover);color:var(--text)}
+.chat-detail-notice{flex:none;margin:8px 0 12px;font-size:11px;line-height:1.6;color:var(--muted)}
+.chat-detail-source{flex:none}
+.chat-detail-messages{flex:1;min-height:0;padding:14px 2px;overflow-y:auto;overscroll-behavior:contain}
+.chat-detail-message{margin-bottom:22px}
+.chat-detail-message .chat-meta{margin-bottom:5px}
+.chat-detail-message.is-user .chat-body{padding:10px 13px;border-radius:14px;background:var(--control)}
+.chat-detail-status{flex:none;margin:0 4px 8px;font-size:12px;line-height:1.5;overflow-wrap:anywhere;color:var(--muted)}
+.chat-detail-status:empty{display:none}
+.chat-detail-composer{position:relative;display:flex;flex:none;align-items:flex-end;gap:8px;padding:12px;border:1px solid var(--line);border-radius:18px;background:var(--control)}
+.chat-detail-composer:focus-within{border-color:var(--accent)}
+.chat-detail-input{flex:1;min-width:0;max-height:150px;padding:2px;border:0;outline:0;resize:none;background:transparent;color:var(--text);font:inherit;font-size:14px;line-height:1.6;field-sizing:content}
+.chat-detail-input::placeholder{color:var(--muted)}
+.chat-detail-send{flex:none;width:30px;height:30px;border-radius:50%;background:var(--accent);color:var(--button-text);font-size:22px;line-height:1}
+.chat-detail-stop{flex:none;height:30px;padding:0 6px;border-radius:6px;background:var(--surface);color:var(--text);font-size:12px}
+.chat-detail-card button:disabled{opacity:.45}
+
+@media(max-width:560px){
+  .chat-detail-card{top:8px;right:8px;bottom:8px;width:calc(100% - 16px);padding:14px}
+  .chat-selection-toolbar button{padding:8px 11px}
+}
+
 /* ---- the composer ---------------------------------------------------- */
 
 .chat-composer-area{flex-shrink:0;padding:0 max(20px,calc((100% - 720px)/2)) 16px}
@@ -133,6 +184,30 @@
 
 .chat-confirm{padding:26px 28px}
 .chat-confirm p{font-size:13px;line-height:1.9;margin:0 0 6px}
+
+
+/* ---- the / and @ menu -------------------------------------------------
+   BeingDesktop 0.8.26 renderer/chat-app.css lines 183-197. It is positioned
+   against the composer, which is why `.chat-composer` is a positioned box. */
+
+.chat-composer{position:relative}
+.chat-composer-menu{position:absolute;z-index:30;bottom:calc(100% + 10px);left:0;right:0;max-height:min(350px,48vh);overflow-y:auto;padding:8px;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:0 12px 36px #0002;text-align:left}
+.chat-composer-heading,.chat-composer-empty{padding:8px 10px;font-size:12px;color:var(--muted)}
+.chat-composer-empty{display:flex;align-items:center;gap:6px}
+.chat-composer-option{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;border-radius:9px;color:var(--text);background:transparent;text-align:left}
+.chat-composer-option[aria-selected=true],.chat-composer-option:hover{background:var(--hover)}
+.chat-composer-icon{position:relative;flex:0 0 32px;height:32px;display:grid;place-items:center;overflow:hidden;border-radius:8px;background:var(--control);font-size:17px}
+.chat-composer-icon img{position:absolute;inset:0;width:32px;height:32px;background:var(--surface)}
+.chat-composer-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.chat-composer-copy strong{font-size:13px;font-weight:600;overflow-wrap:anywhere}
+.chat-composer-detail{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12px;color:var(--muted)}
+.chat-composer-retry{display:inline-grid;place-items:center;flex:none;width:26px;height:26px;padding:5px;border-radius:50%;color:inherit}
+.chat-composer-retry:hover:not(:disabled){background:var(--hover);color:var(--text)}
+.chat-composer-retry:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+.chat-composer-retry svg{display:block;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.chat-composer-notice{padding:4px 14px 0;font-size:11px;line-height:1.7;overflow-wrap:anywhere;color:var(--muted)}
+.chat-composer-notice p{margin:0}
+.chat-composer-notice ul{margin:4px 0 0;padding-left:18px}
 
 /* ---- the sidebar ----------------------------------------------------- */
 

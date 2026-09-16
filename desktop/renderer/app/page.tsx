@@ -43,9 +43,25 @@ export function App({ model }: { model: AppModel }) {
         event.preventDefault();
         app.openSearch();
       }
-      if ((event.metaKey || event.ctrlKey) && event.key === "1") {
+      // ⌘1–9 / Ctrl+1–9: the Nth conversation the sidebar lists, and the
+      // conversation page with it. ADDITION over BeingDesktop 0.8.26, which has
+      // no conversation shortcut at all (renderer/app.js line 1300 binds only
+      // ⌘B and ⌘,); ⌘1 kept its old meaning of「show the conversation」and now
+      // also selects the first one.
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        /^[1-9]$/.test(event.key) &&
+        !dialog
+      ) {
         event.preventDefault();
         app.navigate("chat");
+        const conversation = app.conversation;
+        const target = conversation.organizer.listed(conversation.sessions)[
+          Number(event.key) - 1
+        ];
+        if (target) void conversation.select(target.id);
       }
       if ((event.metaKey || event.ctrlKey) && event.key === "," && !dialog) {
         event.preventDefault();

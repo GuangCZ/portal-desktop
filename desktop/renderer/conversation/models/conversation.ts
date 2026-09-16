@@ -12,7 +12,11 @@ import { Store, errorText } from '../../shared/models/store';
 import type {
   ChatAPI, ChatEventPayload, ChatLiveReply, ChatSessionSummary, ChatState, ChatView,
 } from '../../../shared/desktop-types';
+import type { ChatReference } from '../../../shared/chat-references';
 import { ComposerModel, type ComposerOptions } from './composer';
+import { ComposerDirectory, type ComposerPlan } from './directory';
+import { DetailsModel } from './details';
+import { ComposerMenuModel } from './menu';
 import { OrganizerModel } from './organizer';
 import { transcript, type TranscriptItem } from './transcript';
 
@@ -80,6 +84,8 @@ export interface ConversationOptions {
   /** What the Being is called, for the meta line above its messages. */
   beingName: () => string;
   composer?: Pick<ComposerOptions, 'read' | 'randomUUID'>;
+  /** Overridden in tests; production takes the clock and `crypto.randomUUID`. */
+  directory?: { now?: () => number; randomUUID?: () => string };
 }
 
 export class ConversationModel extends Store {
@@ -108,8 +114,18 @@ export class ConversationModel extends Store {
   readError = '';
   confirm: StopConfirm | null = null;
   readonly composer: ComposerModel;
+  /** What `/` and `@` offer, and the only place the conversation writes to Town. */
+  readonly directory: ComposerDirectory;
+  /** The suggestion list's own state, shared by the listbox and the notice. */
+  readonly menu: ComposerMenuModel;
+  /** The explanation cards opened from a quotation (chat-selection.js). */
+  readonly details: DetailsModel;
   /** Pins, projects and archives — the sidebar's own view of the same list. */
   readonly organizer = new OrganizerModel();
+  /** Set by the composer so an action taken elsewhere — a quotation added from
+   * the transcript, a card closed — can put the caret back where typing
+   * happens, as every one of 0.8.26's `input.focus()` calls did. */
+  focusComposer: () => void = () => {};
   /** Which conversation the projection in `view` belongs to. */
   private active = '';
   /** The `state.version` the projection was read at; -1 forces a re-read. */
@@ -124,6 +140,9 @@ export class ConversationModel extends Store {
     super();
     this.chat = options.chat;
     this.composer = new ComposerModel({ toast: message => options.toast(message), ...options.composer });
+    this.directory = new ComposerDirectory({ chat: options.chat, toast: options.toast, ...options.directory });
+    this.menu = new ComposerMenuModel(this.directory);
+    this.details = new DetailsModel({ chat: options.chat, toast: options.toast });
     try { this.noticeDismissed = localStorage.getItem(NOTICE_KEY) === '1'; } catch { this.noticeDismissed = false; }
   }
 
@@ -131,10 +150,12 @@ export class ConversationModel extends Store {
     if (!this.chat) return () => {};
     const stopState = this.chat.onState(state => this.accept(state));
     const stopEvent = this.chat.onEvent(event => this.receive(event));
+    const stopDetails = this.details.start();
     void this.chat.sessions().then(state => this.accept(state)).catch(error => this.options.toast(error));
     return () => {
       stopState();
       stopEvent();
+      stopDetails();
       // Nothing in flight may land on the next mount's screen.
       ++this.generation;
       this.cancelConfirm();
@@ -222,7 +243,12 @@ export class ConversationModel extends Store {
       // A read still in flight belongs to the conversation we just left.
       ++this.generation;
       this.composer.switchTo(active);
+      // A suggestion dismissed in one conversation is not dismissed in the next.
+      this.menu.reset();
     }
+    // The directory follows the Being and the conversation; it decides for
+    // itself what a new identity costs it (directory.ts `sync`).
+    this.directory.sync(state);
     const session = this.session, recovery = state.recovery;
     this.waiting = Boolean(session && (session.inFlight
       || (recovery.sessionId === active && (this.phase === 'streaming' || this.phase === 'replaying'))));
@@ -290,13 +316,28 @@ export class ConversationModel extends Store {
     void this.refresh();
   }
 
-  /** Send what is in the composer. The composer is emptied first: the message is
-   * gone from here either way, and a refusal puts it back where it was typed. */
-  async send() {
+  /**
+   * Send what is in the composer. The composer is emptied first: the message is
+   * gone from here either way, and a refusal puts it back where it was typed.
+   *
+   * `trusted` is whether a person did this — a key press or a click, not a
+   * script calling `requestSubmit()`. It only matters when the draft mentions a
+   * Being: publishing to the bonfire is a public act, and 0.8.26 refuses to make
+   * one on a synthetic event (chat-composer.js line 111). The refusal comes
+   * before anything is taken out of the composer, so the draft survives it.
+   */
+  async send(trusted = true) {
     if (this.sending || this.disabled || !this.chat) return;
     const refusal = this.composer.refusal();
     if (refusal.blocked) {
       if (refusal.message) this.options.toast(refusal.message);
+      return;
+    }
+    let plan: ComposerPlan;
+    try {
+      plan = this.directory.prepare(this.composer.text, trusted);
+    } catch (error) {
+      this.options.toast(error);
       return;
     }
     this.sending = true;
@@ -306,13 +347,17 @@ export class ConversationModel extends Store {
     this.changed();
     try {
       const result = await this.chat.send({
-        sessionId, text: draft.text,
+        // A `/` reference reaches the Being as a request in words; the bytes
+        // Town would publish stay the user's own (directory.ts `prepare`).
+        sessionId, text: plan.text,
         ...(draft.references.length ? { references: draft.references } : {}),
         ...(draft.images.length ? { images: draft.images.map(({ name, media_type, data, thumb }) => ({ name, media_type, data, thumb })) } : {}),
       });
       // The measured 202: delivered, joined the breath already running, and its
       // reply will arrive on whichever connection is open (docs §一).
       if (result?.spliced) this.options.toast('消息已送达，Being 正在处理其他会话，回复稍后到达。');
+      // Only now, and only once: the private message is known to have landed.
+      await this.directory.publish(plan, result);
     } catch (error) {
       this.composer.restore(sessionId, draft);
       if (this.active === sessionId) this.waiting = false;
@@ -320,6 +365,31 @@ export class ConversationModel extends Store {
     } finally {
       this.sending = false;
       this.changed();
+    }
+  }
+
+  /** Open the preview a finished Worker produced. A failure is said in the line
+   * above the composer, where 0.8.26 put it (chat-app.js line 386). */
+  async openWorkerResult(result: { sessionId: string; workerId: string }) {
+    if (!this.chat) return;
+    try {
+      await this.chat.openWorkerResult({ sessionId: result.sessionId, workerId: result.workerId });
+    } catch (error) {
+      this.readError = errorText(error, '结果预览未能打开');
+      this.changed();
+    }
+  }
+
+  /** Quote a selection into the next message. The reference layer's refusal
+   * (≤12 selections, ≤60000 characters) is reported rather than thrown: the
+   * user is choosing text, not calling an API. */
+  addSelection(reference: ChatReference): boolean {
+    try {
+      this.composer.addReference(reference);
+      return true;
+    } catch (error) {
+      this.options.toast(error);
+      return false;
     }
   }
 
@@ -434,6 +504,7 @@ export class ConversationModel extends Store {
     try {
       await this.chat.forgetSession(sessionId);
       this.composer.forget(sessionId);
+      this.details.forget(sessionId);
       this.organizer.forget(sessionId);
       return true;
     } catch (error) {

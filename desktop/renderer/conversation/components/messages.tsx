@@ -5,7 +5,7 @@
 // ("you · 13:44:23" / "<being> · 13:44:23"), the content below it, consecutive
 // messages grouped, a "— 13:40:01 —" divider after a long silence, thinking
 // dots before the first token.
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { Markdown } from "../../shared/components/markdown";
 import type { PlaceTarget } from "../../shared/lib/navigation";
 import { decode, type ChatReference } from "../../../shared/chat-references";
@@ -13,6 +13,7 @@ import type { ChatRowImage } from "../../../shared/desktop-types";
 import { useModel } from "../../shared/hooks/use-model";
 import type { Activity, ConversationModel } from "../models/conversation";
 import { clock, type TranscriptItem } from "../models/transcript";
+import { WorkerResultCard } from "./worker-result";
 
 /** One image as the transcript keeps it: the preview the renderer made, or the
  * name when the preview did not fit. History never returns images (measured
@@ -99,15 +100,25 @@ export function ActivityLine({ text, think, live, activity }: {
   );
 }
 
-/** One message: meta line, the activity line while the Being works on it, content. */
-function Bubble({ item, beingName, activity, found, onPlace }: {
+/** One message: meta line, the activity line while the Being works on it, content.
+ * A Worker result takes the place of the content — it is the Being reporting a
+ * finished task, not something it said (chat-app.js line 372). */
+function Bubble({ item, beingName, activity, found, onPlace, onOpenWorker }: {
   item: TranscriptItem; beingName: string; activity: Activity | null; found: boolean;
   onPlace?: (target: PlaceTarget) => void;
+  onOpenWorker: (result: { sessionId: string; workerId: string }) => void;
 }) {
   const note = item.partial ? "回复中断，等待记录核对" : item.pending ? "等待记录确认" : "";
   const meta = [item.role === "user" ? "you" : beingName, clock(item.at), note].filter(Boolean).join(" · ");
   const decoded = item.role === "user" ? decode(item.text) : null;
   const text = decoded ? decoded.text : item.text;
+  if (item.workerResult)
+    return (
+      <article data-row-id={item.id} className="chat-message is-being">
+        <div className="chat-meta">{[beingName, clock(item.at)].filter(Boolean).join(" · ")}</div>
+        <WorkerResultCard result={item.workerResult} onOpen={onOpenWorker} />
+      </article>
+    );
   return (
     <article
       data-row-id={item.id}
@@ -132,9 +143,16 @@ function Bubble({ item, beingName, activity, found, onPlace }: {
   );
 }
 
-export function Transcript({ model, onPlace }: { model: ConversationModel; onPlace?: (target: PlaceTarget) => void }) {
+export function Transcript({ model, onPlace, streamRef }: {
+  model: ConversationModel;
+  onPlace?: (target: PlaceTarget) => void;
+  /** The page hands the same node to the selection toolbar, which positions
+   * itself inside these bounds and never over the passage it is about. */
+  streamRef?: RefObject<HTMLDivElement | null>;
+}) {
   const conversation = useModel(model);
-  const stream = useRef<HTMLDivElement>(null);
+  const own = useRef<HTMLDivElement>(null);
+  const stream = streamRef || own;
   const items = conversation.items;
   const live = items.at(-1)?.live === true;
   // Follow the conversation only while the user is still at the bottom of it.
@@ -182,6 +200,7 @@ export function Transcript({ model, onPlace }: { model: ConversationModel; onPla
             activity={conversation.activity}
             found={conversation.jumpTo === item.id}
             onPlace={onPlace}
+            onOpenWorker={result => void model.openWorkerResult(result)}
           />
         </div>
       ))}

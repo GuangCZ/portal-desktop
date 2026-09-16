@@ -181,6 +181,15 @@ export class OrganizerModel extends Store {
     };
   }
 
+  /** The conversations the sidebar lists, in the order it lists them: pinned
+   * first, then each project folder, then everything else. What the shell's
+   * ⌘1–9 counts, so the tenth row on screen is the tenth row for the keyboard
+   * too — an archived conversation is in neither. */
+  listed(sessions: readonly ChatSessionSummary[]): ChatSessionSummary[] {
+    const groups = this.groups(sessions);
+    return [...groups.pinned, ...groups.projects.flatMap(project => project.sessions), ...groups.standalone];
+  }
+
   /** The search panel's two categories. Matches title and project name, as
    * 0.8.26 does (sidebar.js line 206). */
   search(sessions: readonly ChatSessionSummary[], query: string, filter: 'active' | 'archived'): ChatSessionSummary[] {

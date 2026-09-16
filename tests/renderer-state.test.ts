@@ -375,15 +375,16 @@ describe("React desktop state lifecycle", () => {
     });
     const app = new AppModel(fixture.value),
       stop = app.start();
-    // Five now, three before 2026-09-16: `onPortal` and `onUpdate` as ever, plus
+    // Six now, three before 2026-09-16: `onPortal` and `onUpdate` as ever, plus
     // the paired Town client's `onState`, `onMessages` and `onMembersInvalidated`
-    // where the single `onTownLive` used to be. The count is incidental; that
-    // every one of them is released on unmount is the test.
-    expect(fixture.subscriptions.size).toBe(5);
+    // where the single `onTownLive` used to be, plus the conversation's
+    // explanation-card stream (I5). The count is incidental; that every one of
+    // them is released on unmount is the test.
+    expect(fixture.subscriptions.size).toBe(6);
     stop();
     expect(fixture.subscriptions.size).toBe(0);
     const stopAgain = app.start();
-    expect(fixture.subscriptions.size).toBe(5);
+    expect(fixture.subscriptions.size).toBe(6);
     fresh.resolve(state("river"));
     await settle();
     old.resolve(state("willow"));

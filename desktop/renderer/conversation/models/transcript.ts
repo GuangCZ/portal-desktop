@@ -7,8 +7,9 @@
 // Pure by design — no DOM, no React — so the ordering rules can be tested
 // against the fixtures without a renderer.
 import type {
-  ChatLiveReply, ChatRow, ChatRowImage, ChatView,
+  ChatLiveReply, ChatRow, ChatRowImage, ChatView, ChatWorkerResult,
 } from '../../../shared/desktop-types';
+import { workerResults } from './worker-results';
 
 /** Loom's grouping rules: the same speaker within a minute shares one meta line;
  * more than five minutes of silence gets a divider (chat-app.js line 22). */
@@ -41,6 +42,10 @@ export interface TranscriptItem {
   live?: boolean;
   think?: string;
   images?: ChatRowImage[];
+  /** A finished Worker's result card instead of a message. It is placed like a
+   * transient item — after the rows that existed when the Worker ended — so the
+   * verdict sits where the task was delegated (chat-app.js line 427). */
+  workerResult?: ChatWorkerResult;
   /** Filled by `group`: this bubble shares the previous one's meta line. */
   consecutive?: boolean;
   /** Filled by `group`: draw `— hh:mm:ss —` above this bubble. */
@@ -84,6 +89,12 @@ export function transcript(view: ChatView | null, live: ChatLiveReply | null): T
     text: row.content, at: row.at, seq: row.seq, images: row.images,
   }));
   const items = interleave<TranscriptItem & { seq: number }, TranscriptItem>(rows, [
+    // The Worker results lead the transient list, as they do in 0.8.26: they are
+    // the Being's own rows for the purpose of grouping, and `interleave` places
+    // each one by its `at` among the rows that had landed by then.
+    ...workerResults(view?.workerResults).map((item): TranscriptItem => ({
+      id: `worker-${item.workerId}`, role: 'being', text: '', at: item.at, workerResult: item,
+    })),
     ...(view?.sent || []).map((item, index): TranscriptItem => ({
       id: `sent-${index}`, role: 'user', text: item.text, at: item.at, after: item.after,
       pending: true, images: item.images,

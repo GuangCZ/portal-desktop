@@ -10,7 +10,7 @@ import {
 import { OrganizerModel, age, basename } from "../desktop/renderer/conversation/models/organizer";
 import { clock, interleave, transcript } from "../desktop/renderer/conversation/models/transcript";
 import type {
-  ChatAPI, ChatEventPayload, ChatSessionSummary, ChatState, ChatStopResult, ChatView,
+  ChatAPI, ChatDetailEvent, ChatEventPayload, ChatSessionSummary, ChatState, ChatStopResult, ChatView,
 } from "../desktop/shared/desktop-types";
 
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
@@ -34,6 +34,7 @@ function fixture() {
   const calls: { method: string; input: unknown }[] = [];
   const stateListeners: ((state: ChatState) => void)[] = [];
   const eventListeners: ((event: ChatEventPayload) => void)[] = [];
+  const detailListeners: ((event: ChatDetailEvent) => void)[] = [];
   let released = 0;
   let initial = chatState();
   let nextView: ChatView | ((id: string) => Promise<ChatView>) = projection();
@@ -69,7 +70,7 @@ function fixture() {
     detailSend: async (input) => { calls.push({ method: "detailSend", input }); return { ok: true, streamed: true, spliced: false, recovering: "" }; },
     detailStop: async (id) => { calls.push({ method: "detailStop", input: id }); return { stopped: true, reason: "", scene: "", ownerTitle: "" }; },
     detailClose: async (id) => { calls.push({ method: "detailClose", input: id }); return true; },
-    onDetailEvent: () => () => { released++; },
+    onDetailEvent: callback => { detailListeners.push(callback); return () => { released++; detailListeners.splice(detailListeners.indexOf(callback), 1); }; },
     onEvent: callback => { eventListeners.push(callback); return () => { released++; eventListeners.splice(eventListeners.indexOf(callback), 1); }; },
     onState: callback => { stateListeners.push(callback); return () => { released++; stateListeners.splice(stateListeners.indexOf(callback), 1); }; },
   };
@@ -87,7 +88,8 @@ function fixture() {
     set view(value: ChatView | ((id: string) => Promise<ChatView>)) { nextView = value; },
     set stop(value: ChatStopResult) { stopResult = value; },
     set send(value: typeof sendResult) { sendResult = value; },
-    get listeners() { return stateListeners.length + eventListeners.length; },
+    emitDetail: (event: ChatDetailEvent) => { detailListeners.forEach(listener => listener(event)); },
+    get listeners() { return stateListeners.length + eventListeners.length + detailListeners.length; },
     get released() { return released; },
   };
 }
@@ -97,15 +99,19 @@ beforeEach(() => {
 });
 
 describe("the conversation layer", () => {
-  it("subscribes to both pushes, reads the list once, and lets go of everything when the page unmounts", async () => {
+  it("subscribes to all three pushes, reads the list once, and lets go of everything when the page unmounts", async () => {
     const test = fixture();
     const stop = test.model.start();
-    expect(test.listeners).toBe(2);
+    // Three since I5 (2026-09-16): the conversation list and the event stream as
+    // ever, plus the explanation cards' own stream, which the model opens on
+    // behalf of `DetailsModel`. The count is incidental; that every one of them
+    // is released on unmount is the test.
+    expect(test.listeners).toBe(3);
     await settle();
     expect(test.model.sessions.map(item => item.id)).toEqual(["s1", "s2"]);
     expect(test.model.activeId).toBe("s1");
     stop();
-    expect(test.released).toBe(2);
+    expect(test.released).toBe(3);
     expect(test.listeners).toBe(0);
   });
 
