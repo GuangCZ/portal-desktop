@@ -337,3 +337,13 @@ P1 的 chat 子系统原样搬进 `subsystems/chat.ts`，成为这套注册方�
 - **`connectionCleared()` 依然没有调用方。** 接口和扇出都在，`main.ts` 从来没有接过它——这是 P1 就有的缺口，I0 没有顺手改。
 - **`npm run start` 的人工冒烟没做**（本机缺 Rust 工具链，`resources/heart-portal` 不存在；打包验证用的是临时 stub）。
 - **Linux 的 node-pty 没有 prebuild**，`MakerZIP` 的 linux 目标需要构建机上有 python3 + make + g++，本次未验证。
+
+---
+
+## 集成阶段 I1 起：各单元一行（2026-09-16）
+
+I0 之后每个集成单元在下表**追加一行**（详情写在各自的 `docs/migration/<unit>.md`）。表头由第一个落地的单元建起。
+
+| 单元 | 接上了什么 | 用户可见的变化 |
+| --- | --- | --- |
+| I1 · Town | Town 直连读写、累积时间线、成员目录与六位码配对（`subsystems/town.ts` + 24 条 `beings:town-*` 通道 + 三条推送）；删除旧 Town 层与 u3 的 Portal 控制器 | **需要重新配对**：凭据改由 `<userData>/town-client` 保管（与 BeingDesktop 0.8.x 同格式），旧的 `town-credential.json` 不再读取，也没有迁移器；篝火/围炉/私信改为本机直连，不再经 Being 转发，未配对时发送会提示「请用 Being 提供的六位配对码连接 Town。」 |

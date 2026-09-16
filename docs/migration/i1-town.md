@@ -52,6 +52,20 @@ u1/u2/u3 的构造签名、portal-desktop 自带 town 模块的重叠判定、�
 ## 2. 进度
 
 - [x] 读计划 §3/§3.1/§2.1/§2.4/§4/附录/§1
+- [x] 读 i0-seams 与六个接缝文件、BD `main.cjs:371-470`、BD `interfaces.md` Town 节
+- [x] 共享 DTO 契约 + 错误包络 + `town/speak.ts`（定案 5.7）
+- [x] `main/town/catalog.ts`（匿名公开读，D1）+ `kits/install.ts` 改 import
+- [x] `main/town/ipc-desktop.ts` 24 条通道 + `main/subsystems/town.ts` 装配 + `preload/channels/town.ts`
+- [x] 删除旧 Town 层（`town/{client,live,pairing,ipc}.ts` 与 `main.ts` 的构造/注册行）
+- [x] 渲染层原地重写（D3）：`models/{town,feed,mentions}.ts`、`components/{feed,auth,composer,mention-text}.tsx`、`page.tsx`
+- [x] 删除 u3 的 `town-controller.ts` / `portal-config.ts` / `portal-release.ts` 与其独占测试（§5.2）
+- [x] 测试：`town-catalog` / `town-integration-ipc` / `town-integration-lifecycle` 新建；
+      `renderer-state` / `seeds` / `town-mentions` / `renderer-slots` / `chat-ipc` 改到新实现
+- [x] 重新启用 23 条 skip（pairing 8 + town-background 15），后者换成真实 `TownRefresh`
+- [x] `SIDEBAR_SLOTS` 一项（篝火 / 围炉 / 私信入口）
+- [x] `cached-reads.ts` 的 `scrollId` 收敛到 `session/library-contract`
+- [x] 重写 `tests/town-ui.mjs` 与 `tests/town-sdk.mjs`（**未真跑**，见 §7）
+- [x] `MIGRATION.md` 追加一行
 
 ### 1.6 `docs/migration/i0-seams.md`（接缝权威说明）
 
@@ -164,3 +178,149 @@ Kits 子系统不属于本单元，也不在任何单元的删除范围里。
 
 `townSpeak` 未配对直接抛 `AUTH_REQUIRED`（文案「请用 Being 提供的六位配对码连接 Town。」），不做 Being 中继回退；
 `createClient` 钩子保持可选、缺省 `undefined`（u3 的 `ChannelBeing` 用，本单元不传）。
+
+### D6 · `mention_warnings` 的候选要显示，不是只报个数
+
+第一版 `send()` 成功但有 `mention_warnings` 时只给一句固定文案。核对 BD `renderer/town-mentions.js`
+`warnings()` / `renderReceipt()` 后改回 BD 的行为：**消息已被 Town 接受**，未解析的 @ 连同 Town 给出的候选
+（`display_name · town_id`）一起展示，点候选把完整 Town ID 写进**下一条草稿**（私信则写进收件人），
+绝不重发已发布的那条。新增 `renderer/town/models/mentions.ts` 的 `mentionWarnings()`（兼容 BD 见过的
+string / `mention|name|display_name|query|token|input` / `message|reason|warning` 几种形状）。
+
+### D7 · 两个渲染层缺陷，是重写测试时暴露的
+
+1. `openFeed` 里同一个 feed 的第二次打开会 join 正在飞的读，但**结果被丢掉**——因为应用结果时比对的是
+   第一个打开者的 generation，而它已经不是当前的了；同时 `reading` 卡在 true。
+   改成：**读共享，结果不共享**——每个调用者各自 fence 后应用同一份结果。
+2. `auth()` 直接 `this.townApp = state` 赋值，绕过了其它所有状态转换都要走的身份重置。改成 `receiveState(state)`。
+
+### D8 · 被删测试的去向（逐个核对，不是整文件丢掉）
+
+| 删除的测试文件 | 用例 | 去向 |
+| --- | --- | --- |
+| `tests/town.test.ts` | 12 | 「Town SDK 2769e2f protocol」7 条已由 `tests/town-session-client.test.ts` / `town-session-name-rules.test.ts` 逐条覆盖（mention_warnings、候选、reply_to、配对存储、三通道 body、Unicode 上限、自寄私信）；凭据落盘那条由 `tests/town-timeline-client-store.test.ts` 覆盖；其余 4 条（公开路由约束 / 不带凭据 / 四类错误 / 4MB 截断）搬进新建的 `tests/town-catalog.test.ts` |
+| `tests/town-ipc.test.ts` | 1 | `tests/town-integration-ipc.test.ts`（通道集合、发送者校验、逐字段校验、包络码、epoch） |
+| `tests/town-live.test.ts` | 3 | `beings:town-live` 已删；对应语义由 `tests/town-session-client.test.ts` 的 SSE 六条 + `tests/town-integration-lifecycle.test.ts` 承接 |
+| `tests/town-pairing.test.ts` | 10 | `tests/town-channel-pairing.test.ts`（本单元重新启用的 8 条 + 原有 10 条） |
+| `tests/town-identity.test.ts` | 9 | `tests/town-session-identity-migration.test.ts` / `town-session-store-binding.test.ts` / `town-mentions.test.ts`（已改写到成员目录） |
+| `tests/town-channel-town-controller.test.ts` | 32 | 随 §5.2 删除的模块一起删除，grep 核实只 import `town-controller.ts` |
+| `tests/town-channel-p1-identity.test.ts` | 2 | 合并为 `tests/town-integration-ipc.test.ts` 的「P1 identity …」一条，改到 `beings:town-app` 上断言同一条身份三元组规则 |
+
+---
+
+## 4. IPC 通道清单
+
+`registerTownDesktopIpc`（`desktop/main/town/ipc-desktop.ts`）注册 24 条，注册顺序即下表顺序。
+除最后两条外全部**包络**：失败时 resolve `{__townError:true, code, message}`，`code` 取自
+`desktop/shared/town-desktop-errors.ts` 的目录；`NOT_SENT` 另带 `candidates`。
+
+| 通道 | 载荷 | 说明 |
+| --- | --- | --- |
+| `beings:town-app` | — | `townApp` 快照 |
+| `beings:town-app-refresh` | — | 强制重读配对身份后返回快照 |
+| `beings:town-timeline` | `{kind, firesideId?}` | 本机缓存快照，先于任何网络读 |
+| `beings:town-timeline-refresh` | `{kind, firesideId?}` | 一次显式刷新（limit=50） |
+| `beings:town-timeline-older` | `{kind, firesideId?}` | 一次有界向前翻页（≤6 页） |
+| `beings:town-read` | `{kind, firesideId?, selectionRevision?, includeRooms?}` | 一次 SDK 读；围炉另带目录与成员 |
+| `beings:town-bonfire` | `{limit?, since?}` | 篝火分页 |
+| `beings:town-fireside-messages` | `{firesideId, limit?, since?}` | 围炉分页 |
+| `beings:town-firesides` | — | 围炉目录（实读） |
+| `beings:town-fireside-members` | `firesideId` | 围炉成员（缓存优先） |
+| `beings:town-inbox` | — | 私信（两个方向一次读回） |
+| `beings:town-beings` | `{}` | 居民目录 |
+| `beings:town-scrolls` | `{offset?, limit?, visibility?}` | 卷轴列表 |
+| `beings:town-scroll` | `{id, offset?, limit?}` | 卷轴正文 |
+| `beings:town-cached` | `{method, value?}` | 八个方法的纯缓存读 |
+| `beings:town-members` | `{force?}` | 成员目录 + 缓存元数据 |
+| `beings:town-profile-changed` | — | 失效目录并重读身份（不改名、不发消息） |
+| `beings:town-speak` | `{kind:'bonfire'\|'fireside'\|'dm', …, connectionRevision}` | 三种发送合一；epoch 不符拒发 |
+| `beings:town-client-pair` | `{code}` | 六位码兑换 |
+| `beings:town-client-auto-pair` | — | 一键配对（Being 生成码） |
+| `beings:town-client-retry-storage` | — | 只重试落盘，绝不再要一个码 |
+| `beings:town-client-forget` | — | 删除本机配对 |
+| `beings:town` | `TownQuery` | **公开目录**，匿名，非包络 |
+| `beings:town-open` | `route` | 公开页外链，白名单，非包络 |
+
+推送（`ctx.push` → 主窗口）：
+
+| 通道 | 载荷 |
+| --- | --- |
+| `beings:town-state` | `TownDesktopAppState`（**方案两条表之外新增的一条**，理由见 `shared/town-desktop-types.ts` 注释：本外壳没有 BD 的 `being:state` 总推送） |
+| `beings:town-messages` | `TownDesktopEnvelope` 或无载荷的 `{kind:'dm'}` 提示 |
+| `beings:town-members-invalidated` | `TownDesktopMemberCacheState` |
+
+---
+
+## 5. 共享文件触碰行
+
+**只 append 一行 import + 一行条目**（符合纪律）：
+
+| 文件 | 增加的行 |
+| --- | --- |
+| `desktop/main/extensions.ts` | `import { installTownSubsystem } from './subsystems/town';` / `installTownSubsystem,` |
+| `desktop/preload/channels/index.ts` | `import { townDesktop } from './town';` / `townDesktop,` |
+| `desktop/shared/desktop-types.ts` | `export * from './town-desktop-types';` |
+| `desktop/shared/types.ts` | `import type { ChatAPI, TownDesktopAPI } from './desktop-types';` / `townDesktop: TownDesktopAPI;`（`chat:` 之后） |
+| `desktop/renderer/app/slots.tsx` | `import { TownFeedLinks } from '../town/components/sidebar-feeds';` / `{ key: 'town-feeds', order: 100, placement: 'head', Section: TownFeedLinks },` |
+
+**超出 append 的（合回时需人工过目）**：
+
+| 文件 | 改动 | 理由 |
+| --- | --- | --- |
+| `desktop/main/main.ts` | **只删不加**：3 条 import、`let townLive` / `let cancelTownPairing`、`townCredentials`/`townLive`/`town` 构造块、Town 诊断 `checks.push(...)` 一行、`registerTownIpc({...})` 调用、`cancelTownPairing?.()`×2、`townLive?.dispose()`×2；另改了一处过期注释里的路径（`town/pairing.ts` → `town/channel/pairing-probe.ts`） | 任务明文允许的唯一例外：删除旧 Town 层的构造与注册行 |
+| `desktop/preload/preload.ts` | 删除 `townLive`/`reconnectTown`/`sendTown`/`onTownLive`/`townAuth`/`pairTown`/`autoPairTown`/`cancelTownPair`/`saveTownToken`，保留 `town`/`openTownLink`，去掉 `TownLiveState` import | 通道删了，桥上的成员必须一起删 |
+| `desktop/shared/types.ts` | 除上面那一行 append 外，删除同名 `DesktopAPI` 成员、删除 `TownLiveState`/`TownPost`/`TownChannel`、把 `TownKind` 收窄到公开 kind（附注释） | 同上 |
+| `desktop/main/kits/install.ts` | import 改成 `../town/catalog` 的 `TOWN_ORIGIN`/`TownCatalog`，一处 `new TownClient(...)` 改 `new TownCatalog(...)` | D1 |
+| `desktop/main/town/channel/types.ts` | 删除 `TownControllerContext`/`PortalInstaller`/`PortalInstallProgress`/`PortalProcess`（grep 核实无其它引用），留一段说明 | §5.2 |
+| `desktop/main/town/timeline/cached-reads.ts` | 内联 `scrollId` 改 `import { scrollId } from '../session/library-contract'` | 计划要求的副本收敛 |
+| `tests/chat-ipc.test.ts` | fixture 增加 `electron.net`（离线），通道断言与推送收集器各加一个 `beings:chat` 过滤 | 装上 Town 子系统后，别人的通道/请求会落进 chat 的断言里；chat 的每一条断言一字未动 |
+| `tests/renderer-slots.test.ts` | fixture 的 `onTownLive`/`townLive` 换成 `townDesktop` 四个成员；「ships empty」改成按 key 断言 | 第一项落地插槽的单元必然要改这两处 |
+| `tests/seeds.test.ts`、`tests/town-mentions.test.ts`、`tests/renderer-state.test.ts` | 改写到新实现 | 见 §6 |
+
+---
+
+## 6. 测试账目
+
+| 阶段 | 通过 / 跳过 |
+| --- | --- |
+| 基线 `next @ 9794cab` | 1071 / 58 |
+| 本单元结束 | 1026 / 34 |
+
+差额是 §5.1 / §5.2 明文授权删除的旧模块独占测试（见 D8 的逐条去向表），减去新增与重新启用的：
+删除 69 条（`town` 12 + `town-ipc` 1 + `town-live` 3 + `town-pairing` 10 + `town-identity` 9 +
+`town-channel-town-controller` 32 + `town-channel-p1-identity` 2，`it.each` 展开后运行时条数更多），
+新增 20 条（`town-catalog` 5 + `town-integration-ipc` 10 + `town-integration-lifecycle` 5）
++ `renderer-state` 净增 2 + `shared reading` 净增 1，
+重新启用 23 条 skip（pairing 8 + town-background 15）。
+**没有删除或弱化任何一条不属于被删模块的测试。**
+
+---
+
+## 7. Smoke 与真机验证
+
+| 项 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 绿 |
+| `npx vitest run`（含 `tests/architecture.test.ts` 六条） | 92 文件通过 / 8 跳过；1026 通过 / 34 跳过 |
+| `node tests/town-ui.mjs` | **未执行**：打印 `SKIPPED: 客户端测试包不存在` |
+| `node tests/town-sdk.mjs` | **未执行**：同上 |
+| 打包 smoke（`npm run package`） | **失败于前置条件**：`forge.config.ts` 的 prePackage 钩子要求 `resources/heart-portal`，而它由 `npm run build:portal` 用 `cargo build --release -p heart-portal` 产出；本机没有 `cargo`（`which cargo` 无结果），`resources/` 里也没有预置二进制。`npm run prepare:desktop` 本身是成功的 |
+| 手工点开篝火看「缓存先行」 | **未执行**：同上，需要可运行的客户端 |
+
+两个 E2E 脚本已按新表面重写完毕并通过语法检查，但**在本环境里一次都没有真跑过**。
+装好 Rust 工具链后应先跑 `npm run build:portal && npm run package`，再依次跑
+`npm run test:town-ui`、`npm run test:town-sdk`，两者的断言都可能需要按真实 DOM 时序微调。
+
+---
+
+## 8. 遗留
+
+1. 上面两个 E2E 脚本未经真实运行验证（无 `cargo` → 无安装包）。
+2. `beings:town-open` 由 `options.open(url)` 改为 `ctx.electron.shell.openExternal`（允许名单逐字一致）。
+3. BD `test/town-conversation-ui.cjs` 有 60+ 条 UI 断言；`tests/town-ui.mjs` 只承接了其中「需要真实主进程才有意义」的 8 条，
+   其余（围炉切换的竞态族、草稿焦点/滚动保持、SBS 状态条文案族）尚未搬运。
+4. `desktop/main/town/channel/` 里还留着 u3 的 `sanitize.ts` / `loom-connection.ts` 类副本收敛（计划 §1.1 提到的 `common/*`），
+   本单元只做了 `scrollId` 一项。
+5. 用户需要重新配对（无凭据迁移器），已写进 `MIGRATION.md`。
+6. `MIGRATION.md` 里原本没有「每个集成单元一行」的表，所以本单元建了表头（标题 + 一行说明 + 表头 + 分隔行 + 自己的一行，共 4 行内容）。
+   后续单元只需要在表里追加一行。这比约定的「只追加一行」多，记在这里以便合回时知道多出来的是什么。
