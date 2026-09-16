@@ -101,8 +101,15 @@ export interface DesktopAPI {
   exportDiagnostics(): Promise<boolean>;
   openLoom(): Promise<void>;
   onPortal(callback: (state: PortalState) => void): () => void;
+  // ── THE APPEND-ONLY MEMBERS ─────────────────────────────────────────────────
+  // One of the six shared lines the integration units share. Each subsystem adds
+  // exactly one property here, alphabetically after `chat`, whose type comes from
+  // its own file behind `./desktop-types`. The preload bridge
+  // (`preload/channels/index.ts`) supplies it; a channel file that drifts from the
+  // contract fails typecheck there.
   /** Being Desktop's native conversations (desktop-types.ts). */
   chat: ChatAPI;
+  // ────────────────────────────────────────────────────────────────────────────
 }
 declare global { interface Window { beings: DesktopAPI } }
 
