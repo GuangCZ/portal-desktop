@@ -102,3 +102,40 @@
 **「GET 是否返回已发送的私信」仍然未实测**：同文件 `:93` 明说「Being 提醒公开帮助未明确 GET 私信是否改变已读/投递状态」，
 本机没有真 Town 可连。按任务书「无法实测就以 BD 源码为准并标注未实测」处理 —— 路由不动。
 （I1 的 R4 已经把 `recipient` / `recipient_town_id` 落进 DTO，所以真要是返回了已发送的私信，收件人地址是有的。）
+- [x] 读 session.ts / renderer town 模型 / BD 对照原件 / tests/town-ui.mjs 与 town-sdk.mjs
+- [x] 第 1 条：成员目录不再拖住篝火读
+- [x] 第 2 条：`/api` 同一 in-flight 读合并；找到并消掉渲染层「身份到达就重读」那一次
+- [x] 第 4 条：`/api/messages` 路由核对（结论：与 BD 0.8.26 逐字一致，不改）
+- [x] 第 3 条：围炉竞态族 / 草稿族 / SBS 状态行族搬运
+- [ ] 打包冒烟逐条
+
+---
+
+## 3. 改动点
+
+### 3.1 `desktop/main/town/session/session.ts`（第 1、2 条）
+
+| 改动 | 说明 |
+| --- | --- |
+| `getBonfireMessages` 不再把 `getMembers()` 放进 `Promise.all` | 改成：用**已经在手**的目录（`cachedMembers()`，纯内存、无请求），把新的目录读**起飞但不等**，只 await `/api/bonfire/hear`；返回时再取一次 `cachedMembers()`，所以目录若赶在消息之前回来，老载荷的作者兜底与改动前一模一样，赶不上就不拖任何人。 |
+| 新增 `cachedMembers()` | 未过期就返回现有目录，否则空数组。没有任何请求。 |
+| `getMembers` 同一 in-flight 读合并 | 新增 `_membersRead`：并发调用者 join 同一条 `/api`；共享请求**不带任何调用方的 AbortSignal**（一个调用方放弃不能取消别人的目录），但仍由 `reset()` 取消，因为 `_request` 把 controller 注册进 `_requests`。新增 `_join(shared, signal)` 让放弃的调用方自己拿到 `ABORTED`。 |
+| `reset()` / `invalidateMembers()` 清 `_membersRead` | 失效之后到达的调用方必须重开一条，而不是 join 一条注定 `SESSION_CHANGED` 的读。 |
+
+### 3.2 `desktop/renderer/town/models/town.ts`
+
+| 改动 | 出处 |
+| --- | --- |
+| `receiveState`：身份**到达**（`this.me` 原本为空）不再触发 `load()`，改为就地 `applyMembers(this.members)` 重投影 | BD `acceptTownState`（`renderer/town-app.js:1701`）的 `Boolean(previousId && nextId && nextId !== previousId)`——空的旧身份不算变化；而且 BD 从不因为状态更新去读 feed，只有 `open()` 读。身份**真的变了**仍然重读（本外壳与 BD 的有意差异，见 §4.2）。 |
+| `applyTimeline`：新增 feed key 围栏 | BD「late previous-room events and read completion cannot overwrite the selected room」。换围炉不换 `request` 代（不是新页面），所以代号分不出两个围炉的答复。`receivePush` 一直有这条，读路径缺。 |
+| `openFeed`：结果与 `reading` 都改用 `onFeed(key, generation)` | 同上，外加「the selected room completion updates its content and unlocks read controls」——被离开的那个围炉的迟到答复不得解锁读控件。 |
+| `send()`：回执先删自己 target 的草稿，再判断 target 是否还在屏幕上 | BD「late successful receipt clears only its original room draft」/「returning to confirmed room shows a cleared draft without resending」。 |
+| 新增 `sideBySide` 与 `receiveModelSettings()`，`start()` 订阅 `beings:model-settings-state` 并读一次 | I6b openIssue 2：Town 页要显示 SBS 就订阅这条，**不得自己再开 `/api/llm/config` 读**。 |
+
+### 3.3 `desktop/renderer/town/page.tsx`
+
+新增 `refreshLabel(town)` 与 `#town-refresh-status` 一行。逐句移植 BD `renderer/town-app.js` 的
+`refreshLabel`（:163-175）与 `backgroundNotConfigured`（:161），顺序与文案照抄：
+`prefix · 最近检查 · 最近采集 · 显示上次同步内容`。**唯一一处增量**：0.8.26 只能从一次已经失败的
+`SBS_NOT_CONFIGURED` 读里知道后台采集没设置，本外壳被直接告知（`beings:model-settings-state`），
+所以同一句话在事实已知时就说；`configured: true` **不会**用来反驳「读不到」。
