@@ -558,6 +558,42 @@ Only (10) exercises a module of this unit. Its fixture worker (copied verbatim i
 asserting another session sees nothing, `preview===true`, `status==='passed'`, and the projection leaks neither `PRIVATE` nor `artifactPath`.
 The remaining ten cases belong to the chat-core / message-frame units and are carried here as `it.skip` with the reason recorded.
 
+### docs/orchestration.md (68 lines) — protocol notes relevant to the port
+
+- Presentation: after a Worker completes, Being calls `desktop_worker_status action=present` with `artifactPath`
+  (workspace HTML entry or a directory holding `index.html`) or `url`, then records the verdict with `action=review`.
+  Desktop owns static hosting and opens the preview in its embedded browser. Re-opening after a restart uses the saved artifact
+  and never re-executes the Worker. CLI browser integrations are not required.
+- Mode: defaults off, applies to every conversation on this Desktop; toggling detects agents, saves and configures enforcement at once;
+  a failed check restores the saved state; cannot change while a local worker runs; other Desktops keep their own modes.
+- An unavailable Worker bridge blocks local execution only — chat and native capabilities stay available;
+  every message reports bridge readiness, while dispatch and presentation still enforce the local bridge policy.
+- Agent adapters (verbatim): Codex `codex exec --json --sandbox workspace-write --skip-git-repo-check --color never -`
+  with `codex login status` detection; Claude Code `claude -p --output-format stream-json --verbose --permission-mode acceptEdits
+  --settings '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true}}'` with `claude auth status` (exit 0 = signed in),
+  titles run `--tools "" --max-turns 1 --no-session-persistence`; Cursor `cursor-agent --print --output-format stream-json`
+  (also detects the `agent` executable, CLI not SDK); Grok `grok --output-format streaming-json --prompt-file <file>` with the
+  temporary prompt file removed after execution.
+- Environment: proxies (upper and lower case), CLI API keys/endpoints (`ANTHROPIC_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`),
+  XDG directories and CA certificate paths are preserved; arbitrary variables, `NODE_OPTIONS` and TLS-verification bypasses are not.
+  Being credentials and another Desktop's model configuration are never copied into workers.
+- Tools exposed in this mode: exactly `desktop_worker_start`, `desktop_worker_list`, `desktop_worker_status`,
+  `desktop_worker_wait`, `desktop_worker_cancel`. A session capability binds each dispatch to its conversation and is revoked when the
+  mode or Being identity changes. `requestId` deduplicates retries. Same-workspace workers run serially.
+- History lives under `workers`, partitioned by Being identity; each record carries Desktop ID, process instance ID, platform, arch,
+  host, workspace and tool target; records owned by another Desktop are excluded from loading, callback delivery and execution;
+  a restart marks formerly active records `interrupted` and never replays them.
+- Completion: results persist **before** Heart is notified through `/api/callback`; the callback carries a stable Worker identity and an
+  opaque receipt id, never a session capability, execution instructions or the full output; transport failures retry the saved
+  notification without rerunning the CLI; inbox receipt and Being's evaluation are separate records.
+- `desktop_worker_status` has four operations — `receive` (validates the receipt against the current Being and saved conversation,
+  then supplies a current capability), `read`, `present`, `review` (capability + outcome `passed|failed|needs_verification` + summary + evidence).
+  Duplicate reviews return the saved assessment.
+- One clearly labeled automatic task-continuation message is scheduled after native receipt **only** when Being is idle and evaluation
+  is still pending; it never changes SBS or reruns the CLI; uncertain submission is retained without blind reposting.
+- Tool target is `being-desktop-tools-<desktopId>`; another Desktop cannot dispatch, read or cancel with a matching session ID alone.
+  Mode changes never read or write Being's shared model endpoint.
+
 ---
 
 ## 进度
