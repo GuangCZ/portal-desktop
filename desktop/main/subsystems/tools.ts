@@ -33,7 +33,7 @@ import { portalRequestAdapter, type NativeRequestFactory, type PortalRequestAdap
 import type {
   BrowserHostWindow, BrowserSessionFactory, BrowserViewConstructor,
 } from '../tools/browser/host';
-import type { DesktopTerminalLike, OrchestrationLike, ToolResult } from '../tools/types';
+import type { OrchestrationLike } from '../tools/types';
 import { WorkerPresentation } from '../tools/worker-presentation';
 import { parseConnection, sessionPartition } from '../common/loom-connection';
 import { desktopPortalName } from '../app/identity';
@@ -56,62 +56,21 @@ export interface ToolsSubsystem extends DesktopSubsystem {
 
 declare module './types' { interface SubsystemMap { 'tools': ToolsSubsystem } }
 
-/** The orchestration subsystem as THIS one needs it, declared structurally.
- *
- * I4 owns the real `OrchestrationSubsystem` type and it does not exist in this
- * worktree, so the registry lookup goes through one documented cast. Two members
- * are deliberately loose:
- *
- *  · `presentation` is typed as the tool side's own `WorkerPresentation`, not as
- *    orchestration's `WorkerPresenter`. The two do not line up today — measured
- *    with tsc on 2026-09-16, four mismatches, all of them about `null` vs
- *    `undefined` and about `WorkerPresentationValue` lacking `openedAt`; see
- *    docs/migration/i2-tools.md「类型对齐实测」. Runtime is unaffected:
- *    orchestration reads it as `this.presentation?.describe(x) || x`, where null
- *    and undefined take the same branch. Widening `WorkerPresenter` is the real
- *    fix and belongs to whoever merges I4.
- *  · `workers` is only inspected for the presence of a presentation, which is
- *    what 0.8.26's onChange does before asking orchestration to notify.
- */
-interface OrchestrationPeer {
-  readonly orchestration: {
-    mode: { enabled: boolean };
-    configuring?: boolean;
-    tool(name: string, args: Record<string, unknown>, context: { signal?: AbortSignal }): Promise<ToolResult>;
-    presentation?: WorkerPresentation;
-    workers?: readonly { presentation?: unknown }[];
-    notify?(): void;
-  };
-  readonly policy?: { syncBridge(): unknown };
-}
-
-/** The terminal subsystem as this one needs it. I3 owns the real type; the same
- * cast applies, and every use is optional-chained because the terminal is a
- * platform-conditional capability, not a dependency. */
-interface TerminalPeer {
-  readonly terminal: DesktopTerminalLike | null;
-  /** Bring the panel forward and select one session. Rejects when the window is
-   * gone, which is what `DesktopTerminalTools` turns into a tool error. */
-  reveal(terminalId: string): unknown;
-}
-
 export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
   const report = (scope: string, error: unknown) => { try { ctx.onError(scope, error); } catch { /* Reporting a failure must not raise one. */ } };
   const push = toolsPush(() => ({ send: ctx.push }));
 
-  // `SubsystemRegistry.get` is keyed on `SubsystemMap`, which only names the
-  // subsystems this worktree can see. I4's and I3's keys land in parallel
-  // branches, so reaching them goes through one cast to a string-keyed lookup
-  // rather than a `declare module` block this unit would be inventing on their
-  // behalf — two such blocks for one key is a merge conflict, and a wrong guess
-  // at their shape is a compile error in whichever branch lands second.
-  const peers = ctx.registry as unknown as { get(key: string): unknown };
-  const orchestrationPeer = (): OrchestrationPeer | null => {
-    try { return (peers.get('orchestration') as OrchestrationPeer | null) ?? null; }
+  // I2 reached both of these through `ctx.registry as unknown as { get(key: string) }`
+  // and a structural restatement of each peer's shape, because I3 and I4 landed in
+  // parallel branches and their `SubsystemMap` keys were not visible here. Both are
+  // merged now, so the lookups are the typed ones and the restatements are gone
+  // (IM, 2026-09-16). Every use stays optional-chained: an absent peer is normal.
+  const orchestrationPeer = () => {
+    try { return ctx.registry.get('orchestration'); }
     catch { return null; }
   };
-  const terminalPeer = (): TerminalPeer | null => {
-    try { return (peers.get('terminal') as TerminalPeer | null) ?? null; }
+  const terminalPeer = () => {
+    try { return ctx.registry.get('terminal'); }
     catch { return null; }
   };
   /** The tool browser's single instance, or null while it is not installed.
@@ -293,6 +252,8 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
       // orchestration subsystem is normal, not an error.
       const peer = orchestrationPeer();
       if (!peer || !tools) return;
+      // A direct assignment, with no cast: IM widened `WorkerPresenter` to what
+      // `WorkerPresentation` actually is (docs/migration/im-integration.md §2.6).
       peer.orchestration.presentation = new WorkerPresentation({
         browser: tools.browser,
         showBrowser,

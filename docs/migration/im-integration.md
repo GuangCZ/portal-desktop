@@ -178,3 +178,27 @@ it is not on QUIT_ALLOWED — … an unbounded retry is a live loop」），已�
 `tests/tools-integration-model.test.ts` 那条「stops re-sending…」改写成「keeps re-sending a refused rectangle,
 and says why only once」：断言 12 次布局发 12 次（不再封顶）、`fail()` 只通知一次、一次成功后重新计数——断言更强，不是更弱。
 
+### 2.6 WorkerPresenter 与 WorkerPresentation 的四处类型不符（i2 记录）——已修
+
+在 `desktop/main/orchestration/types.ts` 上放宽（**没有动 `main/tools/`**）：
+
+| 位置 | 原来 | 现在 |
+| --- | --- | --- |
+| `WorkerPresentationValue` | `artifactPath?: string`、`requestedUrl?: string`、`tabId?: string`，无 `openedAt` | `artifactPath?: string \| null`、`requestedUrl?: string \| null`、`tabId?: string \| null`、新增 `openedAt?: string` |
+| `WorkerPresenter.open` 的 worker 参数 | `WorkerRecord`（说「展示器需要整条记录」，而且真类赋不进来） | 新的 `PresentationTarget = {id, cwd, presentation?}`——`WorkerPresentation.open` 实际只读这三项 |
+| `WorkerPresenter.open` 的返回 | `Promise<WorkerPresentationValue>` | `Promise<WorkerPresentationValue \| null>`（返回的是 `describe()` 的结果） |
+| `WorkerPresenter.describe` | `(v \| undefined) => v \| undefined` | `(v \| null \| undefined) => v \| null \| undefined` |
+| `PresentResult.presentation` | `WorkerPresentationValue` | `WorkerPresentationValue \| null`（跟随 `open` 的返回，不越过它断言） |
+
+`null` 与 `undefined` 在运行期同路：orchestration 两处都写 `this.presentation?.describe(x) || x`。
+
+`subsystems/tools.ts`：删掉 `OrchestrationPeer` 与 `TerminalPeer` 两个本地结构化 peer 类型和
+`ctx.registry as unknown as { get(key: string): unknown }` 这个转型——I3/I4 已经合进 next，
+`SubsystemMap` 里有 `'orchestration'` 与 `'terminal'`，改成 `ctx.registry.get('orchestration')` / `get('terminal')` 的**类型化**查表；
+`linked()` 里 `peer.orchestration.presentation = new WorkerPresentation({...})` 现在是**直接赋值，没有任何 cast**。
+顺带删掉因此不再使用的 `DesktopTerminalLike` / `ToolResult` 两个 import。
+
+`tests/tools-worker-presentation.test.ts` 新增一条「is what orchestration declares a WorkerPresenter to be」：
+`const presenter: WorkerPresenter = f.presentation;` 这一行**赋值本身就是断言**（类型回退即 typecheck 红），
+再用一个真的 `WorkerRecord` 走一遍 `open`/`describe`，断言 `openedAt`、`artifactPath`、`requestedUrl:null` 与 `describe(undefined) === null`。
+

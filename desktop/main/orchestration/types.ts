@@ -139,12 +139,22 @@ export interface ExecutionContextInput {
   place?: string;
 }
 
+/** What a Worker records about the tab its result is showing in.
+ *
+ * `null` is a value here, not an absence: `WorkerPresentation.open` writes
+ * `artifactPath` and `requestedUrl` as the two inputs it was NOT given, and a tab
+ * that could not be identified leaves `tabId` null. The four nullable fields and
+ * `openedAt` were missing from this declaration, which is why the tool bridge had
+ * to keep a structural copy of this contract to assign the presenter at all
+ * (docs/migration/i2-tools.md「类型对齐实测」4). IM, 2026-09-16. */
 export interface WorkerPresentationValue {
   state?: string;
-  artifactPath?: string;
+  artifactPath?: string | null;
   url?: string;
-  requestedUrl?: string;
-  tabId?: string;
+  requestedUrl?: string | null;
+  tabId?: string | null;
+  /** ISO timestamp of the open that produced this value. */
+  openedAt?: string;
   reported?: boolean;
   [key: string]: unknown;
 }
@@ -219,13 +229,32 @@ export interface PresentationOpenContext {
   reveal?: boolean;
 }
 
+/** The three fields `WorkerPresentation.open` actually reads off a Worker: its id
+ * (to key the pending map and the static server), its working directory (the root
+ * an artifact path must stay inside) and the previous presentation (to reuse the
+ * tab it already opened). Declaring the whole `WorkerRecord` here said the
+ * presenter needed all of it, and made the real class unassignable. */
+export interface PresentationTarget {
+  id: string;
+  cwd: string;
+  presentation?: WorkerPresentationValue | null;
+}
+
+/** The browser unit's `WorkerPresentation`, as orchestration uses it.
+ *
+ * NULL AND UNDEFINED ARE BOTH ALLOWED ON THE WAY BACK, deliberately: `describe`
+ * answers null for a value it was given nothing for, and `open` returns whatever
+ * `describe` returned. Orchestration reads both as `this.presentation?.describe(x)
+ * || x`, where the two take the same branch, so widening the declaration changed
+ * no behaviour — it only stopped the tool bridge having to restate this contract
+ * structurally to get past the compiler. */
 export interface WorkerPresenter {
   open(
-    worker: WorkerRecord,
-    args: { artifactPath?: string | null; url?: string | null },
+    worker: PresentationTarget,
+    args: { artifactPath?: unknown; url?: unknown },
     context: PresentationOpenContext,
-  ): Promise<WorkerPresentationValue>;
-  describe(value: WorkerPresentationValue | undefined): WorkerPresentationValue | undefined;
+  ): Promise<WorkerPresentationValue | null>;
+  describe(value: WorkerPresentationValue | null | undefined): WorkerPresentationValue | null | undefined;
   dispose(): Promise<void>;
 }
 
@@ -269,7 +298,10 @@ export interface ToolResponse {
 
 export interface PresentResult {
   workerId: string;
-  presentation: WorkerPresentationValue;
+  /** Whatever `WorkerPresenter.open` answered. In practice it is always a value —
+   * `open` describes a tab it has just opened — but the declaration follows the
+   * presenter's own return type rather than asserting past it. */
+  presentation: WorkerPresentationValue | null;
   instruction: string;
 }
 
