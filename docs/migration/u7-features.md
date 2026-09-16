@@ -654,21 +654,54 @@ const taskRunner=new FeatureTaskRunner({getLedger:()=>featureHistory.ledger});
 
 ## 进度
 
-| 模块 | 状态 |
+| 模块 / 文件 | 状态 |
 | --- | --- |
 | docs 摘要（architecture §4/§6/§8） | 已读 |
 | docs/interfaces.md §3/§5/§7 | 已读 |
-| src/feature-tasks.cjs | 已读 |
-| src/feature-task-runner.cjs | 已读 |
-| src/feature-task-history.cjs | 已读 |
-| src/feature-task-discussion.cjs | 已读 |
-| test/feature-tasks.test.cjs | 已读（15 个用例） |
-| test/feature-task-runner.test.cjs | 已读（21 个用例） |
-| test/feature-task-history.test.cjs | 已读（10 个用例） |
-| test/feature-task-discussion.test.cjs | 已读（4 个用例） |
-| test/town-error-ipc.test.cjs（feature-tasks 相关用例） | 已读（只有 1 个用例相关，取其账本一半） |
-| src/loom-town-sync.cjs `normalizeTownSyncRecords`（外部依赖） | 已读 |
-| src/main.cjs boot() 注入面 | 已读 |
+| src/feature-tasks.cjs | 已读 → `desktop/main/features/feature-tasks.ts` 已移植，测试通过 |
+| src/feature-task-runner.cjs | 已读 → `desktop/main/features/feature-task-runner.ts` 已移植，测试通过 |
+| src/feature-task-history.cjs | 已读 → `desktop/main/features/feature-task-history.ts` 已移植，测试通过 |
+| src/feature-task-discussion.cjs | 已读 → `desktop/main/features/feature-task-discussion.ts` 已移植，测试通过 |
+| src/loom-town-sync.cjs `normalizeTownSyncRecords`（外部依赖） | 已读，改为注入；测试内附忠实副本 |
+| src/main.cjs boot() 注入面 | 已读，构造参数与调用面对齐 |
+| test/feature-tasks.test.cjs（15 例） | `tests/features-feature-tasks.test.ts` 16 例通过（含 town-error-ipc 账本半） |
+| test/feature-task-runner.test.cjs（21 例） | `tests/features-feature-task-runner.test.ts` 21 例通过 |
+| test/feature-task-history.test.cjs（10 例） | `tests/features-feature-task-history.test.ts` 11 例通过（含 0.8.x 旧格式兼容用例） |
+| test/feature-task-discussion.test.cjs（4 例） | `tests/features-feature-task-discussion.test.ts` 4 例通过 |
+| test/town-error-ipc.test.cjs（1 例相关） | 账本半已移；preload/IPC 半留给集成阶段 |
 
-注：worktree 里已存在上一轮被中断的未提交草稿 `desktop/main/features/{types,feature-tasks,feature-task-runner,feature-task-history}.ts`
-（无任何迁移记录），本轮按源码逐行复核后再定稿。
+门槛（2026-09-16）：`npm run typecheck` 通过；`npx vitest run` →
+`Test Files 48 passed | 7 skipped (55)`，`Tests 361 passed | 16 skipped (377)`（基线 309 通过 16 跳过，本单元净增 52 例）。
+
+## 注入点（构造参数 → BeingDesktop 对应物）
+
+| 注入项 | 所在类/函数 | 对应 BeingDesktop 来源 |
+| --- | --- | --- |
+| `now` | `FeatureTasks` | `Date.now`（默认值不变） |
+| `createId` | `FeatureTasks` | `node:crypto` 的 `randomUUID`（默认值不变） |
+| `onChange` | `FeatureTasks` / `FeatureTaskHistory` | `main.cjs` 的 `publishFeatureTasks()` → `being:feature-tasks` |
+| `identityKey` / `initialSnapshot` / `initialRecords` / `initialIdentityKey` | `FeatureTasks` | `sessionPartition(connection)`、磁盘载荷（旧格式入口不变） |
+| `directory` | `FeatureTaskHistory` | `path.join(app.getPath('userData'),'feature-tasks')` |
+| `safeStorage` | `FeatureTaskHistory` | electron `safeStorage` |
+| `normalizeTownSyncRecords` | `FeatureTaskHistory` | **新增注入**：`src/loom-town-sync.cjs` 的同名导出（原为直接 require） |
+| `getLedger` | `FeatureTaskRunner` / `discussFeatureTask` | `() => featureHistory.ledger` |
+| `getContext` | `discussFeatureTask` | `() => ({connection, generation, revision, view, configured, status, exiting})` |
+| `prepareDraft` | `discussFeatureTask` | **改为必填**：`src/town.cjs` 的 `prepareLoomDraft`（原为默认值） |
+
+## 移植中的有意偏差（逐条说明）
+
+1. `FeatureTaskHistory` 增加必填构造参数 `normalizeTownSyncRecords`，并像校验 `onChange` 一样校验它是函数
+   （错误文案沿用 `'Invalid task history configuration'`）。原因：`src/loom-town-sync.cjs` 属于 Town/Loom 单元，
+   本 worktree 不存在。身份校验仍排在最前，`/identity/` 用例不受影响。
+2. `discussFeatureTask` 的 `prepareDraft` 由「默认 `prepareLoomDraft`」改为必填注入，参数名不变。
+3. `_encryptionAvailable()` 改名为 `_encryption()` 并返回收窄后的 safeStorage 句柄（或 `null`）。
+   探测的成员、顺序、`isEncryptionAvailable()` 的调用次数与吞异常行为完全不变，只是让 strict TS 能直接使用句柄。
+4. `finish()` 里原本写 `result.scrolls.length` / `result.scroll.title` / `result.kits.length` / `result.name` /
+   `result.results` 的四处，改为先用同一个 `own()` 取值再用局部变量。语义等价：守卫条件本身就是 `own()` 的结果，
+   原型链上的同名属性在两种写法下都进不了分支。
+5. `installEligibleGroveKits` 的统计从 `item.status` 改为 `own(item,'status')`，避免在 `unknown` 上取属性；
+   对普通对象结果一致。
+6. 测试目录从仓库内 `.local/` 改为 `os.tmpdir()`（不能往 portal-desktop 仓库写文件），前缀保持
+   `feature-task-history-test-`，清理逻辑改为 `afterEach`。
+7. 新增两条用例：`tests/features-feature-tasks.test.ts` 末尾的 Town 传输错误码账本半（来自 town-error-ipc），
+   以及 `tests/features-feature-task-history.test.ts` 末尾的 0.8.x 旧格式读写兼容用例。原有用例一条未减。
