@@ -21,6 +21,7 @@ import { createTrustedHandle } from "../desktop/main/app/ipc";
 import { installSubsystems } from "../desktop/main/extensions";
 import { installChatSubsystem } from "../desktop/main/subsystems/chat";
 import { Orchestration } from "../desktop/main/orchestration/orchestration";
+import { OrchestrationPolicy } from "../desktop/main/orchestration/orchestration-policy";
 import type {
   AgentExitResult, PresentationOpenContext, WorkerPresentationValue, WorkerRecord,
 } from "../desktop/main/orchestration/types";
@@ -110,11 +111,21 @@ async function fixture() {
   });
   const presenter = new PresenterDouble();
   manager.presentation = presenter;
-  // A stand-in installer, not a stand-in manager: the instance it publishes is the
-  // real `Orchestration` above. The cast covers only the members of
-  // `OrchestrationSubsystem` the conversation layer never touches (the feature
-  // ledger's runner and histories, which belong to that unit's own tests).
-  const installOrchestration = (() => ({ key: "orchestration", orchestration: manager, policy: { inspectForMessage: async () => ({ status: "disabled", scope: "desktop" }) } })) as unknown as SubsystemInstaller;
+  // A stand-in installer, not stand-in parts: both members the conversation layer
+  // reads are the production classes — the `Orchestration` above and a real
+  // `OrchestrationPolicy` wired the way subsystems/orchestration.ts wires it
+  // (line 144). `policy.inspectForMessage()` runs on every send, so an object
+  // literal here would be a shape the client never has. The cast covers only the
+  // members this layer never touches: the feature ledger's runner and histories,
+  // which belong to that unit's own tests.
+  const policy = new OrchestrationPolicy({
+    getIdentity: () => extensions.chat?.identityKey ?? "",
+    getDesktopId: () => DESKTOP,
+    getBridge: () => null,
+    getMode: () => manager.mode,
+    onChange: state => { manager.enforcement = state; manager.notify(); },
+  });
+  const installOrchestration = (() => ({ key: "orchestration", orchestration: manager, policy })) as unknown as SubsystemInstaller;
 
   const extensions = installSubsystems({
     handle, exclusive: operation => operation(),
