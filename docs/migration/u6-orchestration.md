@@ -256,6 +256,124 @@ initial `state = {status:'unchecked', scope:'desktop', detail:'本机工具绑�
   On failure: publish `'blocked'` with the thrown message when it carries the code, else `'本机工具绑定检查失败，任务未发送。'`,
   then throw `error(this.state.detail)`.
 
+### Dependency snippets (modules outside this unit, needed verbatim)
+
+- `src/services.cjs#sanitizeText(value, secrets=[])` — strips ANSI CSI, replaces each secret (len>=4) with `[redacted]`,
+  rewrites every `http(s)`/`ws(s)` URL through `new URL` clearing username/password/search/hash (unparsable -> `[redacted URL]`),
+  redacts `Cookie|Set-Cookie|Authorization|Proxy-Authorization` header lines -> `[redacted header]`, `Bearer <x>` -> `Bearer [redacted]`,
+  `key: value` pairs whose key matches token/secret/password/credential/api_key/key/authorization/cookie/set-cookie -> `$1[redacted]`,
+  `sk-…`, JWT `eyJ….….…`, hex runs >=32, base64-ish runs >=48 -> `[redacted]`, strips control characters, then `slice(0,2000)`.
+  services.cjs is not in this unit; ported verbatim as `desktop/main/orchestration/sanitize.ts` (replace at integration if another unit ports services.cjs).
+- `src/platform.cjs#desktopEnvironment(source=process.env, platform=process.platform)` — copies env; on darwin rebuilds PATH from the
+  absolute existing entries plus `/opt/homebrew/bin,/usr/local/bin,/usr/bin,/bin,/usr/sbin,/sbin` plus `$HOME/.local/bin`, `$HOME/.cargo/bin`, de-duplicated.
+- `src/desktop-console.cjs#consoleEnvironment(source)` — allow-list copy using `ENVIRONMENT_KEYS` =
+  `tmpdir, lang, lc_all, lc_ctype, user, logname, shell, systemroot, windir, systemdrive, comspec, pathext, path, home, userprofile,
+  homedrive, homepath, appdata, localappdata, temp, tmp, username, userdomain, computername, os, number_of_processors,
+  processor_architecture, processor_identifier, processor_level, processor_revision, programfiles, programfiles(x86), programw6432,
+  commonprogramfiles, commonprogramfiles(x86), commonprogramw6432, allusersprofile, public, psmodulepath`
+  (string values without NUL only). `WINDOWS_RUNNER` is the large PowerShell job-object script owned by DesktopTerminal (another unit) — injected here.
+- `src/desktop-identity.cjs` — `validDesktopId(v)` = string matching UUIDv4 `/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i`;
+  `desktopPortalName(id)` throws `'Desktop 身份无效。'` for an invalid id, else `'being-desktop-tools-' + id.toLowerCase()`. Injected into OrchestrationPolicy.
+- `src/security.cjs#parseConnection(url)` / `#sessionPartition(connection)` — injected into the callback/continuation senders.
+
+### src/worker-callbacks.cjs (218 lines)
+
+Exports `{WorkerCallbacks, createCallbackSender, createContinuationSender, callbackPayload, SOURCE, REVIEWED}`.
+`SOURCE='being-desktop-worker'`; `TERMINAL=new Set(['completed','failed'])`;
+`REVIEWED=new Set(['passed','failed','needs_verification','cancelled'])`.
+
+`callbackPayload(worker)` ->
+```
+{source:'being-desktop-worker', task_id:worker.id, summary:`Desktop Worker ${worker.status}: ${worker.title}`,
+ result:{protocol:'being-desktop-worker-result/1',
+   ...(worker.execution?.desktopId ? {desktop_id:worker.execution.desktopId, target_portal:worker.execution.place} : {}),
+   callback_id:worker.completion.id, worker_id:worker.id, desktop_session_id:worker.sessionId,
+   start_request_id:worker.requestId, status:worker.status, finished_at:worker.endedAt, title:worker.title}}
+```
+(key order matters for the golden fixture in the test).
+
+`createCallbackSender({getConnection, fetchImpl=globalThis.fetch})` -> `async (worker,{owner,signal})`:
+throws `'Being 未连接。'` without a connection; `parseConnection(raw.url)`; `sessionPartition(connection)!==owner` -> `'Being 身份已变化。'`;
+url = `connection.apiBase + '/api/callback'` with `?token=<connection.token>`; missing token -> `'缺少 Being callback 凭据。'`
+(checked **after** the URL is constructed but before the token is set).
+POST with headers `{Accept:'application/json','Content-Type':'application/json'}`, body `JSON.stringify(callbackPayload(worker))`,
+`signal, credentials:'omit', redirect:'error', referrerPolicy:'no-referrer'`.
+Reads the body only when `content-type` includes `application/json`, through a reader with a 16384-byte cap
+(`'Callback response too large'`), always `reader.cancel()` + `releaseLock()`; otherwise cancels the body.
+`accepted = response.ok && value?.accepted===true && (typeof value.inbox_id==='string' || Number.isSafeInteger(value.inbox_id))`.
+Returns `{accepted, status, inboxId: accepted?String(value.inbox_id):null, retryable: status===429||status>=500,
+detail: accepted ? 'Heart 已接收完成通知，等待 Being 验收。' : `Callback 返回 ${status}，未确认接收。`}`.
+
+`createContinuationSender({getConnection,getTarget,fetchImpl=globalThis.fetch})` -> `async (worker,{owner,signal,beforeSend})`:
+`'Being unavailable'` / `'Being identity changed'`; `endpoint(route)` appends `?token=`.
+Shared options `{signal,redirect:'error',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer'}`.
+GET `/api/stream/active`: `204` means idle; otherwise the response must be ok + JSON (else cancel body, `{busy:true}`),
+and `state.finished!==true` -> `{busy:true}`.
+`getTarget()` falsy -> `'Worker bridge unavailable'`.
+The continuation message is verbatim (see `desktop/main/orchestration/worker-callbacks.ts`) and interpolates
+`worker.execution?.desktopId||'legacy-local'`, `worker.sessionId`, `worker.id`, `worker.completion.id` and `target` twice
+(`place=` and `target_portal=`).
+`beforeSend()` returning falsy -> `{skipped:true}`.
+POST `/api/chat/stream` with `{'Content-Type':'application/json',Accept:'text/event-stream, application/json'}` and `{message}`.
+- `202` -> parse JSON; `accepted===true||status==='accepted'` -> `{accepted:true}`; else throw `'Continuation not accepted'`.
+- `!ok` -> cancel body, `{accepted:false,failed:true,retryable:status===429||status>=500,status}`.
+- not `text/event-stream` -> cancel body, throw `'Continuation response unavailable'`.
+- else consume the SSE stream **without** injecting text into the chat: track `event:` lines; on a `data:` line while `event==='error'`,
+  parse JSON and derive `status` from `/(?:API error|HTTP|status)\s+([45]\d\d)\b/i` on `data.message` else `data.status` else 0, producing
+  `failure={accepted:false,failed:true,retryable:status===429||(status>=500&&status<=599),status}`; a blank line resets `event`.
+  Buffer >1 MiB -> throw `'Continuation event too large'`. Final `consume(decoder.decode()+'\n')` flushes. Returns `failure||{accepted:true}`.
+
+`new WorkerCallbacks(manager,{send=null,resume=null,ready=()=>true,toolsReady=()=>true,report=null,now=Date.now}={})`;
+fields `pending=null, timer=null, disposed=false`.
+- `setTransport({send,resume,ready,toolsReady=()=>true,report})` — assigns then `start()`.
+- `start()` — no-op when disposed/timer set/no send; `setInterval(pump,2000)`, `timer.unref?.()`, immediate `void pump()`.
+- `invalidate()` — aborts the pending controller; if the pending worker's `completion.state==='sending'` reset it to `'pending'` + `scheduleSave()`.
+- `recover(worker)` — only when `worker.completion` exists: `sending`->`pending`; `completion.continuation.state==='sending'`->`'uncertain'`;
+  `review.status==='processing'`->`'pending'`.
+- `prepare(worker)` — only once and only for TERMINAL status: sets
+  `completion={id:randomUUID(),state:'pending',attempts:0,nextAttemptAt:0,detail:'等待发送完成通知。',inboxId:null}` and
+  `review={status:'pending',requestId:randomUUID(),followUpRequestId:randomUUID(),summary:'',evidence:'',reported:false}`.
+- `retained(worker)` — `Boolean(completion && (!REVIEWED.has(review?.status) || review?.summary && !review.reported || presentation && !presentation.reported))`.
+- `cancel(worker)` — sets `completion.state='suppressed'`, detail `'任务已停止，不再自动接续。'`, `review={...review,status:'cancelled'}`,
+  aborts the pending controller when it belongs to that worker.
+- `pump()` — bails when disposed / already pending / no send / mode disabled / no owner / manager error / configuring / `!ready()`.
+  Candidate selection over workers with a `completion`, a live session, `review.status!=='cancelled'` and any of:
+  (a) presentation unreported + `report`; (b) review summary unreported + `report`;
+  (c) not REVIEWED and `completion.state` in `pending|retrying` and `nextAttemptAt<=now()`;
+  (d) `resume && toolsReady() && review.status==='pending' && completion.state==='accepted'` and either no continuation yet or
+      a `retrying` continuation whose `nextAttemptAt<=now()`.
+  Branch order inside the try: review-report first (sets `review.reported=true` and also `presentation.reported=true` when present),
+  then presentation-only report (`{presentationOnly:true}`), then the continuation branch, else the completion send.
+  Continuation branch: requires `toolsReady()`, `await m.assertEnforced?.()`, then `resume(...)` with a `beforeSend` that
+  rejects unless still current and `review.status==='pending'`, stamps
+  `completion.continuation={state:'sending',attempts:prev+1,startedAt:new Date(now()).toISOString()}`, flushes/notifies and re-checks.
+  After a non-busy, non-skipped result: `continuation.state = accepted?'accepted':failed?'failed':'uncertain'`; on failure with a
+  non-REVIEWED review: `review.status='pending'`, `continuation.status=result.status`, retry up to 3 attempts with
+  `nextAttemptAt = now() + 10000*attempts`, detail
+  `` `验收接续遇到模型接口错误${status?'（HTTP '+status+'）':''}；${retrying?'将自动重试验收，不会重新执行 Worker。':'可在此重新接续验收。'}` ``.
+  Completion send: `state='sending'`, `attempts++`, detail `'正在通知 Heart。'`, flush+notify, send, then either
+  `Object.assign(completion,{state:'accepted',inboxId,acceptedAt:new Date(now()).toISOString(),detail})` or `failed(...)`.
+  `catch`: when still current — `review.summary` present -> `review.deliveryError='验收结论待投递到原会话。'`;
+  else `completion.state==='accepted'` -> continuation (if any) becomes `'uncertain'` and detail
+  `'通知已接收；自动接续尚未确认，请查看验收状态。'`; else `failed(worker,true,'完成通知未送达，将自动重试；Worker 不会重新执行。')`.
+  `finally` clears `pending` when it is still this controller.
+- `failed(worker,retryable,detail)` — `state = retryable?'retrying':'failed'`, `nextAttemptAt = now()+Math.min(60000, 2000*2**Math.min(attempts,5))`.
+- `retry(id)` — `'此 Worker 没有可重试的完成通知。'` when missing completion or cancelled review; when `completion.state==='accepted'`
+  requires `review.status==='pending'` and no in-flight pending for that worker (`'此 Worker 正在验收或已完成验收。'`),
+  then `delete completion.continuation`; otherwise resets `state='pending'`, `nextAttemptAt=0`. Always flush+notify+`void pump()` and return `m.get(id)`.
+- `receive(callbackId)` — finds the worker by `completion.id`; throws `'完成通知不属于当前有效任务，无法接续。'` when mode disabled, no owner,
+  manager error, no worker, non-TERMINAL status, cancelled review or the session is gone. `await m.assertEnforced?.()` then re-checks
+  owner/revision/mode/cancel -> `'编排绑定已变化。'`. Already REVIEWED -> `{alreadyReviewed:true,workerId,review,instruction:'该结果已经记录，请勿重复派发任务或再次报告。'}`.
+  Else `review.status='processing'`, `review.receivedAt=new Date(now()).toISOString()`, flush+notify, and returns
+  `{alreadyReviewed:false, worker:{id,sessionId,title,status,taskPrompt,review:{...},completion:{...}}, scope:m.context(worker.sessionId), instruction:<long 中文 instruction>}`.
+- `review(args)` — `m.authorize(args)`; `'Worker 尚不可验收。'` when the worker is missing, belongs to another session, has no completion,
+  has a cancelled review or a non-TERMINAL status; `'请提供验收结论、依据与证据。'` when `outcome` is not
+  `passed|failed|needs_verification` or summary/evidence are not non-blank strings <=8000 chars.
+  Already REVIEWED -> `{recorded:true,alreadyReviewed:true,review,instruction:'已记录并交付此验收结果，请勿重复报告或派发。'}`.
+  Else assigns `{status:outcome,summary:trimmed,evidence:trimmed,finishedAt:new Date(now()).toISOString()}`, flush+notify, `void pump()`,
+  returns `{recorded:true,review,instruction:'验收结论已持久保存，桌面会投递到 Worker 所属原会话。不要再次发送相同结论；需要补验证时按原任务范围委派并填写 parentWorkerId。'}`.
+- `dispose()` — `disposed=true`, `invalidate()`, `clearInterval(timer)`, `timer=null`.
+
 ---
 
 ## 进度
