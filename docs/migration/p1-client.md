@@ -227,9 +227,9 @@ context 为 `{connected: true, connection: {url: 'https://echo.beings.town/cz_be
 |---|---|
 | `desktop/main/chat/protocol-types.ts` | 已移植 |
 | `desktop/main/chat/being-chat.ts` | 已移植，测试通过（30/30） |
-| `desktop/main/chat/recovery.ts` | 未开始 |
+| `desktop/main/chat/recovery.ts` | 已移植，测试通过（22/22） |
 | `tests/being-chat.test.ts` | 已移植，30 个用例全绿 |
-| `tests/being-recovery.test.ts` | 未开始 |
+| `tests/being-recovery.test.ts` | 已移植，22 个用例全绿 |
 
 ### 移植时的取舍（being-chat.ts）
 
@@ -245,3 +245,21 @@ context 为 `{connected: true, connection: {url: 'https://echo.beings.town/cz_be
 - `randomUUID` 变成可注入的构造参数（默认仍是 `node:crypto` 的那个），符合本阶段
   「外部依赖用构造参数注入」的要求；默认行为不变。
 - `ChatEvent` 是可辨识联合，`emit()` 用分发式 `Omit`（`ChatEventBody`）保留各成员自己的字段。
+
+### 移植时的取舍（recovery.ts）
+
+- `store` 不再是具体的 `ChatStore`，而是本文件声明的 `RecoveryStore` 接口（`cursor`、`seeded`、
+  `apply`、`rows` 四个成员），这样本块与并行的 store 块互不依赖；`ChatStore` 结构上满足它。
+- 测试里的 store 用 `TestStore` 替身，实现 `ChatStore.apply` 的按 scene 分发、去重、
+  「游标只前进」「baseline 先清空」四条规则，足以覆盖原测试的全部断言。
+- 定时器与时钟继续走构造参数注入（原样保留原测试的手写队列夹具），没有改用 `vi.useFakeTimers`：
+  `chat.send` 内部持有真实的 `AbortSignal.timeout(600000)`，全局假定时器会一并接管它。
+- `applyVerdict` 的 `streamId` 原来可能是 `undefined`（只用于 `probe.streamId || streamId`），
+  TS 版本默认 `''`；唯一调用方 `runPendingRecovery` 传的 pending 里 `streamId` 一定是字符串。
+- `send` / `stop` / `startCatchUpWatcher` 的参数对象在 TS 里是必填（原来 `= {}`）。
+  原实现在缺 `sessionId` 时也会在 `sceneId()` 抛 `INVALID_REQUEST`，只是先做了 `_stopPoll()` 等副作用。
+
+## 全量门槛
+
+`npm run typecheck` 通过；`npx vitest run`：Test Files 50 passed | 7 skipped (57)，
+Tests 396 passed | 16 skipped (412)。其中本块贡献 52 个（chat 30 + recovery 22）。
