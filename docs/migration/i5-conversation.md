@@ -140,3 +140,46 @@ Worktree `.local/i5-conversation`，分支 `i5-conversation`，基线 `next @ 7b
   `unresolvedNotice` 文案「未解析提及：@x；按原文发送，可能不会触发通知。请从候选列表选择完整 Town ID。」。
   本仓库 `renderer/town/models/mentions.ts` 是 I1 的**显示向**投影（`mentionNames/mentionParts/mentionWarnings`），
   与 composer 的解析无关，**不能复用也不许改**；本单元自建 `renderer/conversation/models/mentions.ts`。
+
+### 1.6 渲染层现状与 BD 界面规则来源
+
+- **`renderer/conversation/`（P1 移植）**：`models/{conversation,composer,organizer,transcript}.ts`、
+  `components/{conversation,composer,messages}.tsx`、`styles.css`。
+  `transcript()` **丢掉了 `view.workerResults`**（BD `chat-app.js:427` 是 `interleave` 的第一组暂存项）；
+  `ComposerModel` 没有补全、没有 notice；没有选区工具条、没有解释卡片。
+- **BD 类名（`test/chat-worker-results-ui.cjs` 实测）**：`.chat-worker-result` / `.chat-worker-status` /
+  `.chat-worker-open` / `.chat-worker-summary` / `.chat-worker-evidence`；状态词典
+  `{passed:'已完成', failed:'未完成', needs_verification:'待补充验证', ready:'结果已就绪'}`，未知值落「待补充验证」。
+  卡片外层是 `article.chat-message.is-being` + `.chat-meta`（beingName · clock）。五条断言：
+  ①卡片含 review 文本 + 状态 + 恰好一个「打开预览」；②点开传 `{sessionId, workerId}`；
+  ③切到别的会话 0 张；④切回仍是 1 张（不重复）；⑤summary 是纯文本，不能生成 `img`。
+- **BD `renderer/chat-selection.js`（224 行）**：`referenceChip(references, {remove, removeOne, onClose})`
+  与 `install({root, stream, input, …})`。工具条 `.chat-selection-toolbar`（两个按钮「添加到对话」「更多详情」，
+  `role=toolbar`），选区必须落在 `.chat-body` 内且在 stream 里；Escape 清选区并回焦输入框；
+  滚动/resize/换会话/断连都 hide。解释卡片 `.chat-detail-card`（`role=dialog`，`aria-label='更多详情 · 临时会话'`），
+  含 `.chat-detail-header`（`更多详情` + `.chat-detail-badge='临时会话'` + `.chat-detail-close='×'`）、
+  `.chat-detail-notice='关闭后不保留本地卡片；Being 仍可能保留对话并共享记忆。'`、`.chat-detail-source`（引用 chip）、
+  `.chat-detail-messages`（`role=log`）、`.chat-detail-status`（`role=status`，初始「正在打开…」）、
+  `.chat-detail-composer`（`.chat-detail-input` placeholder「继续追问…」+ `.chat-detail-stop='停止'` + `.chat-detail-send='↑'`）。
+  打开后自动发第一问：「请解释所选文本的含义，补充必要的背景，并用一个具体例子帮助我理解。」
+  每个父会话同时只有一张卡（再开会先关旧的）；`chatDetailStop` 返回 `stopped:false` 时状态写
+  「当前回复不属于这张卡片，未停止其他会话。」；`type:'reset'` 事件直接清空所有卡片且**不再**发 close/stop。
+- **BD `renderer/chat-composer.js`（148 行）**：菜单 `.chat-composer-menu`（`role=listbox`）、
+  `.chat-composer-heading`（kit：「已安装 Kit · 内置能力」；member：「通知 Being · 消息将公开到篝火」）、
+  `.chat-composer-option`（`role=option`，`.chat-composer-icon` + `.chat-composer-copy` 里 `strong` 是
+  `prefix + (member ? name : handle)`，`.chat-composer-detail` member 是 `@id · description`）、
+  `.chat-composer-empty`（加载中「正在加载…」/ 错误文案 / `token.query ? '没有匹配结果' : '暂无 Being 成员'`）、
+  `.chat-composer-retry`（图标按钮，`aria-label='重新加载'`，只在有 error 且非 loading 时出现）、
+  `.chat-composer-notice`（`aria-live=polite`，行用 ` · ` 连接）。
+  键盘：Escape 记 `dismissed` 并关；↑↓ 循环；Enter/Tab（无 shift）有候选就选、没有就关。
+  `prepare(text, event)`：输入法未结束抛「请完成输入后再发送。」；有提及且事件非 trusted 或
+  `connectionRevision` 不是安全整数 → 「请在输入框按 Enter 或点击发送，确认公开通知 Being。」；
+  含 `\0` → 「公开通知不能包含空字符，请检查消息内容。」；>20 位或正文 >4000 → 「公开通知最多提及 20 位 Being，消息不能超过 4000 字。」。
+  `publish(plan, result)`：`!ok || (!streamed && !spliced)` → 「聊天送达状态待确认，尚未发布篝火通知；不会自动重发。」；
+  epoch 变或断连 → 「Being 连接已变化，尚未发布篝火通知。」；收据无 id → 「篝火通知未确认送达，请打开篝火检查；不会自动重发。」。
+  发送文本经 `buildKitPrompt` 展开（公开到篝火的用 `raw`，**不含** Kit 指令）。
+- **`⌘1–9`**：BD `renderer/desktop-menu.cjs:35` 把 `⌘<数字>` 映射成 `task-<n>`，
+  `renderer/sidebar.js:280` 取 `ordered().filter(!archived)[n-1]` 并 `select(id)`。
+  本仓库 `OrganizerModel.ordered()/metadata()` 已经是同一套；`page.tsx` 现有的 `⌘1 → navigate('chat')` 会被本单元替换。
+- **`tests/orchestration-native-results.test.ts`** 里 I4 留给本单元的那条：
+  `const version = sessions.snapshot().version; sessions.workersChanged(); expect(snapshot().version > version)`。
