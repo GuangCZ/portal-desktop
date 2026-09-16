@@ -75,3 +75,57 @@
 - §4.7：身份分区从「已保存的地址」解析，`SettingsStore.load()` 一读到 credential 就填好 `connectionAddress`。
 - I6 有一条非一行式共享改动的先例：`tests/chat-ipc.test.ts` 的 `CHANNELS` 闭集断言随子系统落地而扩张
   （断言的是「`installDesktopExtensions` 注册的全部通道」）。**本单元也必须往那里追加自己的通道**。
+
+### 1.5 `src/model-config.cjs`（198 行，本单元的主移植源）
+
+- `PROVIDERS`（9 项，逐字节移植，注释保留「镜像 Loom 1.8.0 的 providerNames/inferBaseUrl + Heart 的 CANONICAL_URLS」）：
+  anthropic / openai-responses / openai / deepseek / kimi / google / glm / self-hosted（`keyless:true`，`http://115.190.110.33:7860/v1`）/ openrouter。
+- `MESSAGES` 九条错误码：`NOT_CONNECTED` / `SESSION_CHANGED` / `BUSY` / `AUTH_REQUIRED` / `NETWORK_ERROR` /
+  `INVALID_RESPONSE` / `RESULT_UNKNOWN` / `NEEDS_KEY` / `ROLLED_BACK`（外加 `validateModelPatch` 用的 `INVALID_REQUEST`，
+  它**不在** `MESSAGES` 里 —— `request()` 的 `Object.hasOwn(MESSAGES, error.code)` 因此对 INVALID_REQUEST 为 false，这是有意的）。
+- `modelConfigDto(value, connectionId, checkedAt)`：presets 上限 2000、`[provider, model]` 去重、`plainText` 去控制字符与
+  BiDi 覆写字符（`‪-‮⁦-⁩`）、`publicModelUrl` 抹掉查询与凭据、`hasApiKey` 三态（true/false/null）、
+  `providers` = 当前 provider + presets 的 provider + `PROVIDERS` 全部键去重、`modelsError` 只在 `presets` 不是数组时非空。
+- `validateModelPatch(value)`：白名单 5 键 + `Object.getPrototypeOf(value) !== Object.prototype` 原型污染闸门 +
+  「每个自有属性必须是数据属性（`Object.hasOwn(descriptor,'value')`）」+ `connectionId` 必须是 ≥0 的安全整数；
+  `model` ≤512、`provider` ≤100 且匹配 `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`、`baseUrl` ≤2048（http/https、无凭据/查询/片段）、
+  `apiKey` ≤16384；产出是 **snake_case** 的 `{model, provider, base_url?, api_key?}`。
+- `responseJson`：1 MiB 上限（先看 `content-length`，再边读边累计），超限或 JSON 失败都是 `INVALID_RESPONSE`。
+- `ModelConfig`：`busy`（同一 connection + connectionId 才算忙）、`context(expected)`（纪元校验 → `SESSION_CHANGED`；
+  无连接或退出中 → `NOT_CONNECTED`）、`request(expected, patch?)`（GET/PATCH，`X-Relay-Secret`、`redirect:'error'`、
+  `credentials:'omit'`、`cache:'no-store'`、`referrerPolicy:'no-referrer'`；401/403 → `AUTH_REQUIRED`；
+  `needs_key` → `NEEDS_KEY`；`rolled_back` → `ROLLED_BACK`；PATCH 的 `INVALID_RESPONSE`/`NETWORK_ERROR` 一律折成 `RESULT_UNKNOWN`）、
+  `remember`（记住 `baseUrl` 快照）、`get()`（busy → `BUSY`；revision 变了也 `BUSY`）、
+  `save()`（校验 → 纪元比对 → busy 判定 → **base_url 未变则删掉它**（避免用脱敏地址覆盖私有查询参数）→ PATCH → 重新 GET 确认
+  model/provider/baseUrl/hasApiKey 四项，任一不符 → `RESULT_UNKNOWN`）。
+
+### 1.6 `src/runtime.cjs`（55 行）
+
+`sideBySide.configured` 的唯一来源是 `/api/llm/config` 的 `sbs_enabled`（`readRuntime` 第 22 行 / `updateRuntimeConfig` 第 52 行），
+三态 `true|false|null`；`active` 只来自已删除的 Loom 页面消息 `beings:sbs-state`。
+`src/main.cjs:972-979`：`doRefresh` 并发读 `/api/status`、`/api/llm/config`、`/api/stream/active`；
+**如果 `modelConfigRevision` 变了或 `modelConfig.busy`，就把 6 个 config 字段与 `sideBySide.configured` 从旧 state 抄回来**
+——「先于显式修改发出的读取不能撤销它的快照」。本单元把这条语义保留为「PATCH 期间与之后的陈旧 GET 不覆盖新状态」。
+`src/main.cjs:1231-1236`：`handle('getModelConfig')` / `handle('saveModelConfig')`（后者 `modelConfigRevision++`，
+成功后写一条 activity「模型配置已保存」）。
+
+### 1.7 SBS 写入协议：**实测，不是推断**（MEMORY「协议行为必须实测」）
+
+BeingDesktop **没有** SBS 写入路径（`validateModelPatch` 白名单里没有 sbs，界面上是只读显示 +「在 Loom 中调整 Side by Side」）。
+真实写法从两处实测得到，两处一致：
+
+1. 真实 Loom 1.8.0 页面源码（`/Users/d5c/Documents/ChatGPT/BeingDesktop/.local/loom-stream-source.html:1766-1778`）：
+   ```js
+   const data = await applyConfigChange({ sbs_enabled: next ? 'on' : 'off' });
+   if (data && data.ok && data.config) setSbsEnabled(!!data.config.sbs_enabled, true);
+   ```
+   `applyConfigChange`（:1545）= `PATCH /api/llm/config`，headers `Content-Type: application/json` +
+   `X-Relay-Secret`（有 relay secret 时），响应 `{ok, config, needs_key?, rolled_back?, error?}`。
+   **值是字符串 `'on'` / `'off'`，不是布尔**；GET 回读时 `sbs_enabled` 是布尔。
+   注释原话：不做乐观翻转，以服务端回声为准。
+2. 本仓库 `tests/sbs-refresh.mjs`（现已 SKIPPED）的假 Being 夹具：`enabled = patch.sbs_enabled === 'on'`，
+   回 `{ok:true, config:{sbs_enabled: enabled, ...}}`。该夹具当年就是对着真 Loom 页面写的。
+
+`tests/sbs-refresh.mjs` 的旧脚本还钉住了四条行为，重写时逐条保留：
+未确认时开关 disabled 且 `aria-pressed` 为 null；被拒绝的 PATCH 不乐观翻转；
+更早发出的 GET 不能撤销随后确认的成功切换；503 / 字段缺失 → 状态回到「未知」，刷新可恢复。
