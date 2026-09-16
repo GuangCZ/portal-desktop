@@ -183,3 +183,66 @@ Worktree `.local/i5-conversation`，分支 `i5-conversation`，基线 `next @ 7b
   本仓库 `OrganizerModel.ordered()/metadata()` 已经是同一套；`page.tsx` 现有的 `⌘1 → navigate('chat')` 会被本单元替换。
 - **`tests/orchestration-native-results.test.ts`** 里 I4 留给本单元的那条：
   `const version = sessions.snapshot().version; sessions.workersChanged(); expect(snapshot().version > version)`。
+
+---
+
+## 2. 装配点
+
+| 位置 | 改动 |
+| --- | --- |
+| `desktop/main/subsystems/chat.ts` | `new ChatSessions({…})` 补上 P1 留空的四个参数：`prepareMessage`（`nativeMessageContext` 包 `desktopEnvironment`）、`generateTitle`（先 `sanitizeText(input, [token, relaySecret])` 再交编排）、`titleAvailability`（`[revision, readyAgents]` 指纹，身份不符返回 `''`）、`getWorkerResults`（`nativeWorkerResults(manager.workers, id)`，身份不符返回 `[]`）。另新建 `ChatDetails` 并注册两组 IPC。 |
+| 同上 | 跨子系统一律惰性：`orchestration()` / `tools()` / `town()` 三个闭包，构造期不解引用 `ctx.registry`。`sameIdentity()` 是 BD `chatSessions.identityKey === orchestration.owner` 的那对校验。 |
+| `desktop/renderer/app/page.tsx` | **仅 keyboard 块**：`⌘/Ctrl + 1–9` → `navigate('chat')` + `organizer.listed(sessions)[n-1]` 的 `select(id)`。 |
+| `desktop/renderer/app/models/registry.ts` | append 两行（import + `FEATURE_MODELS` 项）：`conversationMentionsModel`，即 composer 的 `@` 成员目录 / 公开通知模型，需要 `start()` 订阅所以走 FeatureModel。 |
+
+## 3. IPC 清单
+
+新增七条（全部经 `ctx.handle`，命名 `beings:<kebab-case>`）：
+
+| 通道 | 形状 | 包络 | 出处 |
+| --- | --- | --- | --- |
+| `beings:chat-detail-open` | `{parentSessionId, reference:{text, source}}` → `ChatDetailCard` | 是 | BD `src/main.cjs:126` 把五条 `chatDetail*` 放进 `townMethods` |
+| `beings:chat-detail-view` | `sessionId` → `ChatDetailCard` | 是 | 同上 |
+| `beings:chat-detail-send` | `{sessionId, text}` → `ChatSendResult` | 是 | 同上 |
+| `beings:chat-detail-stop` | `sessionId` → `ChatStopResult` | 是 | 同上 |
+| `beings:chat-detail-close` | `sessionId` → `boolean` | 是 | 同上 |
+| `beings:chat-worker-result` | `{sessionId, workerId}` → 描述符 | 否 | BD `chatOpenWorkerResult` 不在 `townMethods` |
+| `beings:chat-detail-event`（推送） | `ChatDetailEvent` | — | 只发主窗口 |
+
+改动一条：`beings:chat-composer-data` 从「无参数、返回空壳」变成接受 `{force?:boolean}`（原型必须是 `Object.prototype`，多一个键即 `INVALID_REQUEST`「成员刷新参数无效。」），返回 `kits / members / kitsError / membersError / connectionRevision / revision / expiresAt`。
+
+## 4. 决定与偏差
+
+- **D1 副本收敛是核实而非施工。** 方案 §3.5 要求删 `chat/context.ts`、改 `chat/titles.ts` 的 `sanitizeText`、把 `chat/connection.ts` 的 `beingIdentityKey` 改成一行代理——I0 已经一次做完（`docs/migration/i0-seams.md`）。本单元逐条核实后未再改动。
+- **D2 Portal 归属（定案 5.2）的映射表** 写在 `chat/environment.ts` 的 `portalRuntime`，九行（八个 phase + 无状态），由 `tests/chat-integration-environment.test.ts` 逐行钉住。`conflict === true` 一律 `health: 'unhealthy'`；`name` 只在 `managed === true` 时claim `being-desktop`；`management` 只有 `phase === 'external'` 才是 `'external'`。
+- **D3 `PortalState` 拿不到（未决）。** `main.ts` 把 `PortalSupervisor` 留在自己的闭包里，没有传给 `installDesktopExtensions`；`SubsystemContext` 也没有这个字段，而 `subsystems/types.ts` 与 `main.ts` 都是本单元不得修改的文件。因此 `subsystems/chat.ts` 传 `getPortalState: () => null`，帧里 `portal.status` 恒为 `not_configured`、`health` 恒为 `unknown`。**未把整个 `portal` 置 null**：帧正文有一句「已有部署的配置名见 `runtime.portal.configuredName`」，置 null 会让这句话指向不存在的字段；`configuredName` 与 `workspace` 来自已保存的 profile，是真值。方向上偏保守（Being 会更谨慎而不是更大胆），但仍是错的，列进 openIssues。
+- **D4 Kit 没有市场 ID。** BD 的 `listInstalledComposerKits` 读 `.being-desktop-install.json` 回执把市场 ID 找回来，本仓库 `kits/install.ts` 只写 `.beings-install.json{sha256, installedAt}`。因此 composer 的 kit `id` 用 handle 兜底，`icon` 恒为 `''`（菜单画名字首字母）。
+- **D5 `ChatComposerEntry.builtin` 从 `boolean` 改成 `string`**（`'search' | 'browse' | ''`）。BD `buildKitPrompt` 对两个内置能力展开的是**不同**的指令段，布尔量表达不了，P1 的占位类型在这里必须让位。
+- **D6 `⌘1–9` 是相对 BD 的新增。** BD 0.8.26 的 `renderer/app.js:1300` 只绑 `⌘B` / `⌘,`，`⌘<数字>→task-<n>` 来自 `renderer/desktop-menu.cjs:35` 的菜单加速键。本仓库没有那张菜单，规则照 `renderer/sidebar.js:280`（`ordered().filter(!archived)[n-1]`）实现在 keyboard 块里；`⌘1` 保留原来的「切到对话页」含义。
+- **D7 E2E 锚点与方案写的不同。** §6.1 写 `#client-main` / `#startup-screen[hidden]` / `.chat-message[data-role=user]` / `.chat-live`——真实代码是 `#connect-button` / `.chat-native` / `.chat-message.is-user` / `.chat-message.is-being.is-live`（`components/{messages,composer}.tsx` 实测）。按真实类名写。
+- **D8 夹具必须报告活跃流。** `/api/stream/active` 一律 204 时，`BeingChat.stop` 的 `probe()` 得到 `verdict: 'gone'` 就返回 `{stopped:false, reason:'idle'}`，**根本不会发 `POST /api/stop`**——第一次跑就是这样超时的。夹具改成在流打开期间返回 `{stream_id, origin:'human', events:[{event:'content_block_delta', data:{scene_id}}]}`，`speaking` 才为真、场景才可证明属于本会话，停止才是真的停止。
+- **D9 控制字符必须写成转义。** `renderer/conversation/models/{directory,worker-results}.ts` 与 `tests/conversation-renderer.test.ts` 一度把 `\x00`、`\x1f`、`‪` 等直接写成了裸字节，git 因此把三个文件当二进制（`Bin 0 -> N`），合回 next 时会变成二进制冲突而不是可读 diff。已按 BD `renderer/town-mentions.js:6` 与 `common/sanitize.ts` 的写法改回文本转义，运行时行为不变。
+
+## 5. 关键用例
+
+- `tests/chat-integration-frame.test.ts`（4 条，P1 复审的验收条件逐字）：wire 带 v1 帧且 `unwrapMessage` 原样剥掉 / 落盘 `StoredRow.content` 不带帧 / 编排开启时帧里含 `[Being Desktop Orchestrator mode]` 段且 `JSON.stringify(mode)` 在内 / `assertCurrent` 在发送中途切换编排模式时抛 `SESSION_CHANGED`。
+- `tests/chat-integration-environment.test.ts`：`portalRuntime` 的九行映射表 + 帧字段形状。
+- `tests/chat-integration-composer.test.ts` / `-details.test.ts`：composer 数据的白名单校验与 revision 回显；七条卡片通道的包络、上限 8 张、`reset` 语义。
+- `tests/conversation-renderer.test.ts`（30 条）：BD `test/chat-worker-results-ui.cjs` 的 5 条、`chat-composer-ui.cjs`、`chat-selection-ui.cjs`、`chat-conversation-ui.cjs` 里与对话页新增行为相关的规则逐条映射。
+- `tests/orchestration-native-results.test.ts`：I4 记录里点名留给本单元的那条「验收卡片可见」断言已补上（`workersChanged()` 抬 `snapshot().version`），并把该文件里 10 条 deferred 用例重新启用。
+
+## 6. 冒烟与门槛
+
+- `npm run typecheck`：绿。
+- `npx vitest run`：**114 文件 / 1270 通过 / 24 跳过**（基线 109 / 1197 / 34）。新增 5 个测试文件、+73 通过；重新启用 10 条 skip（34 → 24）。既有用例一条未删、未弱化。
+- **打包真跑**：`PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package`（绕代理）+ `codesign --force --deep --sign -`，`resources/heart-portal` 用 clang 编的 Mach-O stub（`--version` 打印 `heart-portal 0.0.0`）。
+- **`tests/electron-smoke.mjs`：18 条全过**（§6.1 的 10 步全部走到）。覆盖：打包客户端启动 → 真实设置对话框连接夹具 → 侧栏一个会话 → 基线 `GET /api/history` 恰好一次 → 发一句 → `.chat-message.is-user` + 流式行 → `POST /api/chat/stream` 的 body 带 `scene_id`（`desktop-<uuid>-<uuid>`）/ `scene_meta.scene_label` / `scene_meta.client` / `client_ref`，`message` 带 v1 帧且声明长度属实、剥掉后正是人说的话、帧里 `chatSessionId` 等于场景里的会话 UUID、直接模式无 orchestrator 段、token 不在 body 任何位置 → 停止按钮 → `POST /api/stop` 恰好一次 → 重启后会话、标题、双方消息都在，且转写里没有 `request context v1`。
+- 未跑：`npm run test:all` 全量（会串行占用四个 worktree 共用的 E2E 锁，且包含其它单元的脚本）。本单元只保证 `electron-smoke` 从「skipped」变「passed」，§6.3.4 的「skipped 名单只减不增」在这一项上成立。
+- `npm run start` 开发实例未单独跑：打包产物启动（§6.3 第 3 条，更强的一条）已真跑通过。
+
+## 7. 未做 / 存疑
+
+1. **D3：帧里的 `portal` 运行态是假的**（恒 `not_configured` / `unknown`）。要修必须动 `subsystems/types.ts` 或 `main.ts` 给 `SubsystemContext` 加一个 Portal 状态读取口——两个文件本单元都不能碰。建议 IM 收敛时加一个 `ctx.portalState?: () => PortalState | null`，`chat/environment.ts` 已经预留 `getPortalState` 参数，接上即可，`portalRuntime` 与它的表不用改。
+2. **D4：composer 的 Kit 没有市场 ID、没有图标**，与 BD 的菜单在这两处观感不同。要对齐得让 `kits/install.ts` 把市场 ID 写进安装回执，属 Kit 安装链路，不在本单元范围。
+3. `connectionCleared()` 依然没有调用方（I0 记录里就存在的缺口）：Being 被清空时卡片的 `details.reset()` 因此不会触发。本单元没有扩大这个缺口，也没有修——接线在 `main.ts`。
+4. `tests/town-sdk.mjs` / `tests/town-ui.mjs`（I1 重写、从未执行）本单元未代跑，按分工归 IM 在打包客户端上真跑。
