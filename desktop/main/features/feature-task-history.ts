@@ -1,37 +1,44 @@
 // Ported line by line from BeingDesktop 0.8.26 src/feature-task-history.cjs on 2026-09-16.
-// docs/interfaces.md §7: `feature-tasks/<sha256(identity)>.bin` holds the safeStorage
-// ciphertext of `{version:1, identityKey, ledger:{version:1, identityKey, records:[TaskDto]},
-// records:[TownSyncRecord]}` (≤128MB). docs/architecture.md §8.5「先落盘再通知」: every
-// ledger change notifies the observer and then schedules the encrypted write; a changed
-// identity or unavailable encryption blocks the file instead of overwriting another account.
-// `normalizeTownSyncRecords` (BeingDesktop src/loom-town-sync.cjs) lives outside this unit
-// and is injected as `normalizeRecords`.
+// Persistence follows the measured records in BeingDesktop docs/architecture.md §6.2
+// (`feature-tasks/<sha256(identity)>.bin`, protected by safeStorage) and §8.5 (flush before notify),
+// and docs/interfaces.md §7 (plaintext `{version: 1, identityKey, ledger, records}`, ≤128MB).
+// The on-disk format must stay readable by and for BeingDesktop 0.8.x — do not change the schema.
+//
+// `normalizeTownSyncRecords` lives in the Town/Loom migration unit (BeingDesktop
+// src/loom-town-sync.cjs) and is injected so this module stays testable on its own.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { FeatureTasks } from './feature-tasks';
 import type {
-  FeatureTaskHistoryEvent,
-  FeatureTaskHistoryOptions,
-  FeatureTaskSecretStorage,
+  FeatureTaskSnapshot,
+  FeatureTasksEvent,
   NormalizeTownSyncRecords,
+  SafeStorageApi,
+  SafeStorageLike,
   TownSyncRecord,
 } from './types';
 
 const MAX_FILE_BYTES = 128 * 1024 * 1024;
 
-interface StoredLedger { version?: unknown; identityKey?: unknown; records?: unknown }
-interface StoredHistory { version?: unknown; identityKey?: unknown; ledger?: StoredLedger; records?: unknown }
+export interface FeatureTaskHistoryOptions {
+  identityKey: string;
+  directory: string;
+  safeStorage?: SafeStorageLike;
+  onChange?: (event: FeatureTasksEvent) => void;
+  /** BeingDesktop src/loom-town-sync.cjs `normalizeTownSyncRecords`; injected, not imported. */
+  normalizeTownSyncRecords: NormalizeTownSyncRecords;
+}
 
 export class FeatureTaskHistory {
   identityKey: string;
   directory: string;
   filePath: string;
-  safeStorage: Partial<FeatureTaskSecretStorage> | undefined;
-  onChange: (event: FeatureTaskHistoryEvent) => void;
-  normalizeRecords: NormalizeTownSyncRecords;
+  safeStorage?: SafeStorageLike;
+  onChange: (event: FeatureTasksEvent) => void;
   ledger: FeatureTasks;
+  private _normalize: NormalizeTownSyncRecords;
   private _persistenceError: boolean;
   private _records: TownSyncRecord[];
   private _blocked: boolean;
@@ -40,15 +47,16 @@ export class FeatureTaskHistory {
   private _restorePromise: Promise<void> | null;
   private _savePromise: Promise<boolean> | null;
 
-  constructor({ identityKey, directory, safeStorage, onChange = () => {}, normalizeRecords }: FeatureTaskHistoryOptions) {
+  constructor({ identityKey, directory, safeStorage, onChange = () => {}, normalizeTownSyncRecords }: FeatureTaskHistoryOptions = {} as FeatureTaskHistoryOptions) {
     if (typeof identityKey !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(identityKey)) throw new TypeError('Invalid task history identity');
-    if (typeof directory !== 'string' || !directory || typeof onChange !== 'function' || typeof normalizeRecords !== 'function') throw new TypeError('Invalid task history configuration');
+    if (typeof directory !== 'string' || !directory || typeof onChange !== 'function') throw new TypeError('Invalid task history configuration');
+    if (typeof normalizeTownSyncRecords !== 'function') throw new TypeError('Invalid task history configuration');
     this.identityKey = identityKey;
     this.directory = path.resolve(directory);
     this.filePath = path.join(this.directory, `${createHash('sha256').update(identityKey).digest('hex')}.bin`);
     this.safeStorage = safeStorage;
     this.onChange = onChange;
-    this.normalizeRecords = normalizeRecords;
+    this._normalize = normalizeTownSyncRecords;
     this._persistenceError = false;
     this._records = [];
     this._blocked = false;
@@ -74,13 +82,20 @@ export class FeatureTaskHistory {
     try { this.onChange({ tasks: this.ledger.list(), persistenceError: this.persistenceError }); } catch {}
   }
 
-  private _encryptionAvailable(): boolean {
+  /**
+   * Faithful to `_encryptionAvailable()` in the source: it probes exactly the same members in the
+   * same order and swallows any throw, but returns the narrowed handle so strict TypeScript can use it.
+   */
+  private _encryption(): SafeStorageApi | null {
     try {
-      return typeof this.safeStorage?.isEncryptionAvailable === 'function'
-        && this.safeStorage.isEncryptionAvailable() === true
-        && typeof this.safeStorage.encryptString === 'function'
-        && typeof this.safeStorage.decryptString === 'function';
-    } catch { return false; }
+      const storage = this.safeStorage;
+      return typeof storage?.isEncryptionAvailable === 'function'
+        && storage.isEncryptionAvailable() === true
+        && typeof storage.encryptString === 'function'
+        && typeof storage.decryptString === 'function'
+        ? storage as SafeStorageApi
+        : null;
+    } catch { return null; }
   }
 
   async restore(): Promise<this> {
@@ -90,36 +105,37 @@ export class FeatureTaskHistory {
   }
 
   private async _restore(): Promise<void> {
-    if (!this._encryptionAvailable()) { this._blocked = true; this._persistenceError = true; this._notify(); return; }
-    const storage = this.safeStorage as FeatureTaskSecretStorage;
+    const storage = this._encryption();
+    if (!storage) { this._blocked = true; this._persistenceError = true; this._notify(); return; }
     try {
       const stat = await fs.stat(this.filePath);
       if (!stat.isFile() || stat.size > MAX_FILE_BYTES) throw new Error('Invalid encrypted task history');
       const ciphertext = await fs.readFile(this.filePath);
       if (ciphertext.length > MAX_FILE_BYTES) throw new Error('Invalid encrypted task history');
-      const payload = JSON.parse(storage.decryptString(ciphertext)) as StoredHistory | null;
+      const payload = JSON.parse(storage.decryptString(ciphertext)) as Record<string, unknown> | null;
+      const ledgerPayload = payload?.ledger as Partial<FeatureTaskSnapshot> | undefined;
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)
         || Object.keys(payload).length !== 4 || payload.version !== 1 || payload.identityKey !== this.identityKey
-        || !payload.ledger || payload.ledger.version !== 1 || payload.ledger.identityKey !== this.identityKey
-        || !Array.isArray(payload.ledger.records) || !Array.isArray(payload.records) || payload.records.length > 256) {
+        || !ledgerPayload || ledgerPayload.version !== 1 || ledgerPayload.identityKey !== this.identityKey
+        || !Array.isArray(ledgerPayload.records) || !Array.isArray(payload.records) || payload.records.length > 256) {
         throw new Error('Task history identity or schema mismatch');
       }
       // Preserve work submitted while the first disk read was still pending.
       const current = this.ledger.snapshot();
       const currentIds = new Set(current.records.map(task => task.id));
-      const records = this._generation ? [...current.records, ...payload.ledger.records.filter((task: { id?: string } | null) => !currentIds.has(task?.id as string))] : payload.ledger.records;
-      this.ledger = this._ledger({ ...payload.ledger, records });
-      this._records = this.normalizeRecords([...payload.records, ...this._records]);
+      const records = this._generation ? [...current.records, ...ledgerPayload.records.filter(task => !currentIds.has(task?.id))] : ledgerPayload.records;
+      this.ledger = this._ledger({ ...ledgerPayload, records });
+      this._records = this._normalize([...payload.records, ...this._records]);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') { this._blocked = true; this._persistenceError = true; }
+      if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') { this._blocked = true; this._persistenceError = true; }
     }
     this._notify();
   }
 
   register(record: unknown): boolean {
-    const candidate = this.normalizeRecords([record]);
+    const candidate = this._normalize([record]);
     if (candidate.length !== 1) return false;
-    const next = this.normalizeRecords([...this._records, candidate[0]]);
+    const next = this._normalize([...this._records, candidate[0]]);
     const accepted = next.some(item => item.requestId === candidate[0].requestId);
     if (JSON.stringify(next) !== JSON.stringify(this._records)) {
       this._records = next;
@@ -145,9 +161,9 @@ export class FeatureTaskHistory {
       this._dirty = false;
       let temporary: string | null = null;
       try {
-        if (!this._encryptionAvailable()) { this._blocked = true; throw new Error('Task history encryption unavailable'); }
+        const storage = this._encryption();
+        if (!storage) { this._blocked = true; throw new Error('Task history encryption unavailable'); }
         if (this.ledger.identityKey !== this.identityKey) { this._blocked = true; throw new Error('Task history identity changed'); }
-        const storage = this.safeStorage as FeatureTaskSecretStorage;
         const payload = JSON.stringify({ version: 1, identityKey: this.identityKey, ledger: this.ledger.snapshot(), records: this._records });
         let ciphertext: Buffer;
         try { ciphertext = storage.encryptString(payload); }

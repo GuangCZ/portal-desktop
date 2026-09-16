@@ -1,24 +1,23 @@
 // Ported line by line from BeingDesktop 0.8.26 src/feature-tasks.cjs on 2026-09-16.
-// docs/architecture.md §4「功能任务账本」 and docs/interfaces.md §3.9: the ledger is
-// isolated per Being identity, keeps only bounded sanitized text, and never lets a late
-// callback resurrect a terminal record.
+// Invariants come from the measured records in BeingDesktop docs/architecture.md §4 (per-identity
+// isolation, SESSION_CHANGED on stale writes) and §8.5 (flush before notify), and from
+// docs/interfaces.md §3.9 (constructor and method surface), §5 (error codes) and §7 (persisted format).
+// Do not merge branches, relax validation or reword the user-facing strings: the renderer and the
+// stored 0.8.x files depend on them verbatim.
 
 import { randomUUID } from 'node:crypto';
 import type {
+  FeatureTaskBeginInput,
   FeatureTaskExecution,
-  FeatureTaskInput,
-  FeatureTaskLedger,
-  FeatureTaskPatch,
   FeatureTaskRecord,
   FeatureTaskSnapshot,
   FeatureTaskStatus,
-  FeatureTasksOptions,
 } from './types';
 
-const STATUSES: ReadonlySet<unknown> = new Set(['running', 'waiting', 'succeeded', 'failed', 'cancelled', 'needs_input']);
-const TERMINAL: ReadonlySet<unknown> = new Set(['succeeded', 'failed', 'cancelled']);
+const STATUSES = new Set<string>(['running', 'waiting', 'succeeded', 'failed', 'cancelled', 'needs_input']);
+const TERMINAL = new Set<string>(['succeeded', 'failed', 'cancelled']);
 const RESTART_DETAIL = '应用已重新启动，执行状态待核对；不会自动重发。';
-const ERROR_DETAILS: Readonly<Record<string, string>> = Object.freeze({
+export const ERROR_DETAILS: Readonly<Record<string, string>> = Object.freeze({
   AUTH_REQUIRED: '此功能需要授权，请在对应功能页面完成连接。',
   IDENTITY_MISMATCH: '连接身份不一致，请检查 Being 连接后重试。',
   NOT_CONNECTED: '请先连接 Being。',
@@ -46,7 +45,7 @@ function plain(value: unknown): value is Record<string, unknown> {
 function fields(value: unknown, allowed: string[], name: string): Record<string, unknown> {
   if (!plain(value)) throw new TypeError(`Invalid ${name}`);
   const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (Reflect.ownKeys(descriptors).some(key => typeof key !== 'string' || !allowed.includes(key) || !Object.hasOwn(descriptors[key], 'value'))) throw new TypeError(`Invalid ${name} fields`);
+  if (Reflect.ownKeys(descriptors).some(key => typeof key !== 'string' || !allowed.includes(key) || !Object.hasOwn(descriptors[key as string], 'value'))) throw new TypeError(`Invalid ${name} fields`);
   return value;
 }
 
@@ -73,9 +72,22 @@ function safeText(value: unknown, limit: number): string {
 }
 
 function stamp(value: unknown): value is number { return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 8640000000000000; }
-function copy<T>(value: T): T { return structuredClone(value); }
+function copy(value: FeatureTaskRecord): FeatureTaskRecord { return structuredClone(value); }
 
-export class FeatureTasks implements FeatureTaskLedger {
+export interface FeatureTasksOptions {
+  onChange?: (snapshot: FeatureTaskSnapshot) => void;
+  now?: () => number;
+  createId?: () => string;
+  maxRecords?: number;
+  identityKey?: string;
+  /** Persisted `{version, identityKey, records}` payload; ignored when the identity does not match. */
+  initialSnapshot?: unknown;
+  /** 0.8.x compatibility entry: bare record array plus the identity it was written under. */
+  initialRecords?: unknown;
+  initialIdentityKey?: unknown;
+}
+
+export class FeatureTasks {
   onChange: (snapshot: FeatureTaskSnapshot) => void;
   now: () => number;
   createId: () => string;
@@ -92,17 +104,16 @@ export class FeatureTasks implements FeatureTaskLedger {
     this.maxRecords = maxRecords;
     this.identityKey = identity(identityKey);
     this._records = new Map();
-    const source: unknown = initialSnapshot ? initialSnapshot : (initialRecords === undefined ? null : { version: 1, identityKey: initialIdentityKey, records: initialRecords });
+    const source = initialSnapshot || (initialRecords === undefined ? null : { version: 1, identityKey: initialIdentityKey, records: initialRecords });
     if (plain(source) && source.version === 1 && source.identityKey === this.identityKey && Array.isArray(source.records)) this._restore(source.records);
   }
 
-  begin(input: FeatureTaskInput | unknown): FeatureTaskRecord {
-    const values = fields(input, ['feature', 'operation', 'title', 'execution'], 'feature task');
-    const execution = values.execution === undefined ? 'local' : values.execution;
-    const feature = identifier(values.feature, 'feature');
-    const operation = identifier(values.operation, 'operation');
-    if (!(['being', 'local'] as unknown[]).includes(execution)) throw new TypeError('Invalid task execution');
-    const safeTitle = safeText(values.title, 160).trim();
+  begin(input: FeatureTaskBeginInput): FeatureTaskRecord {
+    const { feature, operation, title, execution = 'local' } = fields(input, ['feature', 'operation', 'title', 'execution'], 'feature task') as unknown as FeatureTaskBeginInput;
+    identifier(feature, 'feature');
+    identifier(operation, 'operation');
+    if (!['being', 'local'].includes(execution)) throw new TypeError('Invalid task execution');
+    const safeTitle = safeText(title, 160).trim();
     if (!safeTitle) throw new TypeError('Task title is required');
     let oldest: FeatureTaskRecord | undefined;
     if (this._records.size >= this.maxRecords) {
@@ -116,16 +127,16 @@ export class FeatureTasks implements FeatureTaskLedger {
     }
     if (!id) throw new Error('Could not allocate a unique feature task ID');
     const timestamp = this._now();
-    const task: FeatureTaskRecord = { id, feature, operation, title: safeTitle, execution: execution as FeatureTaskExecution, mayDelayChat: execution === 'being', status: 'running', detail: '', summary: '', requestId: '', errorCode: '', createdAt: timestamp, updatedAt: timestamp, finishedAt: null };
+    const task: FeatureTaskRecord = { id, feature, operation, title: safeTitle, execution, mayDelayChat: execution === 'being', status: 'running', detail: '', summary: '', requestId: '', errorCode: '', createdAt: timestamp, updatedAt: timestamp, finishedAt: null };
     if (oldest) this._records.delete(oldest.id);
     this._records.set(id, task);
     this._changed();
     return copy(task);
   }
 
-  update(id: string, patch: FeatureTaskPatch | unknown): FeatureTaskRecord | null {
+  update(id: string, patch: unknown): FeatureTaskRecord | null {
     const values = fields(patch, ['status', 'detail', 'requestId'], 'task update');
-    if (values.status !== undefined && !STATUSES.has(values.status)) throw new TypeError('Invalid task status');
+    if (values.status !== undefined && !STATUSES.has(values.status as string)) throw new TypeError('Invalid task status');
     const changes: Partial<FeatureTaskRecord> = {};
     if (values.status !== undefined) changes.status = values.status as FeatureTaskStatus;
     if (values.detail !== undefined) changes.detail = safeText(values.detail, 600);
@@ -133,7 +144,7 @@ export class FeatureTasks implements FeatureTaskLedger {
     return this._patch(id, changes);
   }
 
-  complete(id: string, options: { summary?: string } | unknown = {}): FeatureTaskRecord | null {
+  complete(id: string, options: unknown = {}): FeatureTaskRecord | null {
     const { summary } = fields(options, ['summary'], 'task completion');
     return this._patch(id, { status: 'succeeded', summary: safeText(summary, 1200), detail: '', errorCode: '' });
   }
@@ -146,17 +157,17 @@ export class FeatureTasks implements FeatureTaskLedger {
     return this._patch(id, { status: 'failed', errorCode, detail: ERROR_DETAILS[errorCode] });
   }
 
-  cancel(id: string, options: { detail?: string } | unknown = {}): FeatureTaskRecord | null {
+  cancel(id: string, options: unknown = {}): FeatureTaskRecord | null {
     const { detail } = fields(options, ['detail'], 'local task cancellation');
     return this._patch(id, { status: 'cancelled', detail: safeText(detail === undefined ? '已停止本地跟踪，远端执行状态需另行确认。' : detail, 600) });
   }
 
   get(id: string): FeatureTaskRecord | null { const task = this._records.get(id); return task ? copy(task) : null; }
 
-  list(options: { feature?: string } | unknown = {}): FeatureTaskRecord[] {
+  list(options: unknown = {}): FeatureTaskRecord[] {
     const { feature } = fields(options, ['feature'], 'task filter');
     if (feature !== undefined) identifier(feature, 'feature');
-    return [...this._records.values()].reverse().filter(task => feature === undefined || task.feature === feature).map(task => copy(task));
+    return [...this._records.values()].reverse().filter(task => feature === undefined || task.feature === feature).map(copy);
   }
 
   snapshot(): FeatureTaskSnapshot { return { version: 1, identityKey: this.identityKey, records: this.list() }; }
@@ -179,7 +190,7 @@ export class FeatureTasks implements FeatureTaskLedger {
     if (!task) return null;
     // A late callback cannot resurrect or overwrite a completed local record.
     if (TERMINAL.has(task.status)) return copy(task);
-    if (Object.entries(values).every(([key, value]) => task[key as keyof FeatureTaskRecord] === value)) return copy(task);
+    if (Object.entries(values).every(([key, value]) => (task as unknown as Record<string, unknown>)[key] === value)) return copy(task);
     const updatedAt = Math.max(task.updatedAt, this._now());
     Object.assign(task, values);
     task.updatedAt = updatedAt;
@@ -200,18 +211,19 @@ export class FeatureTasks implements FeatureTaskLedger {
         const stored = fields(candidate, ['id', 'feature', 'operation', 'title', 'execution', 'mayDelayChat', 'status', 'detail', 'summary', 'requestId', 'errorCode', 'createdAt', 'updatedAt', 'finishedAt'], 'stored task');
         const { id, feature, operation, execution, status, createdAt, updatedAt, finishedAt } = stored;
         identifier(id, 'task ID', 128); identifier(feature, 'feature'); identifier(operation, 'operation');
-        if (!(['being', 'local'] as unknown[]).includes(execution) || !STATUSES.has(status) || !stamp(createdAt) || !stamp(updatedAt) || updatedAt < createdAt) continue;
-        if (TERMINAL.has(status) ? !stamp(finishedAt) || finishedAt < createdAt || finishedAt > updatedAt : finishedAt !== null) continue;
+        if (!['being', 'local'].includes(execution as string) || !STATUSES.has(status as string) || !stamp(createdAt) || !stamp(updatedAt) || updatedAt < createdAt) continue;
+        if (TERMINAL.has(status as string) ? !stamp(finishedAt) || finishedAt < createdAt || finishedAt > updatedAt : finishedAt !== null) continue;
         const title = safeText(stored.title, 160).trim();
         if (!title) continue;
-        const task: FeatureTaskRecord = { id: id as string, feature: feature as string, operation: operation as string, title, execution: execution as FeatureTaskExecution, mayDelayChat: execution === 'being', status: (TERMINAL.has(status) ? status : 'waiting') as FeatureTaskStatus, detail: TERMINAL.has(status) ? safeText(stored.detail, 600) : RESTART_DETAIL, summary: safeText(stored.summary, 1200), requestId: stored.requestId ? identifier(stored.requestId, 'request ID', 128) : '', errorCode: Object.hasOwn(ERROR_DETAILS, stored.errorCode as PropertyKey) ? stored.errorCode as string : '', createdAt, updatedAt, finishedAt: finishedAt as number | null };
+        const task: FeatureTaskRecord = { id: id as string, feature: feature as string, operation: operation as string, title, execution: execution as FeatureTaskExecution, mayDelayChat: execution === 'being', status: (TERMINAL.has(status as string) ? status : 'waiting') as FeatureTaskStatus, detail: TERMINAL.has(status as string) ? safeText(stored.detail, 600) : RESTART_DETAIL, summary: safeText(stored.summary, 1200), requestId: stored.requestId ? identifier(stored.requestId, 'request ID', 128) : '', errorCode: Object.hasOwn(ERROR_DETAILS, stored.errorCode as string) ? stored.errorCode as string : '', createdAt, updatedAt, finishedAt: finishedAt as number | null };
         // Legacy Town rows were left waiting after their request had ended.
         // Recover their presentation without replaying a remote operation.
-        if (!TERMINAL.has(status) && (['bonfire', 'fireside', 'scroll'] as unknown[]).includes(feature) && execution === 'being') {
+        if (!TERMINAL.has(status as string) && ['bonfire', 'fireside', 'scroll'].includes(feature as string) && execution === 'being') {
           const blockedBeforeSend = !task.requestId && stored.detail === 'Being 正在处理其他请求，本次操作尚未完成；不会自动重发。';
-          Object.assign(task, blockedBeforeSend
+          const recovery: Partial<FeatureTaskRecord> = blockedBeforeSend
             ? { status: 'failed', errorCode: 'READINESS_UNKNOWN', detail: '旧版未发送这次读取，却留下了等待状态。请打开功能页重新读取。', finishedAt: updatedAt }
-            : { status: 'needs_input', detail: '应用已重新启动，旧读取结果尚未确认，本地已无等待队列。请在功能页检查；不会自动重发。' });
+            : { status: 'needs_input', detail: '应用已重新启动，旧读取结果尚未确认，本地已无等待队列。请在功能页检查；不会自动重发。' };
+          Object.assign(task, recovery);
         }
         restored.push(task);
       } catch {}
