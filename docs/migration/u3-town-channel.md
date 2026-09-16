@@ -319,3 +319,43 @@ TownPairing 的 5 个用例（全部移植）：
 - `loadOlder` 与 `_refresh` 都：`_select` → 取 reader → 记 identityKey → await 对应 restore → `_assertCurrent` → `!_enabled` 抛 NOT_CONNECTED（文案分别为 `'连接 Being 后再读取更早的消息。'` / `'连接 Being 后再刷新 Town 消息。'`）→ 执行 → 再 `_assertCurrent` → 返回 `_envelope`。
 - `_refresh(value, explicit)`：`explicit && readCachedSnapshot` 时走 `reader.requestRead(options => this._requestRead(kind, firesideId, options))`，否则 `reader.refresh()`。
 - 注入化：`TownRefresh` 由 `createRefresh(options)` 工厂注入；TownBackground 会在 reader 实例上挂 `_townDirty` / `_townEventTimer` / `_townEventFlight` 三个私有簿记字段。
+
+### src/town-refresh.cjs 的调用面（531 行，本单元不移植，只按此定义注入接口）
+构造：`new TownRefresh({readSnapshot, getIdentity, onSnapshot, onStatus, onSuccess, intervalMs, limit, automatic, cached, pageable, clock})`。
+方法：`status()`（`{...metadata, running}`）、`snapshot()`（深拷贝的 `{messages, latestSeq, identity, …}`）、`cacheRecord()`、`restoreCache(value)`、`start()`、`stop()`、`pause(reason='suspended')`、`resume()`、`reset()`、`refresh()`、`requestRead(readSnapshot)`、`loadOlder()`（挂在 prototype 上）。
+`onSuccess` 收到的是 `this.cacheRecord()`（含 `capturedAt`/`revision`/`manual`）。
+
+### test/town-background.test.cjs（616 行，26 个 test）
+夹具：
+- `deferred()`；`settle() = 连续 20 次 await Promise.resolve()`。
+- `fakeClock()`：`now` 从 1000 起，`setTimeout/clearTimeout/advance(duration)/pending()`，`advance` 逐个触发到期定时器并在每次回调后 `settle()`。
+- `snapshot(content, id = 1) = {messages:[{id:String(id), beingId:'echo', beingName:'Echo', content, createdAt:'2026-09-07', revisedAt:'', mentions:[]}], latestSeq:id}`。
+- `harness({read = () => snapshot('Town message'), readCachedSnapshot, bonfireCache, getCacheKey, onUpdate})`：identity 初值 `{beingId:'alice', connectionRevision:1, identityRevision:1}`；`townSession.getBonfireMessages/getFiresideMessages` 都把 `{kind, value, signal}` 推进 `calls` 再调 `read(entry, calls.length)`；`onUpdate` 里 `structuredClone`；`onStatus` 里 push `background.metadata()`。
+
+用例名（顺序）与本单元可测性（TownRefresh 是另一个单元的模块，本 worktree 没有真实实现）：
+1. `startup restores persistent Bonfire messages before polling or an explicit Being read` — 依赖 TownRefresh 合并/stale → skip
+2. `Fireside restores its own persistent messages before polling and an explicit read` — 依赖 restoreCache/合并 → skip
+3. `Fireside cache survives switching rooms and reconnects with the current identity` — 依赖合并 → skip
+4. `switching rooms while disk restore is pending rejects the old request before it can read or publish` — TownBackground 自身围栏 → 可测
+5. `reconciled room removal prevents an outstanding or later persistent restore` — TownBackground 自身 → 可测
+6. `persisted receipt stays paired with validated messages and errors never replace the disk record` — TownRefresh cacheRecord → skip
+7. `reconnect restores the same connection cache with current revisions and switching sessions isolates it` — TownRefresh → skip
+8. `late disk loads and reads cannot cross a connection change or restart work after stop` — TownBackground 围栏 → 可测
+9. `connecting, selecting rooms, recovering and advancing minutes never wake Being` — TownRefresh 调度 → skip
+10. `one selected room shares in-flight reads and switching aborts only the previous room` — TownRefresh 飞行合并/abort → skip
+11. `repeated snapshots of the current room stay local before and after a manual read` — TownBackground → 可测
+12. `a room change after transport completion cannot relabel the new room as the old request` — TownBackground 围栏 → 可测
+13. `offline and sleep pauses retain stale data without reading on resume` — TownRefresh 状态 → skip
+14. `disconnect clears all cached messages and reconnect cannot expose the previous identity` — TownBackground lifecycle → 可测
+15. `connection revision changes abort pending reads and clear the selected private room` — TownBackground clearRoom → 可测
+16. `removal from the room list discards its cache without any further private reads` — TownBackground reconcileRooms → 可测
+17. `diagnostic metadata omits messages and observer mutations cannot change cached data` — TownRefresh 拷贝 → skip
+18. `authorization failures require manual retry using only the read transport` — TownRefresh → skip
+19. `busy and transient failures never enqueue an automatic retry` — TownRefresh → skip
+20. `malformed read selectors reject getters and extra keys without starting requests` — 纯 requestDto → 可测
+21. `stop and restart preserve selected room metadata without starting reads` — TownBackground stop/lifecycle → 可测
+22. `SBS polling, navigation and refresh only read cached results over multiple minutes` — TownRefresh 调度 → skip
+23. `explicit reads supersede a pending cache read and cannot be overwritten by old cache` — TownRefresh → skip
+24. `missing or failed cached results never fall back to a Being chat request` — TownRefresh → skip
+25. `late cached and explicit private reads cannot cross room or identity changes` — TownBackground 围栏 → 可测
+26. `an accepted explicit read is never replayed while cache polling continues` — TownRefresh → skip
