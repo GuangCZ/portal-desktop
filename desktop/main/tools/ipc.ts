@@ -29,6 +29,7 @@
 // I2 recorded the refusal as a deviation and bounded the panel's retries to
 // survive it; IM closed the deviation and removed the bound. See
 // docs/migration/im-integration.md §2.2 and tests/app-ipc-quit-allowed.test.ts.
+import { VIEWPORT_SOURCES } from './browser/browser';
 import { IDLE_TOOLS_STATE } from '../../shared/tools-types';
 import type {
   DesktopToolsBrowserState, DesktopToolsPane, DesktopToolsState,
@@ -184,7 +185,11 @@ export function registerToolsIpc({ handle, tools, clipboard, blocked }: ToolsIpc
     // browser is destroyed. A detached rectangle is the answer, not an error.
     const live = require().browser;
     if (live.destroyed) return IDLE_TOOLS_STATE.browser;
-    return live.setViewport(viewport);
+    // NAMED, BECAUSE THIS PANE IS NOT THE ONLY ONE. Both panes drive the same
+    // `DesktopBrowser` since IM, and this one reports `visible:false` whenever the
+    // tool panel is on its console tab. Unkeyed that detached the page the
+    // standalone tool-browser panel was showing (browser.ts `viewports`).
+    return live.setViewport(viewport, VIEWPORT_SOURCES.toolsPane);
   });
 
   handle('beings:clipboard-read', async (): Promise<string> => {

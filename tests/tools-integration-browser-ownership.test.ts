@@ -196,6 +196,60 @@ describe("the tool browser has exactly one owner", () => {
     });
   }
 
+  // THE SECOND HALF OF「ONE OWNER」, and a defect the first half introduced.
+  // Converging the two panels onto one `DesktopBrowser` converged their two
+  // rectangles as well: `beings:tools-browser-view` and
+  // `beings:tool-browser-viewport` wrote `visible`/`bounds` on the same object, so
+  // merely opening the tool panel on its CONSOLE tab took the page off the
+  // standalone tool-browser panel — `ToolsModel.browserView` computes `visible` as
+  // `open && mode === 'browser' && …` (desktop/renderer/tools/models/tools.ts) and
+  // `ToolsBrowserBar` measures on every layout whether or not its pane is the one
+  // on screen (its `<section>` is `hidden`, not unmounted). The other panel never
+  // asked for the page back either: its own dedupe cache still believed it was
+  // visible. Measured on the packaged build before the fix
+  // (docs/migration/im-integration.md §4.9).
+  it("lets each panel speak only for its own rectangle", async () => {
+    const f = await fixture([installToolBrowserSubsystem, installToolsSubsystem]);
+    const opened = (await f.call("beings:tool-browser-action", "new", { url: "https://example.test/page" })) as { tabs: { id: string }[] };
+    expect(opened.tabs).toHaveLength(1);
+    const view = () => FakeView.created[0];
+    const attached = () => f.window.children.length;
+
+    // 1. The standalone panel puts the page on screen.
+    const shown = (await f.call("beings:tool-browser-viewport", { visible: true, bounds: { x: 100, y: 100, width: 400, height: 300 } })) as { visible: boolean };
+    expect(shown.visible).toBe(true);
+    expect(attached()).toBe(1);
+    expect(view().bounds).toEqual({ x: 100, y: 100, width: 400, height: 300 });
+
+    // 2. The tool panel opens on its console tab and reports「不在我这儿」. This
+    //    is the exact message the regression was made of.
+    const afterConsole = (await f.call("beings:tools-browser-view", { visible: false, bounds: { x: 0, y: 0, width: 0, height: 0 } })) as { visible: boolean };
+    expect(attached()).toBe(1);
+    expect(view().visible).toBe(true);
+    expect(view().bounds).toEqual({ x: 100, y: 100, width: 400, height: 300 });
+    expect(afterConsole.visible).toBe(true);
+    expect(((await f.call("beings:tool-browser")) as { visible: boolean }).visible).toBe(true);
+
+    // 3. The tool panel switches to its browser pane: it asked for the view, so
+    //    it gets it, at its own rectangle.
+    await f.call("beings:tools-browser-view", { visible: true, bounds: { x: 10, y: 10, width: 800, height: 600 } });
+    expect(attached()).toBe(1);
+    expect(view().bounds).toEqual({ x: 10, y: 10, width: 800, height: 600 });
+
+    // 4. And symmetrically: the standalone panel closing does not take the page
+    //    off the tool panel.
+    await f.call("beings:tool-browser-viewport", { visible: false });
+    expect(attached()).toBe(1);
+    expect(view().bounds).toEqual({ x: 10, y: 10, width: 800, height: 600 });
+
+    // 5. Only when NOBODY is showing it does the view come off the window.
+    const gone = (await f.call("beings:tools-browser-view", { visible: false, bounds: { x: 10, y: 10, width: 800, height: 600 } })) as { visible: boolean };
+    expect(attached()).toBe(0);
+    expect(gone.visible).toBe(false);
+    expect(((await f.call("beings:tool-browser")) as { visible: boolean }).visible).toBe(false);
+    expect(f.errors).toEqual([]);
+  });
+
   it("falls back to building its own when the tool browser is not installed", async () => {
     const f = await fixture([installToolsSubsystem]);
     // Nothing is built until something needs it — the resolver may still answer.

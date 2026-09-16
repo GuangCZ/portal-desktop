@@ -146,9 +146,16 @@ describe("the quitting guard", () => {
     const f = fixture();
     f.quit();
     f.destroyBrowser();
-    // A destroyed browser is not a reason to accept nonsense: the argument check
-    // runs before the liveness check on both surfaces.
-    await expect(f.call("beings:tool-browser-viewport", { visible: false, nope: 1 })).rejects.toThrow();
+    // A destroyed browser is not a reason to accept nonsense: the whole argument
+    // check — the key whitelist AND the types — runs before the liveness check on
+    // both surfaces. The panel's channel used to stop at the whitelist, because
+    // its type checks lived inside `setViewport`, which the destroyed branch never
+    // reaches: `{visible:'no'}` was accepted in silence for the whole of a quit.
+    // Each surface keeps its own measured message.
+    await expect(f.call("beings:tool-browser-viewport", { visible: false, nope: 1 })).rejects.toThrow("浏览器显示参数无效。");
+    await expect(f.call("beings:tool-browser-viewport", { visible: "no" })).rejects.toThrow("浏览器显示选项无效。");
+    await expect(f.call("beings:tool-browser-viewport", { visible: true })).rejects.toThrow("浏览器显示区域格式无效。");
+    await expect(f.call("beings:tool-browser-viewport", { visible: true, bounds: { x: 0, y: 0, width: "640", height: 480 } })).rejects.toThrow("浏览器显示区域无效。");
     await expect(f.call("beings:tools-browser-view", { visible: "no" })).rejects.toThrow("浏览器显示参数无效。");
     expect(f.viewports).toEqual([]);
   });

@@ -96,7 +96,10 @@ function safeTitle(value: unknown, fallback: string): string {
   try { return fallback ? new URL(fallback).hostname : '新标签页'; } catch { return '新标签页'; }
 }
 
-function normalizeBounds(value: unknown): BrowserBounds {
+/** Exported for `beings:tool-browser-viewport`, which has to run exactly this
+ * check BEFORE it decides whether the browser is still there to run it: the
+ * destroyed branch answers without calling `setViewport` at all. IM, 2026-09-16. */
+export function normalizeBounds(value: unknown): BrowserBounds {
   const source = object(value, '浏览器显示区域') as Record<string, unknown>;
   const result: Record<string, number> = {};
   for (const key of ['x', 'y', 'width', 'height']) {
@@ -218,6 +221,23 @@ function pageOperation(token: string, operation: string, args: any): any {
   return {error:'invalid_operation'};
 }
 
+/** The two surfaces of this shell that can host the native view, and the one
+ * `setViewport` assumes when a caller names none.
+ *
+ * The names are internal keys, never user-facing and never on the wire; they
+ * exist so the two IPC handlers cannot drift into the same string, which would
+ * bring back exactly the bug the keying removes. IM, 2026-09-16. */
+export const VIEWPORT_SOURCES = {
+  /** The tool panel's browser pane — `beings:tools-browser-view`. */
+  toolsPane: 'tools-pane',
+  /** The standalone tool-browser panel — `beings:tool-browser-viewport`. */
+  toolBrowserPanel: 'tool-browser-panel',
+} as const;
+
+/** What a caller that names no surface speaks for: the single-surface case,
+ * which is 0.8.26's whole world and most of this repository's tests. */
+export const DEFAULT_VIEWPORT_SOURCE = 'panel';
+
 const OPERATION_ERRORS: Record<string, string> = {
   document_changed:'页面已变化，请重新读取后重试。',
   target_changed:'请求已过期：页面或操作目标已变化。',
@@ -235,6 +255,22 @@ export class DesktopBrowser {
   visible: boolean;
   bounds: BrowserBounds;
   attached: { tab: BrowserTab; window: BrowserHostWindow } | null;
+  /** What each surface that can host the native view last asked for.
+   *
+   * 0.8.26 had ONE such surface — the tool panel's browser pane, driven by
+   * `setBrowserView` (src/main.cjs line 1137) — so `visible`/`bounds` were simply
+   * whatever it last said. This shell has two: the tool panel's pane
+   * (`beings:tools-browser-view`) and the standalone tool-browser panel
+   * (`beings:tool-browser-viewport`), and since IM they share ONE browser. A
+   * panel that says `visible:false` is saying「不在我这儿」, not「谁都别显示」:
+   * `ToolsModel.browserView` computes `visible` as `open && mode==='browser' && …`
+   * (desktop/renderer/tools/models/tools.ts), so merely opening the tool panel on
+   * its console tab used to detach the page the OTHER panel was showing — and
+   * that panel's own dedupe cache still believed it was visible, so nothing ever
+   * asked for it back. Keyed per source, one surface can only speak for itself.
+   * IM, 2026-09-16.
+   */
+  viewports: Map<string, { visible: boolean; bounds: BrowserBounds }>;
   destroyed: boolean;
   session: BrowserSession;
   downloadHandler: BrowserDownloadListener;
@@ -249,6 +285,7 @@ export class DesktopBrowser {
     this.activeTabId = null;
     this.visible = false;
     this.bounds = {x:0, y:0, width:0, height:0};
+    this.viewports = new Map();
     this.attached = null;
     this.destroyed = false;
     this.session = session.fromPartition(BROWSER_PARTITION);
@@ -364,17 +401,46 @@ export class DesktopBrowser {
     return this.snapshot();
   }
 
-  setViewport(options: BrowserViewportOptions): BrowserSnapshot {
+  /** Place the native view for ONE surface, named by `source`.
+   *
+   * With a single source this is 0.8.26's `setViewport` unchanged, field for
+   * field: its rectangle is the browser's rectangle, its `visible` is the
+   * browser's `visible`, and hiding without bounds keeps the last rectangle. With
+   * two, each source speaks only for itself and the fold below decides — see
+   * `viewports`. */
+  setViewport(options: BrowserViewportOptions, source: string = DEFAULT_VIEWPORT_SOURCE): BrowserSnapshot {
     this._alive();
     object(options, '浏览器显示选项');
     if (typeof options.visible !== 'boolean') throw new TypeError('浏览器显示选项无效。');
-    const bounds = options.bounds === undefined && !options.visible ? this.bounds : normalizeBounds(options.bounds);
-    const changed = this.visible !== options.visible;
-    this.visible = options.visible;
-    this.bounds = bounds;
+    if (typeof source !== 'string' || !source) throw new TypeError('浏览器显示选项无效。');
+    const previous = this.viewports.get(source);
+    // 0.8.26's「hiding without bounds keeps the last rectangle」, now per source:
+    // the rectangle this surface last owned, or the browser's if it never spoke.
+    const bounds = options.bounds === undefined && !options.visible ? previous?.bounds ?? this.bounds : normalizeBounds(options.bounds);
+    // Re-inserted, so Map order is「最后说话的排在最后」and the fold can prefer
+    // the most recent surface that wants the view. Two panels open at once can
+    // only be resolved by a rule; this is the one that keeps a page on screen.
+    this.viewports.delete(source);
+    this.viewports.set(source, {visible: options.visible, bounds});
+    const changed = this._resolveViewport(bounds);
     this._syncView();
     if (changed) this._emit();
     return this.snapshot();
+  }
+
+  /** Fold every surface's request into the one rectangle the native view has.
+   * Returns whether the effective visibility flipped, which is what `_emit`
+   * announces — a bounds-only move is not a state change, as in 0.8.26. */
+  _resolveViewport(fallbackBounds: BrowserBounds): boolean {
+    let winner: { visible: boolean; bounds: BrowserBounds } | null = null;
+    for (const entry of this.viewports.values()) if (entry.visible) winner = entry;
+    const visible = winner !== null;
+    const changed = this.visible !== visible;
+    this.visible = visible;
+    // Nobody is showing it: keep the rectangle that was just written, which is
+    // what a lone source hiding itself did before this became source-keyed.
+    this.bounds = winner ? winner.bounds : fallbackBounds;
+    return changed;
   }
 
   async readPage(id: unknown, expectedRevision?: number): Promise<BrowserReadResult> {
@@ -440,6 +506,7 @@ export class DesktopBrowser {
     this.tabs.clear();
     this.activeTabId = null;
     this.visible = false;
+    this.viewports.clear();
     this.session.removeListener('will-download', this.downloadHandler);
     this.session.webRequest.onBeforeRequest(null);
   }

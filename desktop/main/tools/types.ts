@@ -77,8 +77,13 @@ export interface DesktopBrowserLike {
   /** Pin the native view to a rectangle of the window, or detach it. The panel
    * drives this over `beings:tools-browser-view`; no tool ever calls it, which is
    * why it was missing from the surface the migration unit wrote. I2,
-   * 2026-09-16. */
-  setViewport(options: { visible?: unknown; bounds?: unknown }): LiveBrowserSnapshot;
+   * 2026-09-16.
+   *
+   * `source` names WHICH panel is speaking. Two of them share one browser in this
+   * shell, and a panel reporting `visible:false` means「不在我这儿」rather than
+   *「谁都别显示」; leaving it out is the single-surface case, which is 0.8.26's.
+   * IM, 2026-09-16. */
+  setViewport(options: { visible?: unknown; bounds?: unknown }, source?: string): LiveBrowserSnapshot;
   /** True once `destroy()` has run. Every other method on this surface throws
    *「浏览器已经关闭。」afterwards (browser.ts `_alive`), which is right for a
    * tool call and wrong for the two viewport channels: those are on
