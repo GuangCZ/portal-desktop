@@ -72,12 +72,13 @@
 
 | 模块 | 状态 |
 | --- | --- |
-| desktop-terminal.cjs → tools/terminal/terminal.ts | 未开始 |
-| tools/terminal/types.ts (PtyLike / PtyFactory) | 未开始 |
+| desktop-terminal.cjs → tools/terminal/terminal.ts | 测试通过（18/18） |
+| tools/terminal/types.ts (PtyLike / PtyFactory) | 已移植 |
+| tools/terminal/platform.ts (platform.cjs + consoleEnvironment) | 已移植 |
 | desktop-browser.cjs → tools/browser/browser.ts | 未开始 |
 | tools/browser/host.ts (ElectronBrowserHost) | 未开始 |
 | tools/browser/electron-host.ts | 未开始 |
-| tests/tools-terminal-terminal.test.ts | 未开始 |
+| tests/tools-terminal-terminal.test.ts | 测试通过（18 条，与原文件一一对应） |
 | tests/tools-browser-browser.test.ts | 未开始 |
 
 ### src/platform.cjs（33 行，terminal 的依赖）
