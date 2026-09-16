@@ -1,423 +1,311 @@
-// SKIPPED — see the skip block below: this script drives the retired
-// `beings://chat` iframe (removed 2026-09-16, MIGRATION.md "P1 完成状态").
-// Runs the packaged Electron app against a local HTTP + WSS fixture and the real Rust engine.
-// Never sends a chat or executes a tool against a real Being.
-import { launchDesktop } from './support/electron-lifecycle.mjs';
-import { WebSocketServer } from 'ws';
+// What the packaged client puts on the wire when a person says one sentence.
+//
+// REWRITTEN 2026-09-16 (integration unit I5), per integration-plan.md §6.1. The
+// previous script drove the conversation through `page.frameLocator('#chat-frame')`
+// — the sandboxed `beings://chat` document the native React conversation replaced —
+// and had been printing a skip ever since that document was removed.
+//
+// The subject is narrower than the old script's and deliberately so: this is the
+// conversation's own protocol contract, asserted against the packaged
+// application rather than against a module. Everything it checks is something a
+// unit test cannot see, because it only becomes true once the main process, the
+// preload bridge and the React page are the real ones:
+//
+//   * the request-context frame is built in the main process at send time and
+//     wraps the human's text on the wire (main/chat/prepare-message.ts), while
+//     the row this machine keeps is unframed (main/chat/store.ts);
+//   * the body carries `scene_id`, `scene_meta.scene_label` and `client_ref`;
+//   * `GET /api/history` is read exactly once as the baseline, not per render;
+//   * stopping reaches `POST /api/stop`;
+//   * the conversation survives a restart, through the encrypted cache and the
+//     scene the Being stored.
+//
+// Kits, the tool bridge and orchestration are out of scope here — tools-e2e.mjs
+// and orchestration-e2e.mjs own those. The relay fixture exists only so the
+// bridge reaches its normal connected state; nothing is asserted through it.
+//
+// Fixtures only: a local HTTP + WS server on 127.0.0.1 standing in for a Being.
+// No real Being, no real credentials, no message ever leaves this machine.
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
-import { desktopExecutable, backgroundCoverage, waitForChatReady, clickChatControl, clickWhenPointerReady } from './support/desktop.mjs';
-import { c as archive } from 'tar';
+import { WebSocketServer } from 'ws';
+import { launchDesktop } from './support/electron-lifecycle.mjs';
+import { desktopExecutable } from './support/desktop.mjs';
 
-// SKIPPED since 2026-09-16. This script drives the conversation through
-// `page.frameLocator('#chat-frame')` — the sandboxed `beings://chat` document
-// that the native React conversation replaced (MIGRATION.md, "P1 完成状态").
-// The iframe, its request proxy and its generated assets are gone, so every
-// locator below addresses nothing. Rewriting it against the native
-// conversation's own DOM is P2 work; until then it reports a skip rather than
-// a failure, so `npm run test:all` stays readable.
-console.log('SKIPPED: tests/electron-smoke.mjs drives the retired beings://chat iframe. Rewrite against the native conversation (MIGRATION.md, P1).');
-process.exit(0);
+let executablePath;
+try {
+  executablePath = await desktopExecutable();
+} catch (error) {
+  // A step that ran nothing is not a step that passed (scripts/test-all.mjs).
+  console.log(`SKIPPED: ${error.message}`);
+  process.exit(0);
+}
 
+const TOKEN = 'local-fixture-token';
+const PREFIX = '[Being Desktop request context v1; length=';
+const SUFFIX = '\n[/Being Desktop request context v1]\n\n';
+const FIRST = '在吗';
+const SECOND = 'test-stop';
 
-const executablePath = await desktopExecutable();
-const background = backgroundCoverage();
-if (!background.enabled) console.log('SKIP: ' + background.reason);
+const dir = await mkdtemp(path.join(tmpdir(), 'beings-smoke-'));
+const profile = path.join(dir, 'profile');
+const checks = [];
+const check = (name, condition) => {
+  assert.equal(condition, true, name);
+  checks.push(name);
+  process.stdout.write(`${name}: passed\n`);
+};
 
-const dir = await mkdtemp(path.join(tmpdir(), 'beings-e2e-'));
-const token = 'local-fixture-token';
-const messages = [{ seq: 1, role: 'being', content: '你好，我在这里。我们可以从一个想法开始。', at: new Date().toISOString() }];
-let seq = 2, rpcID = 0, relay = null, chatBody = null, stopCount = 0, handshakeCount = 0;
-const pending = new Map();
-const rpc = (method, params = {}) => new Promise((resolve, reject) => {
-  const id = ++rpcID;
-  const timer = setTimeout(() => { pending.delete(id); reject(new Error(`RPC timed out: ${method}`)); }, 8000);
-  pending.set(id, { resolve, reject, timer });
-  relay.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
-});
+/** The frame's own reader, kept independent of the implementation on purpose: if
+ * main/chat/frame.ts and this diverge, the fixture is what a Being would see.
+ * The declared length is the authority, exactly as `unwrapMessage` treats it. */
+function unwrap(text) {
+  if (typeof text !== 'string' || !text.startsWith(PREFIX)) return null;
+  const header = /^\[Being Desktop request context v1; length=(\d{1,6})\]\n/.exec(text);
+  if (!header) return null;
+  const declared = Number(header[1]);
+  const end = header[0].length + declared;
+  if (text.slice(end, end + SUFFIX.length) !== SUFFIX) return null;
+  return { declared, context: text.slice(header[0].length, end), body: text.slice(end + SUFFIX.length) };
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+/** Wait for a fixture-side condition the page gives no signal for. */
+async function until(what, predicate, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await sleep(100);
+  }
+  throw new Error(`Timed out waiting for: ${what}`);
+}
+
+// ── the Being fixture ───────────────────────────────────────────────────────
+const history = [];
+let seq = 1;
+let historyReads = 0;
+let stopPosts = 0;
+const sends = [];
+let holdOpen = null;
+
 const server = createServer(async (request, response) => {
-  const url = new URL(request.url, 'http://localhost');
-  const json = (data, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data)); };
-  if (url.searchParams.get('token') !== token) return json({ error: 'unauthorized' }, 401);
-  if (url.pathname.endsWith('/api/status')) return json({ being_name: 'Willow', description: '在这里，陪你把想法变成现实。' });
-  if (url.pathname.endsWith('/health')) return json({ status: 'ok', commit: 'test' });
-  if (url.pathname.endsWith('/api/history')) return json({ messages });
+  const url = new URL(request.url, 'http://127.0.0.1');
+  const json = (data, status = 200) => {
+    response.writeHead(status, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify(data));
+  };
+  if (url.searchParams.get('token') !== TOKEN) return json({ error: 'unauthorized' }, 401);
+  if (url.pathname.endsWith('/api/status')) return json({ being_name: 'Willow', description: '夹具 Being' });
+  if (url.pathname.endsWith('/health')) return json({ status: 'ok', commit: 'fixture' });
+  if (url.pathname.endsWith('/api/history')) { historyReads++; return json({ messages: history }); }
   if (url.pathname.endsWith('/api/stream/active')) { response.writeHead(204); response.end(); return; }
-  if (url.pathname.endsWith('/api/stop')) { stopCount++; return json({ ok: true }); }
-  if (url.pathname.endsWith('/api/llm/config')) {
-    assert.equal(request.headers['x-relay-secret'], token);
-    return json({ model: 'test-model', provider: 'test', presets: [] });
+  if (url.pathname.endsWith('/api/stop')) {
+    stopPosts++;
+    // A real Being ends the breath it was holding; without this the client waits
+    // for the stream it just asked to stop.
+    if (holdOpen) { holdOpen(); holdOpen = null; }
+    return json({ ok: true });
   }
   if (url.pathname.endsWith('/api/chat/stream')) {
-    let body = ''; for await (const chunk of request) body += chunk;
-    chatBody = JSON.parse(body);
-    messages.push({ seq: seq++, role: 'user', content: chatBody.message, at: new Date().toISOString() });
+    let raw = '';
+    for await (const chunk of request) raw += chunk;
+    const body = JSON.parse(raw);
+    sends.push(body);
+    // The Being stores what it received, frame and all: `GET /api/history`
+    // returning the framed text verbatim is what makes unframing on ingest the
+    // client's job (main/chat/frame.ts's opening comment).
+    history.push({ seq: seq++, role: 'user', content: body.message, at: new Date().toISOString(), scene_id: body.scene_id });
     response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
     const event = (name, data) => response.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
-    event('meta', { stream_id: 'fixture-stream' });
-    event('content_block_delta', { delta: { text: '正在整理你的想法。' } });
-    await new Promise(resolve => setTimeout(resolve, 350));
-    if (chatBody.message === 'test-stop') {
-      event('thinking', { text: '测试停止中的任务' });
-      const timer = setTimeout(() => { event('message_stop', {}); response.end(); }, 8000);
-      response.on('close', () => clearTimeout(timer)); return;
+    event('meta', { stream_id: `fixture-${sends.length}`, client_ref: body.client_ref });
+    const spoken = unwrap(body.message)?.body ?? body.message;
+    if (spoken === SECOND) {
+      // Held open so the stop button has something to stop. `/api/stop` ends it.
+      event('content_block_delta', { delta: { text: '让我想想' } });
+      await new Promise(resolve => {
+        holdOpen = resolve;
+        const timer = setTimeout(resolve, 20000);
+        response.on('close', () => { clearTimeout(timer); resolve(); });
+      });
+      event('message_stop', {});
+      response.end();
+      return;
     }
-    event('tool_use', { name: 'portal_file_write', input: { path: 'hello.txt', content: '来自 Being 的问候' } });
-    const result = await rpc('tools/call', { name: 'portal_file_write', arguments: { path: 'hello.txt', content: '来自 Being 的问候' } });
-    event('tool_result', { name: 'portal_file_write', content: result, is_error: false });
-    event('content_block_delta', { delta: { text: '\n\n已在工作目录创建 **hello.txt**，本机 Portal 已完成操作。' } });
-    messages.push({ seq: seq++, role: 'being', content: '正在整理你的想法。\n\n已在工作目录创建 **hello.txt**，本机 Portal 已完成操作。', at: new Date().toISOString() });
-    event('message_stop', { session_id: 'fixture-session' }); response.end(); return;
+    const reply = '我在。';
+    // Slow enough that the streaming row is observable, short enough that the
+    // script is not waiting on a clock.
+    event('content_block_delta', { delta: { text: reply.slice(0, 1) } });
+    await new Promise(resolve => setTimeout(resolve, 900));
+    event('content_block_delta', { delta: { text: reply.slice(1) } });
+    history.push({ seq: seq++, role: 'being', content: reply, at: new Date().toISOString(), scene_id: body.scene_id });
+    event('message_stop', { session_id: 'fixture-session' });
+    response.end();
+    return;
   }
   json({ error: 'not found' }, 404);
 });
+
+// The reverse-MCP relay. Present so the tool bridge reaches its normal state;
+// this script asserts nothing through it.
 const wss = new WebSocketServer({ server, path: '/_relay' });
 wss.on('connection', socket => {
   let ready = false;
   socket.on('message', data => {
-    const msg = JSON.parse(data.toString());
+    let message;
+    try { message = JSON.parse(data.toString()); } catch { return; }
     if (!ready) {
-      assert.equal(msg.loom_token, token); assert.equal(msg.being_id, 'willow');
-      socket.send(JSON.stringify({ ok: true, being_id: 'willow', relay_keepalive: 'text-v1' }));
-      relay = socket; ready = true; handshakeCount++; return;
+      socket.send(JSON.stringify({ ok: true, being_id: message.being_id, relay_keepalive: 'text-v1' }));
+      ready = true;
+      return;
     }
-    if (msg.type === 'keepalive') { socket.send(JSON.stringify({ type: 'keepalive_ack' })); return; }
-    const entry = pending.get(msg.id);
-    if (entry) { pending.delete(msg.id); clearTimeout(entry.timer); msg.error ? entry.reject(new Error(JSON.stringify(msg.error))) : entry.resolve(msg.result); }
+    if (message.type === 'keepalive') socket.send(JSON.stringify({ type: 'keepalive_ack' }));
   });
 });
+
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const port = server.address().port;
-let app;
-let pid;
-let backgroundTest = false;
+const link = `http://127.0.0.1:${port}/willow/?token=${TOKEN}`;
+
+let app = null;
 let cleanupPromise;
-let traceContext;
-async function saveTrace() {
-  if (!traceContext) return;
-  const context = traceContext; traceContext = null;
-  await mkdir('test-results', { recursive: true });
-  await context.tracing.stop({ path: 'test-results/desktop-trace.zip' });
-}
-async function openOptions(page) {
-  const options = page.locator('#conversation-options');
-  if (await page.locator('#options-trigger').getAttribute('aria-expanded') !== 'true') await clickWhenPointerReady(page, options.locator('summary'));
-  await page.waitForFunction(() => document.querySelector('#options-trigger').getAttribute('aria-expanded') === 'true');
-  await options.locator('.options-menu').evaluate(async element => {
-    await Promise.all(element.getAnimations().map(animation => animation.finished.catch(() => {})));
-  });
-  return options;
-}
-async function openClientSettings(page) {
-  const options = await openOptions(page);
-  await clickWhenPointerReady(page, options.locator('#client-settings-button'));
-  await page.locator('#client-settings-dialog').waitFor({ state: 'visible' });
-}
-async function openChatSearch(page) {
-  const toggle = page.locator('#toggle-chat-search');
-  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await (await openOptions(page)).locator('#toggle-chat-search').click();
-}
-async function openPlace(page, view) {
-  if (view === 'chat') { await page.locator('#back-to-chat').click(); return; }
-  if (view === 'portal') { await openClientSettings(page); await page.locator('#client-settings-dialog [data-view="portal"]').click(); }
-  else await (await openOptions(page)).locator(`[data-view="${view}"]`).click();
-}
 function cleanup() {
   return cleanupPromise ??= (async () => {
-    await saveTrace().catch(() => {});
     if (app) await app.close().catch(() => {});
-    if (backgroundTest) {
-      const label = 'town.beings.desktop.portal.' + createHash('sha256').update(path.join(dir, 'profile')).digest('hex').slice(0, 16);
-      const run = promisify(execFile);
-      await run('/bin/launchctl', ['bootout', `gui/${process.getuid()}/${label}`]).catch(() => {});
-      await rm(path.join(homedir(), 'Library/LaunchAgents', label + '.plist'), { force: true });
-      await run('/bin/launchctl', ['enable', `gui/${process.getuid()}/${label}`]).catch(() => {});
-    }
+    if (holdOpen) { holdOpen(); holdOpen = null; }
     for (const client of wss.clients) client.terminate();
-    wss.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+    wss.close();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
     await rm(dir, { recursive: true, force: true });
   })();
 }
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
   process.once(signal, () => { void cleanup().finally(() => process.exit(code)); });
 }
-try {
-  app = await launchDesktop({ executablePath, env: { ...process.env, PORTAL_DESKTOP_USER_DATA: path.join(dir, 'profile') } });
-  const page = await app.firstWindow();
-  traceContext = app.context();
-  await traceContext.tracing.start({ screenshots: true, snapshots: true });
-  const errors = []; page.on('pageerror', error => errors.push(error.message));
-  await page.getByRole('button', { name: '连接我的 Being' }).click();
-  await page.locator('#connection-link').fill(`http://127.0.0.1:${port}/willow/?token=${token}`);
-  await page.locator('#portal-name-input').fill('react-smoke');
-  await page.locator('#workspace-input').fill(path.join(dir, '工作目录'));
-  await page.locator('#background-input').uncheck();
-  await page.getByRole('button', { name: '保存、连接并启动' }).click();
-  await page.waitForFunction(() => !document.querySelector('#settings-dialog').open, { timeout: 15000 });
-  const frame = page.frameLocator('#chat-frame');
-  await frame.getByText('你好，我在这里。我们可以从一个想法开始。').waitFor();
-  const childFrame = page.frames().find(frame => frame.url().startsWith('beings://chat'));
-  assert.equal(await childFrame.evaluate(() => typeof window.beings), 'undefined');
-  assert.equal(await childFrame.evaluate(() => typeof require), 'undefined');
-  assert.equal(await childFrame.evaluate(() => document.documentElement.outerHTML.includes('local-fixture-token')), false);
-  assert.equal(await childFrame.evaluate(async () => (await fetch('/api/exec')).status), 404);
-  // Load a real local stdio Kit through the same Portal configuration the client imports.
-  const kitDir = path.join(dir, 'kits/desktop-fixture'); await mkdir(kitDir, { recursive: true });
-  await writeFile(path.join(kitDir, 'manifest.json'), JSON.stringify({ name: 'desktop-fixture', version: '1.0.0', command: [process.execPath, 'server.mjs'], tools: [{ name: 'ping', description: 'Fixture ping', params: { type: 'object', properties: { value: { type: 'string' } } } }] }));
-  await writeFile(path.join(kitDir, 'server.mjs'), `import readline from 'node:readline';
-readline.createInterface({ input: process.stdin }).on('line', line => {
- const request = JSON.parse(line); if (request.id == null) return;
- const result = request.method === 'initialize' ? { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1' } } : request.method === 'tools/list' ? { tools: [{ name: 'ping', description: 'Fixture ping', inputSchema: { type: 'object' } }] } : { content: [{ type: 'text', text: 'Kit reply: ' + request.params.arguments.value }] };
- process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + String.fromCharCode(10));
-});`);
-  const importedConfig = path.join(dir, 'portal.toml');
-  await writeFile(importedConfig, `workspace = ${JSON.stringify(path.join(dir, '工作目录'))}\nkits_dir = ${JSON.stringify(path.join(dir, 'kits'))}\nkits_enabled = true\n[tools]\nexec = false\nscreenshot = false\n`);
-  await page.evaluate(async config => { const { settings } = await window.beings.snapshot(); await window.beings.save({ ...settings, portalConfigPath: config, kitsEnabled: true }); }, importedConfig);
-  await openPlace(page, 'portal');
-  await page.waitForFunction(() => document.querySelector('#portal-phase').textContent === '已连接', { timeout: 20000 });
-  pid = (await page.evaluate(() => window.beings.snapshot())).portal.pid;
-  const list = await rpc('tools/list');
-  assert(list.tools.some(tool => tool.name === 'portal_file_write'));
-  assert(list.tools.some(tool => tool.name === 'desktop_fixture_ping'));
-  const kitReply = await rpc('tools/call', { name: 'desktop_fixture_ping', arguments: { value: 'connected' } });
-  assert(JSON.stringify(kitReply).includes('Kit reply: connected'));
-  // Install a second real Kit through the client's Grove download IPC. Portal
-  // owns discovery and hot reload, so the connection must remain uninterrupted.
-  const downloadedSource = path.join(dir, 'download-source'); await mkdir(downloadedSource);
-  await writeFile(path.join(downloadedSource, 'manifest.json'), JSON.stringify({ name: 'client-download', version: '1.0', command: [process.execPath, 'server.mjs'], tools: [{ name: 'ping', description: 'Downloaded fixture ping' }] }));
-  await writeFile(path.join(downloadedSource, 'server.mjs'), await readFile(path.join(kitDir, 'server.mjs')));
-  const downloadedArchive = path.join(dir, 'download.tar.gz'); await archive({ gzip: true, cwd: downloadedSource, file: downloadedArchive }, ['manifest.json', 'server.mjs']);
-  await app.evaluate(({ protocol }, bundle) => {
-    protocol.handle('https', request => new URL(request.url).pathname === '/api/grove/download-fixture/download'
-      ? new Response(Uint8Array.from(atob(bundle), c => c.charCodeAt(0)), { headers: { 'Content-Type': 'application/gzip' } }) : new URL(request.url).pathname === '/api/grove/download-fixture' ? Response.json({ name: 'client-download', version: '1.0', manifest: {} }) : new Response('fixture only', { status: 404 }));
-  }, (await readFile(downloadedArchive)).toString('base64'));
-  const installed = await page.evaluate(async () => {
-    const plan = await window.beings.prepareKit('download-fixture');
-    return window.beings.installKit({ ticket: plan.ticket, environment: {} });
-  });
-  assert.equal(installed.name, 'client-download');
-  const beforeKitReload = handshakeCount, kitDeadline = Date.now() + 15000;
-  let reloadedTools;
-  while (Date.now() < kitDeadline) {
-    reloadedTools = await rpc('tools/list');
-    if (reloadedTools.tools.some(tool => tool.name === 'client_download_ping')) break;
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-  assert(reloadedTools.tools.some(tool => tool.name === 'client_download_ping'));
-  assert.equal(handshakeCount, beforeKitReload, 'Kit hot reload must not reconnect Portal');
-  const downloadReply = await rpc('tools/call', { name: 'client_download_ping', arguments: { value: 'installed via client' } });
-  assert(JSON.stringify(downloadReply).includes('Kit reply: installed via client'));
-  console.log('PASS: client download, atomic installation, Portal hot reload and real downloaded Kit tool call without reconnecting.');
-  const rejected = await rpc('tools/call', { name: 'portal_file_write', arguments: { path: '../outside.txt', content: 'no' } });
-  assert(rejected.isError || JSON.stringify(rejected).includes('outside workspace'));
-  await openPlace(page, 'chat');
-  await frame.locator('#file-input').setInputFiles({ name: 'note.txt', mimeType: 'text/plain', buffer: Buffer.from('attachment fixture') });
-  await frame.locator('#pending-files.active').waitFor();
-  await frame.locator('#input').fill('请帮我写一份问候。');
-  await frame.locator('#send-btn').dispatchEvent('click');
-  await frame.getByText('本机 Portal 已完成操作。', { exact: false }).waitFor();
-  assert.equal(chatBody.attachments[0].data, Buffer.from('attachment fixture').toString('base64'));
-  assert.equal(await readFile(path.join(dir, '工作目录/hello.txt'), 'utf8'), '来自 Being 的问候');
-  // Tick navigation previews and jumps within the frame; sidebar search shares the same targets.
-  await frame.locator('.chat-index-tick').first().waitFor();
-  const appendHistory = (role, content) => messages.push({ indexOnly: true, seq: seq++, role, content, at: new Date().toISOString() });
-  for (let i = 0; i < 10; i++) {
-    appendHistory('user', `历史提问 ${i + 1}：讨论客户端的界面和工具`);
-    appendHistory('being', '这是一条用于验证快速索引的历史回复。');
-  }
-  appendHistory('user', '第一项：核对客户端界面');
-  appendHistory('being', Array.from({ length: 35 }, (_, i) => `段落 ${i + 1}：这是一段用于验证定位的长回复。`).join('\n\n'));
-  appendHistory('user', '第二项：核对 Portal 配置');
-  appendHistory('being', '配置检查完成。');
-  // Feed real history through the API instead of calling retired DOM globals.
-  await childFrame.goto(childFrame.url());
-  await childFrame.waitForFunction(() => document.querySelectorAll('.chat-index-tick').length === 13);
-  await frame.locator('#input').fill('索引跳转保留的草稿');
-  const firstTick = frame.getByRole('button', { name: /跳转到提问.*第一项/ });
-  await firstTick.hover();
-  await frame.locator('#chat-index-preview').waitFor();
-  assert((await frame.locator('#chat-index-preview').textContent()).includes('段落 1'));
-  await mkdir('test-results', { recursive: true });
-  await page.screenshot({ path: 'test-results/chat-index-preview.png' });
-  await firstTick.click();
-  await childFrame.waitForFunction(() => {
-    const el = document.querySelector('.index-target');
-    return el && Math.abs(el.getBoundingClientRect().top - document.querySelector('#messages').getBoundingClientRect().top - 24) < 2;
-  });
-  assert.equal(await frame.locator('#input').inputValue(), '索引跳转保留的草稿');
-  const readingPosition = await childFrame.evaluate(() => document.querySelector('#messages').scrollTop);
-  appendHistory('being', '索引浏览时收到新回复。');
-  await page.waitForTimeout(1600); // Pass the attention-refresh debounce.
-  await childFrame.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await frame.getByText('索引浏览时收到新回复。', { exact: true }).waitFor();
-  await page.waitForTimeout(100);
-  assert.equal(await childFrame.evaluate(() => document.querySelector('#messages').scrollTop), readingPosition);
-  await openChatSearch(page);
-  await page.locator('#chat-search-input').fill('第一项');
-  await page.locator('.chat-search-result').waitFor();
-  assert.equal(await page.locator('.chat-search-result').count(), 1);
-  await page.locator('#chat-search-panel').evaluate(async el => { await Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {}))); });
-  await page.screenshot({ path: 'test-results/chat-search.png' });
-  await page.locator('.chat-search-result').click();
-  assert.equal(await frame.locator('#input').inputValue(), '索引跳转保留的草稿');
-  await openChatSearch(page);
-  await page.locator('#chat-search-input').fill('不存在的提问');
-  assert.equal(await page.locator('#chat-search-status').textContent(), '没有匹配的提问');
-  await page.locator('#chat-search-input').fill('第一项');
-  await page.evaluate(() => window.postMessage({ type: 'beings:search-index', entries: [{ id: 'turn-1', text: '伪造目录' }] }, '*'));
-  assert.equal(await page.locator('.chat-search-result').count(), 1);
-  await page.locator('#chat-search-input').press('Escape');
-  assert.equal(await page.locator('#toggle-chat-search').getAttribute('aria-expanded'), 'false');
-  assert.equal(await page.locator('#chat-search-panel').evaluate(el => el.open), false);
-  await clickChatControl(page, '#chat-index-latest');
-  await childFrame.waitForFunction(() => {
-    const messages = document.querySelector('#messages');
-    return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 2;
-  });
-  await childFrame.waitForFunction(() => document.querySelector('.chat-index-tick[aria-current="location"]')?.getAttribute('aria-label').includes('第二项'));
-  await frame.locator('#input').fill('');
-  console.log('PASS: tick previews/jump, sidebar search, scroll tracking, draft preservation and streaming scroll lock.');
-  await mkdir('test-results', { recursive: true });
-  await page.screenshot({ path: 'test-results/chat.png' });
-  // Model settings and the compact options menu preserve the draft.
-  await openClientSettings(page);
-  await page.locator('[data-chat-action="model"]').click();
-  await frame.locator('#settings-panel.active').waitFor();
-  await frame.locator('#settings-panel .btn-close').dispatchEvent('click');
-  await frame.locator('#settings-panel.active').waitFor({ state: 'hidden' });
-  await frame.locator('#input').fill('unsent draft');
-  const options = await openOptions(page);
-  assert.equal(await options.getAttribute('open'), '');
-  assert.equal(await frame.locator('#input').inputValue(), 'unsent draft');
-  await options.locator('summary').click();
-  assert.equal(await frame.locator('#input').inputValue(), 'unsent draft');
-  // Repeat the native dialog/menu transition that used to drop Intel CI input.
-  for (let round = 0; round < 3; round++) {
-    await openClientSettings(page);
-    await page.locator('#close-client-settings').click();
-    await page.locator('#client-settings-dialog').waitFor({ state: 'hidden' });
-  }
-  await openClientSettings(page);
-  await page.locator('#settings-tab-appearance').click();
-  await page.locator('#theme-toggle').click();
-  await page.locator('#close-client-settings').click();
-  await childFrame.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
-  assert.equal(await app.evaluate(({ nativeTheme }) => nativeTheme.themeSource), 'dark');
-  await page.screenshot({ path: 'test-results/chat-dark.png' });
-  await firstTick.hover();
-  await page.screenshot({ path: 'test-results/chat-index-dark.png' });
 
-  // Stream cancellation goes all the way from the local Loom frame to /api/stop.
-  await frame.locator('#input').fill('test-stop'); await frame.locator('#send-btn').dispatchEvent('click');
-  await frame.locator('.run-activity.running .run-stop').waitFor();
-  await frame.locator('.run-activity.running .run-stop').click();
-  await page.waitForTimeout(300); assert.equal(stopCount, 1);
-  await openPlace(page, 'portal');
-  const beforeRestart = handshakeCount;
-  await rpc('tools/call', { name: 'portal_restart', arguments: {} });
-  await page.waitForTimeout(5500);
-  await page.waitForFunction(() => document.querySelector('#portal-phase').textContent === '已连接', { timeout: 15000 });
-  assert(handshakeCount > beforeRestart);
-  pid = (await page.evaluate(() => window.beings.snapshot())).portal.pid;
-  await page.screenshot({ path: 'test-results/portal.png' });
-  const saved = await readFile(path.join(dir, 'profile/connection.json'), 'utf8'); assert(!saved.includes(token));
-  assert.equal(errors.length, 0, errors.join('\n'));
-  await saveTrace();
-  await app.close(); app = null;
-  assert.throws(() => process.kill(pid, 0), /ESRCH/);
-  // Retire the index fixture from the server; synchronized local history should
-  // remain available after restart even when absent from the latest response.
-  for (let i = messages.length - 1; i >= 0; i--) if (messages[i].indexOnly) messages.splice(i, 1);
-  // Reload encrypted settings from disk, without asking for the token again.
-  app = await launchDesktop({ executablePath, env: { ...process.env, PORTAL_DESKTOP_USER_DATA: path.join(dir, 'profile') } });
-  const restored = await app.firstWindow();
-  await waitForChatReady(restored);
-  await restored.frameLocator('#chat-frame').getByText('本机 Portal 已完成操作。', { exact: false }).waitFor();
-  await restored.frameLocator('#chat-frame').getByRole('button', { name: /跳转到提问.*请帮我写一份问候/ }).waitFor();
-  assert.equal(await restored.frameLocator('#chat-frame').getByRole('button', { name: /跳转到提问.*第一项/ }).count(), 1, 'Restart preserves cached history absent from the latest server response');
-  assert.equal((await restored.evaluate(() => window.beings.snapshot())).settings.hasToken, true);
-  assert.equal(await restored.evaluate(() => window.beings.appearance()), 'dark');
-  if (background.enabled) {
-    backgroundTest = true;
-    const beforeBackground = handshakeCount;
-    await restored.evaluate(async () => { const { settings } = await window.beings.snapshot(); await window.beings.save({ ...settings, backgroundEnabled: true }); });
-    await restored.waitForFunction(() => document.querySelector('#portal-phase').textContent === '已连接', { timeout: 25000 });
-    const backgroundSnapshot = await restored.evaluate(() => window.beings.snapshot());
-    assert.equal(backgroundSnapshot.background.enabled, true);
-    pid = backgroundSnapshot.portal.pid;
-    assert(handshakeCount > beforeBackground);
-    await app.close(); app = null;
-    process.kill(pid, 0);
-    // The client is gone: the same Rust engine still accepts real tool calls.
-    const afterQuit = await rpc('tools/call', { name: 'portal_file_write', arguments: { path: 'after-quit.txt', content: 'background still connected' } });
-    assert(!afterQuit.isError);
-    assert.equal(await readFile(path.join(dir, '工作目录/after-quit.txt'), 'utf8'), 'background still connected');
-    const beforeCrash = handshakeCount;
-    process.kill(pid, 'SIGKILL');
-    const deadline = Date.now() + 25000;
-    while (handshakeCount === beforeCrash && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 250));
-    assert(handshakeCount > beforeCrash, 'launchd must restart the crashed Portal while the client is closed');
-    assert((await rpc('tools/list')).tools.some(tool => tool.name === 'portal_file_write'));
-    // Reload the login registration with no Electron process, as launchd does at login.
-    const serviceRecord = JSON.parse(await readFile(path.join(dir, 'profile/portal-service.json'), 'utf8'));
-    const runSystem = promisify(execFile);
-    const definition = JSON.parse((await runSystem('/usr/bin/plutil', ['-convert', 'json', '-o', '-', serviceRecord.file])).stdout);
-    assert.equal(definition.RunAtLoad, true); assert.equal(definition.KeepAlive, true);
-    assert(!JSON.stringify(definition).includes(token));
-    await runSystem('/bin/launchctl', ['bootout', `gui/${process.getuid()}/${serviceRecord.label}`]);
-    const beforeLogin = handshakeCount;
-    for (let attempt = 0; ; attempt++) {
-      try { await runSystem('/bin/launchctl', ['bootstrap', `gui/${process.getuid()}`, serviceRecord.file]); break; }
-      catch (error) { if (attempt >= 19 || error.code !== 5) throw error; await new Promise(resolve => setTimeout(resolve, 500)); }
-    }
-    const loginDeadline = Date.now() + 20000;
-    while (handshakeCount === beforeLogin && Date.now() < loginDeadline) await new Promise(resolve => setTimeout(resolve, 250));
-    assert(handshakeCount > beforeLogin, 'loading the saved login registration must connect without launching the client');
-    app = await launchDesktop({ executablePath, env: { ...process.env, PORTAL_DESKTOP_USER_DATA: path.join(dir, 'profile') } });
-    const reopened = await app.firstWindow();
-    await reopened.waitForFunction(() => document.querySelector('#portal-phase').textContent === '已连接', { timeout: 15000 });
-    const reattached = await reopened.evaluate(() => window.beings.snapshot());
-    assert.notEqual(reattached.portal.pid, pid);
-    pid = reattached.portal.pid;
-    await openPlace(reopened, 'portal');
-    await reopened.screenshot({ path: 'test-results/background-portal.png' });
-    await reopened.locator('#portal-settings').click();
-    assert.equal(await reopened.locator('#background-input').isChecked(), true);
-    assert.equal(await reopened.locator('#autostart-input').isDisabled(), true);
-    await reopened.screenshot({ path: 'test-results/background-settings.png' });
-    await reopened.locator('#close-settings').click();
-    const stableHandshakes = handshakeCount;
-    await reopened.waitForTimeout(1000); assert.equal(handshakeCount, stableHandshakes, 'reopening must not restart the existing background service');
-    pid = (await reopened.evaluate(() => window.beings.snapshot())).portal.pid;
-    assert((await rpc('tools/list')).tools.some(tool => tool.name === 'client_download_ping'));
-    await reopened.evaluate(() => window.beings.stopPortal());
-    const stopped = await reopened.evaluate(() => window.beings.snapshot());
-    assert.equal(stopped.background.enabled, false); assert.equal(stopped.settings.backgroundEnabled, false);
-    await reopened.waitForTimeout(1000); assert.throws(() => process.kill(pid, 0), /ESRCH/);
-    await app.close(); app = null;
-    app = await launchDesktop({ executablePath, env: { ...process.env, PORTAL_DESKTOP_USER_DATA: path.join(dir, 'profile') } });
-    const disabledWindow = await app.firstWindow();
-    await disabledWindow.waitForFunction(() => document.querySelector('#conversation-name').textContent === 'willow');
-    assert.equal((await disabledWindow.evaluate(() => window.beings.snapshot())).background.enabled, false);
-    assert.throws(() => process.kill(pid, 0), /ESRCH/);
-    console.log('PASS: real LaunchAgent install, tool call after client quit, SIGKILL recovery, login registration reload without client, reattach without restart, stop disables login startup across client restarts.');
-  }
-  console.log('PASS: packaged app, encrypted persistence, local chat, attachment + SSE, real Rust Relay/tool call + stdio Kit, workspace boundary, stop, restart, process cleanup.');
+const launch = () => launchDesktop({
+  executablePath,
+  env: { ...process.env, PORTAL_DESKTOP_USER_DATA: profile, PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN: '1' },
+});
+
+try {
+  // ── 1-2. the packaged client opens, unconnected ───────────────────────────
+  app = await launch();
+  let page = await app.firstWindow();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.locator('#connect-button').waitFor();
+  check('the packaged client opens on the welcome screen with no conversation',
+    (await page.locator('.chat-native').count()) === 0);
+
+  // ── 3. connect to the fixture through the real dialog ─────────────────────
+  await page.locator('#connect-button').click();
+  await page.locator('#settings-dialog').waitFor({ state: 'visible' });
+  await page.locator('#connection-link').fill(link);
+  await page.locator('#portal-name-input').fill('smoke-portal');
+  await page.locator('#workspace-input').fill(path.join(dir, 'workspace'));
+  // No engine is started: this script is about the conversation, and the
+  // packaged stub Portal would only add a failure mode of its own.
+  if (await page.locator('#background-input').isEnabled()) await page.locator('#background-input').uncheck();
+  await page.locator('#autostart-input').uncheck();
+  await page.locator('#save-settings').click();
+  await page.waitForFunction(() => !document.querySelector('#settings-dialog')?.open, { timeout: 30000 });
+
+  // ── 4. the sidebar opens one conversation ─────────────────────────────────
+  await page.locator('.sidebar-task-row').first().waitFor();
+  await page.locator('.chat-input').waitFor();
+  check('connecting opens exactly one conversation in the sidebar',
+    (await page.locator('.sidebar-task-row').count()) === 1);
+
+  // ── 8. the baseline history read, before anything is said ─────────────────
+  // The sidebar row exists before the timeline is reconciled (sessions.ts line
+  // 225 runs before line 229), so the count is polled rather than sampled, then
+  // given a moment to prove it does not climb with re-renders.
+  await until('the timeline baseline read', () => historyReads >= 1);
+  await sleep(1500);
+  check('the timeline baseline is one GET /api/history, not one per render', historyReads === 1);
+
+  // ── 5-6. one sentence, typed and sent ─────────────────────────────────────
+  await page.locator('.chat-input').click();
+  await page.locator('.chat-input').fill(FIRST);
+  await page.locator('.chat-input').press('Enter');
+  await page.locator('.chat-message.is-user').first().waitFor();
+  check('the message appears as this person said it, unframed on screen',
+    (await page.locator('.chat-message.is-user .chat-body').first().innerText()).trim() === FIRST);
+  // The streaming row, while the fixture is still writing it.
+  await page.locator('.chat-message.is-being.is-live').first().waitFor();
+  check('the reply streams into a live row', true);
+  await page.locator('.chat-message.is-being.is-live').first().waitFor({ state: 'detached' });
+
+  // ── 7. what the Being received ────────────────────────────────────────────
+  const body = sends[0];
+  const framed = unwrap(body.message);
+  // `desktop-<desktop uuid>-<session uuid>` (main/chat/store.ts `sessionFromScene`).
+  const scene = /^desktop-([0-9a-f-]{36})-([0-9a-f-]{36})$/.exec(body.scene_id || '');
+  check('the body carries the scene, its label and a correlation ref',
+    scene !== null
+    && typeof body.scene_meta?.scene_label === 'string' && body.scene_meta.scene_label.length > 0
+    && typeof body.scene_meta?.client === 'string' && body.scene_meta.client.startsWith('being-desktop/')
+    && typeof body.client_ref === 'string' && body.client_ref.startsWith('req-'));
+  check('the message on the wire carries the v1 request context frame', framed !== null);
+  check('the frame declares its length truthfully and the human words follow it',
+    framed.body === FIRST && framed.context.length === framed.declared && framed.context === framed.context.trimEnd());
+  check('the frame is the desktop message environment, naming this conversation',
+    framed.context.startsWith('[Being Desktop 当前消息环境]\n')
+    && framed.context.includes(`"chatSessionId":"${scene[2]}"`));
+  check('direct mode says so, and carries no orchestrator paragraph',
+    framed.context.includes('当前为直接执行模式') && !framed.context.includes('[Being Desktop Orchestrator mode]'));
+  check('the credential never travels inside the frame',
+    !body.message.includes(TOKEN) && !JSON.stringify(body).includes(TOKEN));
+
+  // ── 9. stopping reaches the Being ─────────────────────────────────────────
+  await page.locator('.chat-input').fill(SECOND);
+  await page.locator('.chat-input').press('Enter');
+  await page.locator('.chat-stop').waitFor({ state: 'visible' });
+  const stopsBefore = stopPosts;
+  await page.locator('.chat-stop').click();
+  // The main process refuses to guess when the breath it would stop belongs to
+  // another conversation; here it is this one's, so no confirmation is expected.
+  await page.waitForFunction(() => !document.querySelector('.chat-stop') || document.querySelector('.chat-stop').hidden, { timeout: 30000 });
+  check('stopping the reply reaches POST /api/stop exactly once', stopPosts === stopsBefore + 1);
+
+  const beforeRestart = {
+    title: await page.locator('.sidebar-task-row .session-title').first().innerText(),
+    reads: historyReads,
+  };
+  check('nothing on the page threw', errors.length === 0);
+
+  // ── 10. the conversation survives a restart ───────────────────────────────
+  await app.close();
+  app = null;
+  app = await launch();
+  page = await app.firstWindow();
+  const restartErrors = [];
+  page.on('pageerror', error => restartErrors.push(error.message));
+  await page.locator('.chat-input').waitFor();
+  await page.locator('.chat-message.is-user').first().waitFor();
+  check('the conversation is still there after a restart',
+    (await page.locator('.sidebar-task-row').count()) === 1
+    && (await page.locator('.sidebar-task-row .session-title').first().innerText()) === beforeRestart.title);
+  check('the words come back as the person said them, not as they went on the wire',
+    (await page.locator('.chat-message.is-user .chat-body').first().innerText()).trim() === FIRST
+    && !(await page.locator('.chat-stream').innerText()).includes('request context v1'));
+  check('the Being\'s side of the exchange came back with it',
+    (await page.locator('.chat-stream').innerText()).includes('我在。'));
+  check('the restarted client reconciles against the Being once more',
+    historyReads > beforeRestart.reads);
+  check('nothing on the restarted page threw', restartErrors.length === 0);
+
+  console.log(`PASS: ${checks.length} checks — packaged client, request context frame on the wire, unframed on disk, scene routing, one baseline read, stop, restart.`);
 } catch (error) {
   if (app) {
-    const page = app.windows()[0];
-    if (page) {
-      await mkdir('test-results', { recursive: true });
-      await page.screenshot({ path: 'test-results/failure.png' }).catch(() => {});
-      console.error((await page.locator('body').innerText().catch(() => '')).slice(-3000));
-    }
+    const failed = app.windows()[0];
+    if (failed) console.error((await failed.locator('body').innerText().catch(() => '')).slice(-3000));
   }
   throw error;
-} finally { await cleanup(); }
+} finally {
+  await cleanup();
+}
