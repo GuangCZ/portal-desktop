@@ -142,6 +142,72 @@ TaskDto 字段顺序（begin 构造）：`{id, feature, operation, title, execut
   → 插入序为 createdAt 升序，于是 `list()` 输出 createdAt 降序（最新在前）；**超出 maxRecords 的旧记录被丢弃**。
   注意 `_restore` 不调用 `_changed()`（构造期不推送）。
 
+### test/feature-tasks.test.cjs（192 行，已逐行读完）—— 14 个用例
+
+`setup(options)` 夹具（原样照抄）：`timestamp = 1000`、`sequence = 0`、`changes = []`；
+`new FeatureTasks({now: () => timestamp, createId: () => \`task-${++sequence}\`, onChange: v => changes.push(v), ...options})`；
+返回 `{tasks, changes, tick(value = 1){ timestamp += value; }, begin(input = {}){ return tasks.begin({feature:'bonfire', operation:'read', title:'读取篝火消息', execution:'being', ...input}); }}`。
+
+用例名与断言要点（顺序即原文件顺序）：
+1. `functional work owns its progress and result without invoking a transport` —
+   begin → mayDelayChat true、status running；tick(50) update 到 waiting+detail+requestId 'request-1'；tick(50) complete summary '已读取 10 条篝火消息'；
+   断言 status succeeded、finishedAt 1100、createdAt 1000、requestId 保留、summary 保留、detail ''、`changes.length === 3`、`changes[2].records` 深等于 `[done]`。
+2. `local work never claims it can delay Being chat` — `begin({feature:'portal', operation:'install', execution:'local'})` → mayDelayChat false、execution 'local'。
+3. `terminal records cannot be resurrected by late success, errors or progress` — 对 `['succeeded','failed','cancelled']` 各跑一轮：
+   update 到终态得 `before`；tick(100) 后 update/complete/fail 全部深等于 `before`；`changes.length === 2`。
+4. `active task identifiers and execution fields cannot be changed through patches` —
+   `[{id:'other'},{execution:'local'},{mayDelayChat:false},{prompt:'hidden'},{status:'done'},{requestId:'https://example.test/?token=secret'}]` 逐个 `throws TypeError`；
+   任务仍是 running；`changes.length === 1`。
+5. `task errors never expose upstream messages, headers, or response bodies` —
+   `Object.assign(new Error('Authorization: Bearer secret; https://host/path?token=secret'), {code:'NETWORK_ERROR', response:{password:'secret'}})`
+   → errorCode NETWORK_ERROR、detail '连接暂时中断，请稍后重试。'、`JSON.stringify(failed)` 不含 `/secret|Authorization|password|response/`；
+   `fail(other.id, {code:'SECRET_TOKEN_VALUE', message:'private prompt'})` → errorCode REQUEST_FAILED。
+6. `public text strips credential URLs, bearer values and token assignments` —
+   title `'读取 https://user:pw@example.test/being/?token=url-secret'`；
+   detail `'Bearer bearer-secret; token=query-secret api_key=key-secret sk-abcdefghijklm'`；
+   summary `'password=pass-secret refresh_token=refresh-secret cookie=session-secret key=bare-secret'`；
+   `JSON.stringify(snapshot())` 不含 `/url-secret|bearer-secret|query-secret|key-secret|abcdefghijklm|pass-secret|refresh-secret|session-secret|bare-secret|user:pw/`，且含 `/已隐藏/`。
+7. `text and record counts are bounded without dropping active work` — `setup({maxRecords: 2})`；
+   `begin({title:'标题'.repeat(1000)})` → title.length 160；第二条后再 begin → 抛 `code:'TASK_LIMIT_REACHED'`；
+   complete first summary `'结果'.repeat(1000)` → summary.length 1200；tick 后第三条 begin 成功，first 被淘汰（`get(first.id) === null`），
+   `list().map(id)` 深等于 `[third.id, second.id]`。
+8. `callers and observers cannot mutate retained records` — 对 begin 返回值 / get / list[0] / snapshot().records[0] / changes[0].records[0]
+   写 `title='changed'` 后 `get(task.id).title` 仍是 '读取篝火消息'；`setup({onChange: () => { throw new Error('observer failed'); }})` 的 begin 仍返回 running。
+9. `restarting preserves terminal results and marks unfinished work for reconciliation without replay` — identityKey 'alice'；
+   一条 complete('原始摘要')，tick，一条 update 到 `needs_input` + requestId 'request-2'；
+   用 `initialSnapshot: snapshot()` 重建 → done.summary 保留；pending.status 仍 `needs_input`（走旧版 Town 修复分支的 else 支）、
+   detail 匹配 `/旧读取结果尚未确认，本地已无等待队列/`、mayDelayChat true、finishedAt null、requestId 'request-2'；
+   **重建期间 `changed === 0`**（_restore 不触发 onChange）。
+10. `restoration and reset never cross a connection identity boundary` —
+    `identityKey:'bob' + alice 的 snapshot` → `list()` 为空；`initialRecords: snapshot.records`（无 initialIdentityKey）→ 空；
+    `initialRecords + initialIdentityKey:'alice'` → 1 条（**旧格式兼容入口的正用例**）；
+    `reset({identityKey:'bob'})` 后 `get(task.id)` null、`complete(task.id,...)` 返回 null、`snapshot().identityKey === 'bob'`、`list()` 空。
+11. `legacy rejected reads stop pretending to queue while accepted reads require reconciliation` —
+    blocked 行 update 到 waiting + detail `'Being 正在处理其他请求，本次操作尚未完成；不会自动重发。'`（无 requestId）；
+    accepted 行 update 到 waiting + requestId 'accepted-request' + detail `'请求结果尚待确认；不会自动重发。'`；
+    重建后 blocked.status `'failed'`、detail 匹配 `/未发送/`；accepted.status `'needs_input'`、requestId 保留。
+12. `invalid or hostile persisted fields cannot restore a task` — 五个坏候选：
+    `{...task, prompt:'private'}`、`{...task, execution:'remote'}`、`{...task, createdAt:-1}`、`{...task, requestId:'Bearer token'}`、
+    `{...task, status:'succeeded', finishedAt:null}`；全部被拒，`list()` 为空。
+13. `feature filtering is exact, callback timestamps are monotonic, and duplicate updates are quiet` —
+    first(bonfire) / tick / second(fireside)；按 feature 过滤各命中一条；`tick(-500)` 后 update 的 `updatedAt` 仍是 1000（单调）；
+    重复同值 update 不产生新 change；`changes.length === 3`。
+14. `accessors and prototype-bearing patches are rejected without evaluating them` —
+    `{get detail(){ throw ... }}` → 抛 `/Invalid task update fields/`；`Object.create({status:'succeeded'})` → TypeError；
+    `{get code(){ throw ... }}` 传给 fail → errorCode REQUEST_FAILED（**getter 不被求值**）。
+15. `invalid allocation and clock callbacks leave existing records intact` —
+    `new FeatureTasks({maxRecords:1, now:()=>timestamp, createId:()=>nextId})`，`input={feature:'bonfire',operation:'read',title:'读取消息'}`；
+    `timestamp = NaN` 后 `complete(first.id)`（**不传 options**）抛 TypeError 且记录仍 running；
+    `timestamp = 1001` 后 complete 成功；`nextId = 'invalid task ID'` 后 begin 抛 TypeError，
+    **且 first 记录未被淘汰**（淘汰 `delete` 发生在 ID 分配成功之后）。
+
+（实际 `test(...)` 调用共 15 个；文件头注的 192 是行数。移植后 vitest 用例数必须 ≥ 15。）
+
+vitest 改写约定：`node:assert/strict` 的 `assert.equal` = 严格相等 → `expect(x).toBe(y)`；
+`assert.deepEqual` = `deepStrictEqual` → `expect(x).toStrictEqual(y)`；`assert.throws(fn, TypeError)` → `expect(fn).toThrow(TypeError)`；
+`assert.throws(fn, {code})` 需自己捕获断言 `error.code`（vitest 的 toThrow 对象参数比的是 message）；
+`assert.match/doesNotMatch` → `expect(s).toMatch / not.toMatch`。
+
 ## 进度
 
 | 模块 | 状态 |
@@ -152,7 +218,7 @@ TaskDto 字段顺序（begin 构造）：`{id, feature, operation, title, execut
 | src/feature-task-runner.cjs | 未开始 |
 | src/feature-task-history.cjs | 未开始 |
 | src/feature-task-discussion.cjs | 未开始 |
-| test/feature-tasks.test.cjs | 未开始 |
+| test/feature-tasks.test.cjs | 已读（15 个用例） |
 | test/feature-task-runner.test.cjs | 未开始 |
 | test/feature-task-history.test.cjs | 未开始 |
 | test/feature-task-discussion.test.cjs | 未开始 |
