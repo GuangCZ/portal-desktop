@@ -10,8 +10,14 @@ import { portalSource } from './portal-source.mjs';
 const generated = path.resolve('desktop/generated');
 await mkdir(generated, { recursive: true });
 const notices = [];
+// The four runtime dependencies added by the I0 seam stage on 2026-09-16 ship
+// inside the asar whether or not a chunk imports them, so their notices belong
+// here too: `ws` (the tool bridge's relay socket), `node-pty` (the interactive
+// terminal) and the two `@xterm` packages the terminal panel renders with.
 for (const [name, file] of [['marked', 'LICENSE.md'], ['highlight.js', 'LICENSE'],
-  ['react', 'LICENSE'], ['react-dom', 'LICENSE'], ['scheduler', 'LICENSE']]) {
+  ['react', 'LICENSE'], ['react-dom', 'LICENSE'], ['scheduler', 'LICENSE'],
+  ['ws', 'LICENSE'], ['node-pty', 'LICENSE'],
+  ['@xterm/xterm', 'LICENSE'], ['@xterm/addon-fit', 'LICENSE']]) {
   notices.push(`${name}\n${await readFile(path.join('node_modules', name, file), 'utf8')}`);
 }
 await writeFile(path.join(generated, 'THIRD-PARTY-LICENSES.txt'), notices.join('\n\n---\n\n'));

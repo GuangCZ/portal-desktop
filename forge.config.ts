@@ -1,6 +1,7 @@
 import type { ForgeConfig } from '@electron-forge/shared-types';
 import type { OsxSignOptions } from '@electron/packager';
 import { VitePlugin } from '@electron-forge/plugin-vite';
+import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives';
 import { MakerZIP } from '@electron-forge/maker-zip';
 import { MakerDMG } from '@electron-forge/maker-dmg';
 import { existsSync } from 'node:fs';
@@ -73,7 +74,17 @@ const config: ForgeConfig = {
     new MakerZIP({}, ['darwin', 'linux', 'win32']),
     new MakerDMG({ title: 'Being Desktop', icon: path.resolve('resources/branding/app.icns'), format: 'ULFO' }, ['darwin']),
   ],
-  plugins: [new VitePlugin({
+  // node-pty's `.node` binaries cannot be loaded from inside an asar, so the
+  // plugin adds `asar.unpack: '**/{.**,**}/**/*.node'` (measured against
+  // @electron-forge/plugin-auto-unpack-natives 7.11.2, which rewrites
+  // packagerConfig.asar in a resolveForgeConfig hook and throws if asar is off).
+  //
+  // node-pty 1.1.0 ships N-API prebuilds for darwin-arm64, darwin-x64, win32-x64
+  // and win32-arm64, so no electron-rebuild step is needed on the platforms this
+  // client ships — the binary is ABI-stable across Node and Electron versions.
+  // Linux has no prebuild: a Linux MakerZIP target would need python3 + make +
+  // g++ on the build machine. See docs/migration/i0-seams.md.
+  plugins: [new AutoUnpackNativesPlugin({}), new VitePlugin({
     build: [
       { entry: 'desktop/main/main.ts', config: 'vite.main.config.ts', target: 'main' },
       { entry: 'desktop/preload/preload.ts', config: 'vite.preload.config.ts', target: 'preload' },

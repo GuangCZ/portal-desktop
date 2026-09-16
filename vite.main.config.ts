@@ -7,10 +7,14 @@ try { revision = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { encodin
 // throws "TypeError: bufferUtil.mask is not a function" on the first outbound
 // frame — measured, see desktop/main/tools/tool-link.ts's PACKAGING CONTRACT.
 // It is a runtime dependency, so @electron/packager keeps it in the asar.
+//
+// `node-pty` is external for a different reason: it resolves a `.node` binary at
+// runtime, which Vite would try to inline. AutoUnpackNativesPlugin unpacks those
+// binaries beside the asar so the require finds them.
 export default defineConfig({
   define: {
     PORTAL_DESKTOP_BUILD: JSON.stringify(`${revision} · ${new Date().toISOString()}`),
     PORTAL_DESKTOP_UPDATE_REPOSITORY: JSON.stringify(process.env.PORTAL_DESKTOP_UPDATE_REPOSITORY || 'd5z/portal-desktop'),
   },
-  build: { rollupOptions: { external: ['electron', 'ws'] } },
+  build: { rollupOptions: { external: ['electron', 'node-pty', 'ws'] } },
 });
