@@ -1,268 +1,307 @@
-// SKIPPED — see the skip block below: this script drives the retired
-// `beings://chat` iframe (removed 2026-09-16, MIGRATION.md "P1 完成状态").
-// Real generated Loom + its desktop bridge, served only by a local fixture.
-import assert from 'node:assert/strict';
+// Side by Side, in a real Electron window, against a fake Being.
+// Rewritten on 2026-09-16 (integration unit I6b) from the script that drove the
+// retired `beings://chat` iframe.
+//
+// ── WHAT CHANGED, AND WHAT DID NOT ───────────────────────────────────────────
+// The old script drove Loom's own page inside `#chat-frame` and read Side by Side
+// off the shell topbar, which learned it from a `beings:sbs-state` message the
+// page posted. That page, that message and that frame are gone (MIGRATION.md,
+// "P1 完成状态"), so the script reported a skip.
+//
+// The rules it pinned are not gone, and they are pinned here, on the native
+// settings page this unit adds:
+//
+//   1. Before a read confirms one, the switch is disabled and reports NO pressed
+//      state — unknown is not off.
+//   2. A rejected PATCH does not optimistically flip the switch.
+//   3. A 503, and an answer that simply omits `sbs_enabled`, put the state back
+//      to unknown; a later successful read recovers it.
+//   4. Only explicit toggles write configuration.
+//
+// The old script's fifth rule — an older pending GET cannot undo a subsequently
+// confirmed toggle — moved to vitest, where it can be expressed exactly: this
+// client cannot overlap a read and a write from the page (the page refuses while
+// `busy`), and the rule now lives in `ModelConfig` itself as the BUSY answer
+// asserted by tests/model-settings-config.test.ts ("saving rejects concurrent
+// requests and discards older configuration reads").
+//
+// ── METHOD ───────────────────────────────────────────────────────────────────
+// The method is tests/sidebar-e2e.mjs's, and so is the honesty about scope: the
+// renderer, the preload and the model-settings subsystem are the production ones
+// — the subsystem is bundled from `desktop/main/subsystems/model-settings.ts` and
+// installed with the context production installs it with — and everything a Being
+// would answer is a local HTTP fixture. No Being is contacted, no Portal is
+// started, no profile outside the temporary directory is touched, so this runs
+// anywhere, packaged or not. Every request the page makes is a real PATCH and a
+// real GET of `/api/llm/config`, which is the only way to assert that the wire
+// shape is `{sbs_enabled:'on'}` — the string, measured from Loom 1.8.0 rather
+// than inferred (docs/migration/i6b-model-settings.md §1.7).
+import { _electron as electron } from 'playwright';
 import { createServer } from 'node:http';
-import { mkdir, readFile } from 'node:fs/promises';
-import { build } from 'esbuild';
-import { chromium } from 'playwright';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-// SKIPPED since 2026-09-16. This script drives the conversation through
-// `page.frameLocator('#chat-frame')` — the sandboxed `beings://chat` document
-// that the native React conversation replaced (MIGRATION.md, "P1 完成状态").
-// The iframe, its request proxy and its generated assets are gone, so every
-// locator below addresses nothing. Rewriting it against the native
-// conversation's own DOM is P2 work; until then it reports a skip rather than
-// a failure, so `npm run test:all` stays readable.
-console.log('SKIPPED: tests/sbs-refresh.mjs drives the retired beings://chat iframe. Rewrite against the native conversation (MIGRATION.md, P1).');
-process.exit(0);
+const run = promisify(execFile);
+const root = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+const esbuild = path.join(root, 'node_modules/.bin/esbuild');
+const directory = await mkdtemp(path.join(os.tmpdir(), 'beings-sbs-e2e-'));
 
-
-const { outputFiles } = await build({ stdin: { resolveDir: process.cwd(), loader: 'tsx', contents: `
-  import React from 'react';
-  import { createRoot } from 'react-dom/client';
-  import { AppModel } from './desktop/renderer/app/models/app';
-  import { useModel } from './desktop/renderer/shared/hooks/use-model';
-  import { Topbar } from './desktop/renderer/app/components/topbar';
-  const app = new AppModel({ copyText: async text => { window.copiedScene = text; }, appearance: async theme => theme });
-  window.sbsApp = app;
-  window.sbsStates = [];
-  window.scopeStates = [];
-  const snapshot = { settings: { being: 'fixture', hasToken: true }, portal: { phase: 'stopped', logs: [] },
-    chatScene: { scene_id: 'desktop-fixture', scene_meta: { client: 'being-desktop/0.1.3', scene_label: '桌面·测试电脑' } } };
-  app.post = data => document.getElementById('chat-frame')?.contentWindow?.postMessage(data, location.origin);
-  // HTTP transport for the fixture; production validates beings://chat and the same frame revision.
-  window.addEventListener('message', event => {
-    const frame = document.getElementById('chat-frame');
-    if (!frame || event.source !== frame.contentWindow || event.origin !== location.origin) return;
-    const message = event.data;
-    if (message?.revision !== new URL(frame.src).searchParams.get('revision')) return;
-    if (message.type === 'beings:history-scope-state' && ['current', 'all'].includes(message.scope)) {
-      window.scopeStates.push(message.scope);
-      app.setChatHistoryScope(message.scope);
-    }
-    if (message.type === 'beings:sbs-state') {
-      window.sbsStates.push(message);
-      if (typeof message.enabled === 'boolean') app.setSbsEnabled(message.enabled);
-      else if (message.known === false) app.setSbsEnabled();
-    }
-  });
-  function Fixture() {
-    useModel(app);
-    return <><Topbar model={app} /><iframe id="chat-frame" title="Loom fixture"
-      src={'/loom' + new URL(app.chatSource).search} onLoad={() => app.frameLoaded()} /></>;
-  }
-  app.applySnapshot(snapshot);
-  createRoot(document.getElementById('root')).render(<Fixture />);
-` }, bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic' });
-const css = await readFile('desktop/renderer/app/styles.css', 'utf8');
-const loom = await readFile('desktop/generated/loom.html', 'utf8');
-const assets = new Map(await Promise.all(['chat.js', 'chat.css', 'highlight.css'].map(async file => [ '/' + file, await readFile('desktop/generated/' + file) ])));
-let enabled = false, status = 200, malformed = false, holdReads = true, holdPatch = false, rejectPatch = false;
-const reads = [], patches = [], pendingReads = [], pendingPatches = [];
-const history = [
-  { seq: 1, role: 'user', content: '当前桌面的对话', scene_id: 'desktop-fixture', at: '2026-09-15T08:00:00Z' },
-  { seq: 2, role: 'being', content: '这是来自 Loom 网页的对话', scene_id: 'loom-fixture', at: '2026-09-15T08:00:01Z' },
-  { seq: 3, role: 'being', content: '共享的历史消息', at: '2026-09-15T08:00:02Z' },
-];
-const historyReads = [];
+/** The Being's stored configuration. `presets` is what the model list renders
+ * from; one of them is keyless, so the page's self-hosted grouping is exercised
+ * on the way past. */
+let stored = {
+  model: 'fixture-model-a', provider: 'openai', base_url: 'https://model.fixture.invalid/v1',
+  has_api_key: true, thinking: '', temperature: null, sbs_enabled: false,
+  presets: [
+    { id: 'fixture-a', label: 'Fixture A', model: 'fixture-model-a', provider: 'openai', has_key: true },
+    { id: 'fixture-b', label: 'Fixture B', model: 'fixture-model-b', provider: 'openai', has_key: true },
+    { id: 'self-hosted-fixture', label: 'Self Hosted', model: 'fixture-self-hosted', provider: 'self-hosted' },
+  ],
+};
+let readStatus = 200;
+let dropSbs = false;
+let rejectPatch = false;
+let holdReads = true;
+const reads = [];
+const patches = [];
+const pendingReads = [];
 const release = queue => { for (const finish of queue.splice(0)) finish(); };
+
 const server = createServer(async (request, response) => {
-  const url = new URL(request.url, 'http://localhost');
+  const url = new URL(request.url, 'http://127.0.0.1');
   const json = (data, code = 200) => { response.writeHead(code, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data)); };
-  if (url.pathname === '/api/llm/config') {
-    if (request.method === 'PATCH') {
-      let body = ''; for await (const chunk of request) body += chunk;
-      const patch = JSON.parse(body); patches.push(patch);
-      const finish = () => {
-        if (rejectPatch) return json({ error: 'fixture rejection' }, 500);
-        enabled = patch.sbs_enabled === 'on';
-        json({ ok: true, config: { sbs_enabled: enabled, model: 'fixture', presets: [] } });
-      };
-      if (holdPatch) pendingPatches.push(finish); else finish();
-    } else {
-      const config = { model: 'fixture', presets: [], ...(malformed ? {} : { sbs_enabled: enabled }) }, code = status;
-      reads.push(config);
-      const finish = () => json(config, code);
-      if (holdReads) pendingReads.push(finish); else finish();
-    }
-    return;
+  if (!url.pathname.endsWith('/api/llm/config')) { response.writeHead(404); response.end(); return; }
+  if (request.method === 'PATCH') {
+    let body = '';
+    for await (const chunk of request) body += chunk;
+    const patch = JSON.parse(body);
+    patches.push(patch);
+    if (rejectPatch) return json({ error: 'fixture rejection' }, 500);
+    // Loom 1.8.0's own semantics: the string 'on'/'off' in, a boolean out.
+    const { sbs_enabled: sbs, ...rest } = patch;
+    stored = { ...stored, ...rest, ...(sbs === undefined ? {} : { sbs_enabled: sbs === 'on' }) };
+    return json({ ok: true, config: stored });
   }
-  if (url.pathname === '/api/status') return json({ being_name: 'fixture' });
-  if (url.pathname === '/api/history') {
-    const after = Number(url.searchParams.get('after') || 0);
-    historyReads.push(after);
-    return json({ messages: history.filter(row => row.seq > after) });
-  }
-  if (url.pathname === '/api/stream/active') { response.writeHead(204); response.end(); return; }
-  if (url.pathname === '/health') return json({ status: 'ok', commit: 'fixture' });
-  if (assets.has(url.pathname)) {
-    response.setHeader('Content-Type', url.pathname.endsWith('.js') ? 'text/javascript' : 'text/css');
-    response.end(assets.get(url.pathname)); return;
-  }
-  if (url.pathname === '/fixture.js') { response.setHeader('Content-Type', 'text/javascript'); response.end(outputFiles[0].text); return; }
-  if (url.pathname === '/loom') { response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(loom); return; }
-  response.setHeader('Content-Type', 'text/html; charset=utf-8');
-  response.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>${css}body{display:block;background:var(--bg)}#chat-frame{height:650px}</style><body data-view="chat"><div id="root"></div><script src="/fixture.js"></script></body></html>`);
+  reads.push(Date.now());
+  const finish = () => {
+    if (readStatus !== 200) return json({ error: 'fixture unavailable' }, readStatus);
+    const answer = { ...stored };
+    if (dropSbs) delete answer.sbs_enabled;
+    json(answer);
+  };
+  if (holdReads) pendingReads.push(finish); else finish();
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-const until = async predicate => {
-  const end = Date.now() + 10000;
-  while (!await predicate()) { assert.ok(Date.now() < end, 'fixture request arrived'); await new Promise(resolve => setTimeout(resolve, 10)); }
+const origin = `http://127.0.0.1:${server.address().port}`;
+// Loopback may use HTTP (parseConnection, desktop/main/common/loom-connection.ts).
+const ADDRESS = `${origin}/fixture_being/?token=${'f'.repeat(64)}&relay_secret=fixture-relay`;
+
+/** The production bundles, built the way the packaged client builds them, minus
+ * Vite's HTML handling — which this fixture supplies itself. */
+async function build() {
+  const bundle = path.join(directory, 'bundle');
+  await mkdir(bundle, { recursive: true });
+  await run(esbuild, ['desktop/preload/preload.ts', '--bundle', '--platform=node', '--format=cjs',
+    '--external:electron', `--outfile=${path.join(bundle, 'preload.js')}`, '--log-level=warning'], { cwd: root });
+  // The subsystem under test, bundled on its own rather than through
+  // extensions.ts: it needs no peer, and the rest of that list would drag in the
+  // tool browser and the terminal, whose native bindings this fixture has no use
+  // for. It is installed below with the same context production gives it.
+  await run(esbuild, ['desktop/main/subsystems/model-settings.ts', '--bundle', '--platform=node', '--format=cjs',
+    '--external:electron', `--outfile=${path.join(bundle, 'model-settings.js')}`, '--log-level=warning'], { cwd: root });
+  await run(esbuild, ['desktop/renderer/main.tsx', '--bundle', '--format=iife', '--loader:.png=dataurl',
+    '--define:import.meta.hot=undefined', `--outfile=${path.join(bundle, 'renderer.js')}`, '--log-level=warning'], { cwd: root });
+  await writeFile(path.join(bundle, 'index.html'),
+    '<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><title>SBS fixture</title>'
+    + '<link rel="stylesheet" href="./renderer.css"></head><body><div id="root"></div>'
+    + '<script src="./renderer.js"></script></body></html>');
+  await writeFile(path.join(bundle, 'main.js'), MAIN);
+  await writeFile(path.join(bundle, 'package.json'), JSON.stringify({ name: 'sbs-fixture', version: '0.0.0', main: 'main.js' }));
+  return bundle;
+}
+
+// The fixture main process. It answers the channels the shell opens with, and
+// hands the model-settings subsystem the real context — so `beings:model-config
+// -get`, `beings:model-config-save` and `beings:sbs-set` are registered by the
+// production code and speak to the HTTP fixture over `net.fetch`.
+const MAIN = `
+const { app, BrowserWindow, ipcMain, net, protocol } = require('electron');
+const { pathToFileURL } = require('node:url');
+const path = require('node:path');
+const { installModelSettingsSubsystem } = require('./model-settings.js');
+const ADDRESS = ${JSON.stringify(ADDRESS)};
+let window;
+const push = (channel, payload) => { if (window && !window.isDestroyed()) window.webContents.send(channel, payload); };
+const snapshot = () => ({ desktopId: '11111111-1111-4111-8111-111111111111',
+  settings: { endpoint: ${JSON.stringify(origin)} + '/fixture_being', being: 'fixture_being', hasToken: true,
+    workspace: app.getPath('userData'), projectWorkspace: '', portalBinary: '', portalName: 'sbs-fixture',
+    autoStart: false, backgroundEnabled: false, allowExec: true, kitsEnabled: true },
+  portal: { phase: 'stopped', message: '本机 Portal 未启动（夹具）。', logs: [] } });
+const handle = (channel, callback) => ipcMain.handle(channel, (_event, ...args) => callback(...args));
+protocol.registerSchemesAsPrivileged([{ scheme: 'beings', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
+
+handle('beings:snapshot', snapshot);
+handle('beings:appearance', () => 'light');
+handle('beings:update-state', () => ({ phase: 'idle', currentVersion: '0.9.0-fixture', message: '', releaseUrl: '' }));
+handle('beings:client-startup', () => ({ supported: false, enabled: false, message: '夹具不管理开机自启。' }));
+handle('beings:town-live', () => ({ phase: 'unpaired', generation: 0, revision: 0, sync: 0, message: '夹具未连接小镇。', versions: { bonfire: 0, mail: 0, firesides: 0 } }));
+handle('beings:town-auth', () => ({ configured: false }));
+handle('beings:browser-state', () => ({ open: false, address: '', title: '', loading: false, canGoBack: false, canGoForward: false }));
+handle('beings:browser-bounds', () => undefined);
+handle('beings:chat-sessions', () => ({ open: false, version: 0, identityKey: '', active: '', cursor: 0, seeded: true, degraded: false, sessions: [], recovery: { phase: 'idle' } }));
+
+// One operation at a time, in order: production's own queue (main.ts).
+let queue = Promise.resolve();
+const exclusive = operation => { const next = queue.then(operation, operation); queue = next.catch(() => {}); return next; };
+const subsystem = installModelSettingsSubsystem({
+  handle, exclusive, window: () => window,
+  store: { connection: null, connectionAddress: ADDRESS, settings: {}, extras: {}, saveExtra: async () => {} },
+  electron: { net }, userData: '', desktopId: '11111111-1111-4111-8111-111111111111', clientVersion: '0.9.0-fixture',
+  fetchImpl: (url, options) => net.fetch(url, options),
+  onError: (scope, error) => { globalThis.__fixtureErrors.push(scope + ': ' + (error && error.message)); },
+  registry: { get: () => null, require: () => { throw new Error('no peer in this fixture'); } },
+  push,
+});
+globalThis.__fixtureErrors = [];
+// The test's own control, on the main process's global rather than a channel, so
+// the renderer cannot reach it and the bridge under test stays production's.
+globalThis.__fixtureBind = () => { subsystem.connectionVerified(null); return subsystem.ready; };
+globalThis.__fixtureState = () => subsystem.state();
+
+app.whenReady().then(() => {
+  if (process.env.SBS_FIXTURE_PROFILE) app.setPath('userData', process.env.SBS_FIXTURE_PROFILE);
+  protocol.handle('beings', request => {
+    const name = new URL(request.url).pathname;
+    return net.fetch(pathToFileURL(path.join(__dirname, name === '/' ? 'index.html' : name)).toString());
+  });
+  window = new BrowserWindow({ show: true, width: 1280, height: 900,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  window.loadURL('beings://desktop/');
+});
+app.on('window-all-closed', () => app.quit());
+`;
+
+let application;
+const checks = [];
+const check = (name, passed) => { checks.push({ name, passed: Boolean(passed) }); assert.ok(passed, name); };
+const until = async (predicate, label = 'condition') => {
+  const end = Date.now() + 15000;
+  while (!await predicate()) {
+    assert.ok(Date.now() < end, `fixture reached ${label}`);
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
 };
-let browser;
+
 try {
-  browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : { channel: 'chrome' }) });
-  const page = await browser.newPage();
-  page.setDefaultTimeout(10000);
-  const errors = [], external = [];
+  const bundle = await build();
+  application = await electron.launch({ args: [bundle], env: { ...process.env, SBS_FIXTURE_PROFILE: path.join(directory, 'profile') } });
+  const page = await application.firstWindow();
+  page.setDefaultTimeout(15000);
+  const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  const origin = 'http://127.0.0.1:' + server.address().port;
-  await page.route('**/*', route => {
-    if (route.request().url().startsWith(origin + '/')) return route.continue();
-    external.push(route.request().url()); return route.abort();
-  });
-  const button = page.getByRole('button', { name: '切换 SBS 自主醒来', exact: true });
-  const confirmed = value => page.waitForFunction(value => {
-    const button = document.querySelector('.sbs-header-switch');
-    return button?.getAttribute('aria-pressed') === String(value) && !button.disabled;
-  }, value);
-  const frame = () => page.frames().find(frame => frame.url().startsWith(origin + '/loom'));
-  const request = () => page.evaluate(() => window.sbsApp.post({ type: 'beings:sbs-request' }));
-  await page.goto(origin);
-  await until(() => reads.length > 0);
-  assert.equal(await button.isDisabled(), true);
-  assert.equal(await button.getAttribute('aria-pressed'), null, 'Initial default is not confirmed state');
-  assert.equal(await page.evaluate(() => window.sbsStates.length), 0);
-  holdReads = false; release(pendingReads);
-  await confirmed(false);
+  const evaluate = name => application.evaluate((_electron, name) => globalThis[name](), name);
+  const toggle = page.locator('#model-sbs-toggle');
+  const configured = page.locator('#model-sbs-configured');
+  const status = page.locator('#model-config-status');
 
-  // The original upper-left scene indicator owns the scope menu and keeps its details dialog.
-  const sceneButton = page.locator('#chat-scene-indicator');
-  const chat = page.frameLocator('#chat-frame');
-  await chat.getByText('当前桌面的对话', { exact: true }).waitFor();
-  assert.equal(await chat.locator('.chat-history-scope').count(), 0, 'Embedded chat has no duplicate scope toolbar');
-  assert.equal(await chat.getByText('这是来自 Loom 网页的对话', { exact: true }).count(), 0);
-  await chat.locator('#input').fill('切换时保留的草稿');
-  await sceneButton.focus(); await page.keyboard.press('ArrowDown');
-  await page.getByRole('menuitemradio', { name: '当前场景', exact: true }).waitFor();
-  await mkdir('test-results', { recursive: true });
-  await page.screenshot({ path: 'test-results/chat-scene-menu-light.png' });
-  const beforeAll = historyReads.length;
-  history.push({ seq: 4, role: 'being', content: '切换后从服务器取回的网页对话', scene_id: 'loom-fixture', at: '2026-09-15T08:00:03Z' });
-  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
-  await chat.getByText('这是来自 Loom 网页的对话', { exact: true }).waitFor();
-  await chat.getByText('切换后从服务器取回的网页对话', { exact: true }).waitFor();
-  assert.ok(historyReads.length > beforeAll, 'Switching to all scenes fetches the latest history');
-  await page.waitForFunction(() => document.querySelector('#chat-scene-indicator .chat-scene-label').textContent === '全部场景');
-  assert.equal(await chat.locator('#input').inputValue(), '切换时保留的草稿');
-  await sceneButton.click();
-  assert.equal(await page.getByRole('menuitemradio', { name: '全部场景', exact: true }).getAttribute('aria-checked'), 'true');
-  await page.keyboard.press('Escape');
-  assert.equal(await sceneButton.evaluate(el => el === document.activeElement), true);
-  await sceneButton.click();
-  await page.getByRole('menuitem', { name: '场景详情', exact: true }).click();
-  await page.locator('#chat-scene-dialog[open]').waitFor();
-  await page.getByRole('button', { name: '复制场景 ID', exact: true }).click();
-  assert.equal(await page.evaluate(() => window.copiedScene), 'desktop-fixture');
-  await page.getByRole('button', { name: '关闭场景详情', exact: true }).click();
-  assert.equal(await sceneButton.evaluate(el => el === document.activeElement), true);
-  await sceneButton.click();
-  const beforeCurrent = historyReads.length;
-  history.push({ seq: 5, role: 'being', content: '返回时从服务器取回的桌面对话', scene_id: 'desktop-fixture', at: '2026-09-15T08:00:04Z' });
-  await page.getByRole('menuitemradio', { name: '当前场景', exact: true }).click();
-  await chat.getByText('这是来自 Loom 网页的对话', { exact: true }).waitFor({ state: 'hidden' });
-  await chat.getByText('返回时从服务器取回的桌面对话', { exact: true }).waitFor();
-  assert.ok(historyReads.length > beforeCurrent, 'Returning to the current scene also refreshes history');
-  assert.equal(await chat.getByText('切换后从服务器取回的网页对话', { exact: true }).count(), 0);
-  assert.equal(await chat.locator('#input').inputValue(), '切换时保留的草稿');
-  await page.waitForFunction(() => document.querySelector('#chat-scene-indicator .chat-scene-label').textContent === '桌面');
-  // An out-of-date frame command cannot switch the current chat.
-  const scopeReplies = await page.evaluate(() => {
-    const count = window.scopeStates.length;
-    window.sbsApp.post({ type: 'beings:history-scope', scope: 'all', revision: 'stale' });
-    window.sbsApp.post({ type: 'beings:history-scope-request', revision: new URL(window.sbsApp.chatSource).searchParams.get('revision') });
-    return count;
-  });
-  await page.waitForFunction(count => window.scopeStates.length > count, scopeReplies);
-  assert.equal(await page.evaluate(() => window.scopeStates.at(-1)), 'current');
-  assert.equal(await chat.getByText('这是来自 Loom 网页的对话', { exact: true }).count(), 0);
-  await page.setViewportSize({ width: 420, height: 820 });
-  await page.evaluate(async () => { await window.sbsApp.toggleTheme(); document.documentElement.dataset.theme = window.sbsApp.theme; });
-  await sceneButton.click();
-  assert.equal(await page.locator('#chat-scene-menu').evaluate(el => { const box = el.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth; }), true);
-  await page.screenshot({ path: 'test-results/chat-scene-menu-dark-narrow.png' });
-  await chat.locator('#input').click();
-  await page.locator('#chat-scene-menu').waitFor({ state: 'hidden' });
-  await page.setViewportSize({ width: 1280, height: 720 });
-  await page.evaluate(async () => { await window.sbsApp.toggleTheme(); document.documentElement.dataset.theme = window.sbsApp.theme; });
+  // Open the page the way a user does: the sidebar footer's third link.
+  await page.locator('#open-models').waitFor();
+  // Bind the Being first so the subsystem's own first read is the one being held.
+  const binding = evaluate('__fixtureBind');
+  await until(() => reads.length > 0, 'the first read');
+  await page.locator('#open-models').click();
+  await page.locator('#model-settings-page').waitFor();
 
-  // External SBS change + real refresh button reloads the frame and issues a new GET.
-  enabled = true; holdReads = true;
-  const beforeRefresh = reads.length;
-  await page.getByRole('button', { name: '刷新 Being 对话', exact: true }).click();
-  await until(() => reads.length > beforeRefresh);
-  assert.equal(await button.getAttribute('aria-pressed'), null);
-  holdReads = false; release(pendingReads);
-  await confirmed(true);
-  assert.equal(await page.evaluate(() => window.sbsApp.chatHistoryScope), 'current');
-  enabled = false;
-  const beforeRequest = reads.length;
-  await request(); await confirmed(false);
-  assert.ok(reads.length > beforeRequest, 'SBS request reads the server instead of the memory snapshot');
+  // 1. Unknown is not off. While no read has confirmed a value the switch is
+  //    disabled and carries no `aria-pressed` at all.
+  check('unknown-before-first-read-is-not-pressed', await toggle.getAttribute('aria-pressed') === null);
+  check('unknown-before-first-read-is-disabled', await toggle.isDisabled());
+  check('unknown-before-first-read-says-so', (await configured.textContent()).trim() === '未知');
+  check('no-write-before-the-user-asks', patches.length === 0);
 
-  // Ordinary Loom config reads and focus refreshes also notify the shell.
-  enabled = true;
-  await page.evaluate(() => window.sbsApp.post({ type: 'beings:chat-action', action: 'model' }));
-  await confirmed(true);
-  enabled = false;
-  await frame().evaluate(() => window.dispatchEvent(new Event('focus')));
-  await confirmed(false);
+  holdReads = false;
+  release(pendingReads);
+  await binding;
+  await page.waitForFunction(() => document.querySelector('#model-sbs-toggle')?.getAttribute('aria-pressed') === 'false');
+  check('confirmed-read-enables-the-switch', !await toggle.isDisabled());
+  check('confirmed-read-shows-the-saved-value', (await configured.textContent()).trim() === '已关闭');
 
-  // A rejected toggle must not optimistically flip the header.
-  holdPatch = true; rejectPatch = true;
-  await button.click(); await until(() => pendingPatches.length === 1);
-  assert.equal(await page.evaluate(() => window.sbsApp.sbsEnabled), false);
-  assert.equal(await button.isDisabled(), true);
-  holdPatch = false; release(pendingPatches);
-  await confirmed(false);
+  // The model list arrived with it, grouped the way Loom groups it.
+  await page.waitForFunction(() => document.querySelectorAll('#model-select option').length === 4);
+  check('self-hosted-group-first', (await page.locator('#model-select optgroup').first().getAttribute('label')) === '自部署');
+  check('custom-option-offered', await page.locator('#model-select option[value="__custom__"]').count() === 1);
+  check('existing-key-is-never-filled', await page.locator('#model-api-key').inputValue() === '');
+
+  // 2. A rejected PATCH does not flip the switch. The click is real; the answer
+  //    is a 500, and the display must still read what the Being last confirmed.
+  rejectPatch = true;
+  await toggle.click();
+  await until(() => patches.length === 1, 'the rejected write');
+  await page.waitForFunction(() => !document.querySelector('#model-sbs-toggle')?.disabled);
+  check('rejected-write-does-not-flip', await toggle.getAttribute('aria-pressed') === 'false');
+  check('rejected-write-says-why', (await page.locator('#model-sbs-status').textContent()).includes('未确认'));
   rejectPatch = false;
-  await button.click(); await confirmed(true);
 
-  // An older pending GET cannot undo a subsequently confirmed successful toggle.
-  holdReads = true;
-  // A focus/config read from the previous step may still be shared by the
-  // runtime. Request again once it settles until this fixture holds a new GET.
-  await until(async () => { await request(); return pendingReads.length > 0; });
-  await button.click();
-  await confirmed(false);
-  const beforeLateRead = await page.evaluate(() => window.sbsStates.length);
-  holdReads = false; release(pendingReads);
-  await request();
-  await confirmed(false);
-  assert.equal(await page.evaluate(index => window.sbsStates.slice(index).some(state => state.enabled === true), beforeLateRead), false);
+  // 3. An accepted toggle writes Loom's own shape and the display follows the
+  //    Being's echo, not the click.
+  await toggle.click();
+  await page.waitForFunction(() => document.querySelector('#model-sbs-toggle')?.getAttribute('aria-pressed') === 'true');
+  check('toggle-writes-the-measured-shape', JSON.stringify(patches.at(-1)) === JSON.stringify({ sbs_enabled: 'on' }));
+  check('toggle-confirms-by-rereading', stored.sbs_enabled === true);
+  check('enabled-shows-the-saved-value', (await configured.textContent()).trim() === '已开启');
 
-  // Failed or malformed responses leave the state unknown; refresh recovers it.
-  status = 503;
-  await page.getByRole('button', { name: '刷新 Being 对话', exact: true }).click();
-  await page.waitForFunction(() => window.sbsStates.at(-1)?.known === false);
-  assert.equal(await button.isDisabled(), true);
-  assert.equal(await button.getAttribute('aria-pressed'), null);
-  status = 200; malformed = true;
-  const beforeMalformed = reads.length;
-  await request(); await until(() => reads.length > beforeMalformed);
-  assert.equal(await button.getAttribute('aria-pressed'), null);
-  malformed = false; enabled = true;
-  await page.getByRole('button', { name: '刷新 Being 对话', exact: true }).click();
-  await confirmed(true);
-  await page.reload(); await confirmed(true);
-  assert.equal(patches.length, 3, 'Only explicit test toggles write configuration');
-  assert.deepEqual(errors, []);
-  assert.deepEqual(external, []);
-  console.log('PASS: Integrated scene menu, keyboard navigation, scope synchronization, draft preservation, responsive themes; SBS refresh, stale-read isolation and failure recovery.');
+  // 4. A 503 puts it back to unknown, and a refresh recovers it.
+  readStatus = 503;
+  await page.locator('#model-config-refresh').click();
+  await page.waitForFunction(() => document.querySelector('#model-sbs-configured')?.textContent.trim() === '未知');
+  check('failed-read-returns-to-unknown', await toggle.getAttribute('aria-pressed') === null);
+  check('failed-read-disables-the-switch', await toggle.isDisabled());
+  check('failed-read-explains-itself', (await status.textContent()).length > 0);
+
+  readStatus = 200;
+  await page.locator('#model-config-refresh').click();
+  await page.waitForFunction(() => document.querySelector('#model-sbs-toggle')?.getAttribute('aria-pressed') === 'true');
+  check('refresh-recovers-the-state', (await configured.textContent()).trim() === '已开启');
+
+  // An answer that simply omits the field is unknown too — not off.
+  dropSbs = true;
+  await page.locator('#model-config-refresh').click();
+  await page.waitForFunction(() => document.querySelector('#model-sbs-configured')?.textContent.trim() === '未知');
+  check('missing-field-is-unknown-not-off', await toggle.getAttribute('aria-pressed') === null);
+  dropSbs = false;
+  await page.locator('#model-config-refresh').click();
+  await page.waitForFunction(() => document.querySelector('#model-sbs-toggle')?.getAttribute('aria-pressed') === 'true');
+
+  // 5. 运行中 has no source in this client and says so rather than guessing.
+  check('running-state-is-honestly-unknown', (await page.locator('#model-sbs-active').textContent()).trim() === '未知');
+
+  // 6. Only explicit toggles write configuration. Four refreshes and a page's
+  //    worth of reads later, the only two writes are the two clicks above.
+  check('only-explicit-toggles-write', patches.length === 2);
+  check('every-write-is-a-side-by-side-write', patches.every(patch => Object.keys(patch).join() === 'sbs_enabled'));
+
+  // A model save is a different write, and it carries no key when none was typed.
+  await page.locator('#model-select').selectOption({ index: 2 });
+  await page.waitForFunction(() => !document.querySelector('#model-config-save')?.disabled);
+  await page.locator('#model-config-save').click();
+  await until(() => patches.length === 3, 'the model write');
+  check('model-save-omits-a-blank-key', !Object.hasOwn(patches.at(-1), 'api_key'));
+  check('model-save-is-confirmed-by-reread', stored.model === patches.at(-1).model);
+  await page.waitForFunction(() => document.querySelector('#model-config-status')?.textContent.includes('已保存'));
+
+  const mainErrors = await application.evaluate(() => globalThis.__fixtureErrors);
+  check('no-main-process-errors', mainErrors.length === 0, mainErrors);
+  check('no-renderer-errors', errors.length === 0, errors);
+  console.log(`PASS: Side by Side unknown/confirmed states, rejected and accepted writes, failure recovery and the measured 'on'/'off' wire shape — ${checks.length} checks.`);
 } finally {
-  release(pendingReads); release(pendingPatches);
-  await browser?.close();
+  release(pendingReads);
+  await application?.close().catch(() => {});
   server.closeAllConnections();
   await new Promise(resolve => server.close(resolve));
+  await rm(directory, { recursive: true, force: true });
 }
