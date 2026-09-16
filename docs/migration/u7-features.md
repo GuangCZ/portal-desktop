@@ -26,12 +26,38 @@ portal-desktop 的 TypeScript（`desktop/main/features/*.ts` + `tests/features-*
 - §8.5 先落盘再通知：终态/验收/展示状态先 `flush()` 再 callback 或推送。
 - §8.6 定时器全部 `unref()`。
 
+### docs/interfaces.md（§3.9 功能任务账本 + §5 错误码 + §7 持久化 + §1.3 推送）
+
+- §3.9 接口表（构造参数逐字）：
+  - `FeatureTasks({onChange, now, createId, maxRecords, identityKey, initialSnapshot})`
+    → `begin({feature, operation, title, execution})`、`update(id, {status, detail, requestId})`、
+      `complete(id, {summary})`、`fail(id, error)`、`cancel(id, {detail})`、`get`、
+      `list({feature})`、`snapshot()`、`reset({identityKey})`
+  - `FeatureTaskHistory({identityKey, directory, safeStorage, onChange})`
+    → `restore()`、`register(record)`、`save()`、`flush()`；属性 `ledger`、`records`、`persistenceError`
+  - `FeatureTaskRunner({getLedger})`
+    → `run(name, args, fn)`：`OPERATIONS` 表内的方法自动 `begin`/`complete`/`fail`，
+      等待类错误码（`REQUEST_ACCEPTED`、`RESULT_UNKNOWN`、`WAITING_SBS`、`SBS_NOT_CONFIGURED`）转为 `waiting`；
+      `currentTask()`、`recordRequest(record)`
+  - `feature-task-discussion.cjs` → `discussFeatureTask(id, {getLedger, getContext, prepareDraft})`
+- §1.3 推送通道：`being:feature-tasks` / `onFeatureTasks`，载荷 `{tasks, persistenceError}`，
+  触发时机「账本变化、身份切换（先推空列表）」。
+- §5 错误码（本单元相关）：
+  - `TASK_LIMIT_REACHED` —「功能任务记录已满（100 条且无可淘汰的终态记录）」，来源 `FeatureTasks.begin`。
+  - `SESSION_CHANGED` —「连接、身份、编排绑定或围炉选择在操作期间变化，结果已丢弃」，来源纪元校验。
+  - 等待类：`REQUEST_ACCEPTED`、`RESULT_UNKNOWN`、`WAITING_SBS`、`SBS_NOT_CONFIGURED`（Being 中继路径的等待与失败分类）。
+  - 其它可能出现在 fail 分支：`INVALID_REQUEST`、`NOT_CONNECTED`、`NOT_SENT`、`ABORTED`。
+- §7 持久化：`feature-tasks/<sha256(identity)>.bin` = safeStorage 密文，明文
+  `{version:1, identityKey, records:[TaskDto]}`；上限 ≤128MB。
+- §8 变更规范提到：功能任务的 IPC 方法需在 `feature-task-runner.OPERATIONS` 登记，
+  并归入 `main.cjs` 的 `featureMethods` 集合。
+
 ## 进度
 
 | 模块 | 状态 |
 | --- | --- |
 | docs 摘要（architecture §4/§6/§8） | 已读 |
-| docs/interfaces.md §3/§5/§7 | 未开始 |
+| docs/interfaces.md §3/§5/§7 | 已读 |
 | src/feature-tasks.cjs | 未开始 |
 | src/feature-task-runner.cjs | 未开始 |
 | src/feature-task-history.cjs | 未开始 |
