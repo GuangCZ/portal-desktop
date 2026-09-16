@@ -66,3 +66,33 @@
   `prepareLoomDraft`（**死路径，要被 `draft.ts` 取代**）、`prepareTownFeature`（DRAFTS 6 条）、
   `prepareTownAssistance`（ASSISTANCE 6 条）、`prepareFiresideDraft`（拼「围炉消息草稿」前缀）。
   `requireCurrentContext` 的三条文案是 Loom 版；原生版按 §3.7 用 BD 的三条拒绝文案。
+
+### `docs/migration/i4-orchestration-features.md` + `main/features/` 的接口
+
+- `OrchestrationSubsystem` 导出面里本单元要用的三个：
+  - `methods.run(args, {operation, serialized?}, body)` —— `operation` 必须是 **BD 方法名**
+    （`beginChannelConnection` / `checkChannelStatus`…），传 kebab 通道名会让账本定义全部落空。
+  - `register(record, owner?)` —— BD 的 `registerFeatureRequest`，`ChannelBeing.onRequest` 接这个。
+  - `setDraftPreparer(prepare: PrepareFeatureTaskDraft | null)` —— **I4 明文留给本单元**：
+    `PrepareFeatureTaskDraft = (prompt: string, current: () => FeatureTaskContext) => unknown`，
+    `FeatureTaskContext = { connection: unknown; generation: unknown; [k: string]: unknown }`。
+    没装之前 `beings:feature-task-discuss` 直接拒绝。
+- 渲染层 `FeatureTasksModel.setNavigate((feature, task) => …)`，`FEATURE_NAMES` 已含 `channel: "消息渠道"`；
+  I4 明文写「Town 是 I1、Portal 与 Channel 是 I7」，没装之前按钮不画。
+- I4 的偏差 1 很重要：**`SHEET_SLOTS` 的标题由壳层从 `renderer/town/models/town.ts` 的 `definitions` 取**，
+  那是 I1 的文件；注册进去的 sheet 会顶着错误标题打开。I4 因此改用 `PANEL_SLOTS`。本单元要先核实 `page.tsx` 的真实行为。
+
+### BD `src/main.cjs` 对照段（实读行号）
+
+- `channelBeing` 装配 418-427：`readStatus: options=>townSession.getChannelStatus(options)`；
+  `getSession: channel => { if(!chatSessions?.open) throw {code:'NOT_CONNECTED'} '请等待 Being 会话加载完成。'; return chatSessions.ensureChannel(channel); }`；
+  `getContext: ()=>({connection, configured, connected: status==='connected', exiting, connectionId: generation, identityRevision, beingName})`；
+  `fetchImpl` 外包 `credentials:'omit' + referrerPolicy:'no-referrer'`；`onChange: broadcast`；`onRequest: registerFeatureRequest`。
+- `runChannel` 429-435：`const owner=chatSessions, revision=generation; try{return await action()} finally{ if(owner?.open && owner===chatSessions && revision===generation) void owner.syncChannel().catch(()=>{}) }`。
+- handle 1329-1332：`beginChannelConnection`/`checkChannelStatus` 走 `runChannel`，`updateFeishuCredentials`/`inspectChannelStatus` 不走。
+- handle 1238 `getTownCatalog`、1252 `openTownPage`（`browserLinks().open(townPageUrl(id))`）、
+  1253-1255 三个 prepare\*、1262 `prepareTownPairing`（固定提示词已抄录）。
+- `featureMethods`（120 行）含 `beginChannelConnection` 与 `checkChannelStatus`；
+  `serialized`（136 行）含 `prepareTownFeature` / `prepareTownAssistance` / `prepareFiresideDraft`（**不含 prepareTownPairing**）。
+- `channelBeing.reset()` 出现在 711（身份分区变化）、1482（disconnect）、1484（reconnect）、1590。
+- `townState()` 523-527：`result.access.channel = channel.status`、`result.channel = channel`。
