@@ -519,6 +519,35 @@ vitest 改写注意：`assert.rejects(p, c => c === error)` → `await expect(p)
 10. `unsafe identities never become filesystem paths` — `['', '../other', 'a/b', 'a\\b', 'a'.repeat(129)]`
     逐个 `assert.throws(() => new FeatureTaskHistory(...), /identity/)`。
 
+### 外部依赖：src/loom-town-sync.cjs 的 `normalizeTownSyncRecords`（+ src/town-library-contract.cjs 的 `libraryRoute`）
+
+这两个文件属于 **Town/Loom 单元**，不在本迁移单元范围内 → `FeatureTaskHistory` 通过构造参数
+`normalizeTownSyncRecords` 注入；`tests/features-feature-task-history.test.ts` 内提供一份逐行忠实的本地实现作为夹具。
+
+`normalizeTownSyncRecords(value)`（loom-town-sync.cjs 第 9–29 行，逐行记录）：
+- 非数组 → `[]`。`MAX_RECORDS = 256`。
+- `routes = new Set(['/api/bonfire/hear','/api/bonfire/mentions','/api/bonfire/speak','/api/fireside/speak','/api/fireside/list','/api/fireside/members','/api/fireside/hear'])`。
+- `uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i`。
+- 只遍历**最后 256 项**：`for (let index = Math.max(0, value.length - MAX_RECORDS); index < value.length; index++)`；
+  `item = Object.getOwnPropertyDescriptor(value, index)?.value`；
+  非对象或原型不是 `Object.prototype` → 跳过。
+- 字段必须**恰好**是 `['requestId','route','beingId','prompt']` 四个自有数据属性且全为 string
+  （`Reflect.ownKeys(fields).length !== 4` 或任一是 getter / 非 string → 跳过；**getter 不被求值**）。
+- 校验：`uuid.test(requestId)`；
+  `routes.has(route) || libraryRoute(route) || /^\/desktop\/channel\/(feishu|wechat)\/(begin|status)$/.test(route)`；
+  `/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(beingId)`；`prompt.length <= 160000`；
+  `prompt.startsWith(\`[Being Desktop Town sync:${requestId}]\`)`；任一不满足 → 跳过。
+- `next.prompt = next.prompt.replace(/\s+/g, ' ').trim()`。
+- **冲突语义**：`conflicts` 里已有该 requestId → 跳过；已存在同 requestId 且 `JSON.stringify` 不同
+  → `result.delete(requestId)` 并加入 `conflicts`（**两条一起丢弃**，这正是 history 测试里「换 beingId 后 records.length 变 0」的原因）；
+  否则 `result.set(requestId, next)`。
+- 返回 `[...result.values()]`（插入序）。
+
+`libraryRoute(route)`（town-library-contract.cjs 第 15–21 行）：
+`route === '/api/beings' || route === '/api/scrolls' || detailId(route) !== null`；
+`detailId(route)`：必须以 `/api/scrolls/` 开头，取其后的 id，`scrollId(id)` 要求
+`/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/` 且不在 `RESERVED_SCROLL_IDS = new Set(['help','search','graph','match'])` 中。
+
 ## 进度
 
 | 模块 | 状态 |
@@ -534,6 +563,7 @@ vitest 改写注意：`assert.rejects(p, c => c === error)` → `await expect(p)
 | test/feature-task-history.test.cjs | 已读（10 个用例） |
 | test/feature-task-discussion.test.cjs | 未开始 |
 | test/town-error-ipc.test.cjs（feature-tasks 相关用例） | 未开始 |
+| src/loom-town-sync.cjs `normalizeTownSyncRecords`（外部依赖） | 已读 |
 | src/main.cjs boot() 注入面 | 未开始 |
 
 注：worktree 里已存在上一轮被中断的未提交草稿 `desktop/main/features/{types,feature-tasks,feature-task-runner,feature-task-history}.ts`
