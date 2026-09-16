@@ -98,3 +98,60 @@ I0 已实测 `npm run package` 在 darwin-arm64 全绿、`require('node-pty')` �
 `loadNativeModule('pty').dir` 落在 `app.asar.unpacked/`。**`pty.spawn` 的真实冒烟 I0 明确留给 I3 在真实应用里做。**
 
 **I 与方案不同的点**：`tools/terminal/platform.ts` 已删；node-pty 是 1.1.0；`connectionCleared()` 至今无调用方（既有缺口）。
+
+### 1.4 接缝真实代码（`subsystems/{types,chat}.ts`、`extensions.ts`、`preload/channels/*`、`slots.tsx`、`models/registry.ts`）
+
+- `installSubsystems` 的 `ctx.push` 已自带窗口守卫；`registry.get` 返回 `null`（不是 undefined）；
+  `require` 抛「子系统 X 未安装。」。`linked()` 在全部 install 之后按顺序同步跑。
+- `subsystems/chat.ts` 是模板：`report()` 包 `ctx.onError`、`registerChatIpc({handle, exclusive, sessions: () => …, blocked: () => …})`、
+  构造失败时不抛而是把 `blocked` 文案交给 IPC 层。**照抄这个形状**。
+- `preload/channels/bridge.ts` 提供 `subscribe<T>(channel, cb)` 与 `enveloped<T>(channel, ...args)`。
+  终端通道不是 Town 包络，用 `ipcRenderer.invoke` + `subscribe` 即可。
+- `slots.tsx` 已有 `visiblePanels/sidebarSections/topbarActions/viewSheets` 四个读取函数，`page.tsx` 已接。
+- `models/registry.ts` 的 `FeatureModel = Store & { start?(): () => void }`；`create(api, app)` 的 `app` 是 `unknown`。
+
+### 1.5 `docs/migration/u5-terminal-browser.md`（本单元的移植源）
+
+**BD `src/main.cjs` 的装配（行 1710 起）**——逐行对照物：
+```js
+desktopTerminal = new DesktopTerminal({
+  getWorkspace: () => state.workspace.path,
+  onChange: s => win?.webContents.send('being:terminal-state', s),
+  onData: c => win?.webContents.send('being:terminal-data', c),
+});
+```
+没有传 `pty` / `environment` / `platform` / `shellPath`，全部走默认。
+IPC：`getTerminalState → snapshot()`；`readTerminal → read(id)`；
+`terminalAction` 按 create/write/resize/activate/close 分发后**返回 `snapshot()`**，未知操作抛 `'未知终端操作。'`。
+
+**`DesktopTerminal` 导出面**（docs/interfaces.md 3.6）：`create({cwd,cols,rows})`、`write({id,data})`、`resize({id,cols,rows})`、
+`activate(id)`、`close(id)`、`read(id)`、`readSince(id, afterSequence)`、`snapshot()`、`dispose()`；另导出 `setDefaultPtyFactory`。
+上限：`MAX_INPUT_BYTES=64KiB`、`MAX_REPLAY_BYTES=1MB`、`MAX_SESSIONS=8`；`readSince` 单次 ≤128KiB。
+未注册 pty 时 `create()` 抛 `无法启动 ${shell} 交互终端，请检查终端组件与系统安装。`（带 cause）——这就是「优雅失败路径」。
+
+**`DesktopBrowser` 导出面**：`newTab/activateTab/closeTab/navigate/goBack/goForward/reload/stop/setViewport/
+readPage/prepareAction/click/fill/screenshot/snapshot()/destroy()`；另导出 `BROWSER_PARTITION`（**已是
+`persist:being-desktop-browser-v1`，定案 5.6 已满足**）、`MAX_BROWSER_TABS=16`、`normalizeBrowserUrl`。
+构造参数 = `ElectronBrowserHost & {onChange}`，真适配在 `tools/browser/electron-host.ts`
+（`createElectronBrowserHost(getWindow)` / `createElectronBrowser(getWindow, onChange)`，唯一 import electron 的文件）。
+
+**与既有 `desktop/main/browser/`（ClientBrowser，外壳浏览器）的区别**：单标签 vs 16 标签；
+分区 `persist:beings-browser` vs `persist:being-desktop-browser-v1`；`browserURL` 裸文本补 https vs `normalizeBrowserUrl` 直接拒绝。
+**定案 5.6：ClientBrowser 一行都不改。**
+
+### 1.6 `desktop/main/tools/terminal/{terminal,types}.ts`（真实代码）
+
+- `terminal.ts` 已 import `../../common/platform`（I0 收敛完成），**`tools/terminal/platform.ts` 不存在**。
+- `setDefaultPtyFactory(loader)` 是模块级单例；`loadPtyFactory()` 未注册时抛
+  `node-pty factory is not registered; inject 'pty' or call setDefaultPtyFactory().`，
+  被 `create()` 的 try 包成中文文案 + cause。
+- `create()` 先 `desktopPlatform(platform).terminalSupported` 闸门（linux 为 false），再 `dimensions()`，再会话数上限，
+  再 `realpath`/`stat` 工作目录，最后 spawn。
+- `snapshot()` 的 `pid` 取 `item.process?.pid || item.pid`。
+- `readSince(id, after)` 的游标语义：`first = sequence - chunks.length + 1`；越界抛 `终端输出游标无效。`。
+
+### 1.7 `desktop/main/tools/desktop-tools.ts`（I2 的，只读）
+
+`DesktopTools` 在构造体里 `this.browser = new Browser({WebContentsView, session, getWindow, onChange})`——
+即 **DesktopBrowser 的实例由 I2 的组合根间接创建**。§3.3 的独占文件清单里没有任何 browser 文件、IPC 表里也没有 browser 通道。
+→ 见 §3「决定与偏差」里的 D1。
