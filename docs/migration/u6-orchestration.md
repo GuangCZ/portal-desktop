@@ -481,6 +481,61 @@ Cases:
 4. `CLI configuration directories and trusted certificates survive without disabling TLS verification` — `NODE_TLS_REJECT_UNAUTHORIZED`,
    `BEING_TOKEN` and `AWS_SECRET_ACCESS_KEY` are dropped while XDG/CA/cert vars survive.
 
+### test/worker-callbacks.test.cjs (255 lines, 18 cases)
+
+`fixture(t,{send=async()=>({accepted:true,status:202,inboxId:'42',detail:'accepted'}), report=async()=>{}}={})` —
+temp dir `being-callbacks-`, `sessionId`/`otherId`/`desktopId` UUIDs, `available=false`, `now=1000`;
+`new Orchestration({directory, getWorkspace, getSessionIds:()=>[sessionId,otherId],
+ getExecutionContext:()=>({desktopId,place:'being-desktop-tools-'+desktopId}),
+ detect:async()=>[{id:'codex',path:'fixture',status:'ready'}],
+ callbacks:{send, ready:()=>available, report, now:()=>now}, launch:<same fake child as orchestration.test>})`;
+`selectOwner('owner')`, `configure({enabled:true})`;
+`args={...context(sessionId), requestId, title:'Verify fixture', prompt:'Read the fixture and require exact text EXPECTED. Do not edit.'}`;
+`complete(worker,code=0)` feeds `item.completed/agent_message "EXPECTED"` + `turn.completed`, finishes the child and awaits `finalizing`;
+`enable()` flips `available`, `advance()` adds 120000 ms to the fake clock. Note `resume` is **not** supplied — tests assign `callbacks.resume` directly.
+
+Cases:
+1. `terminal result and stable notification are on disk before native delivery` — the send callback reads the ledger and finds `completed`/`EXPECTED`
+   and the same `completion.id`; nothing is sent before `ready()`; the payload carries `task_id`, `desktop_session_id`, `desktop_id`,
+   `target_portal`, and never `sessionToken|taskPrompt|EXPECTED`; a second pump does not resend.
+2. `response loss retries the same logical signal without launching the CLI again` — first send throws, state becomes `retrying`,
+   after `advance()` the identical payload is resent and only one CLI ran.
+3. `callback restores current original-session scope and cannot access a different owner or cancelled task` — `receive` mints a **new** sessionToken
+   after `sessions.clear()`, exposes `taskPrompt`; other-session status rejects `/其他会话/`; after `stop()` and after an owner change,
+   `receive` rejects `/有效任务/`.
+4. `wait and native receive share a single durable review and original-session report` — a duplicate `review` does not replace the first;
+   exactly one report is delivered; a second `receive` returns `{alreadyReviewed:true}` with `scope===undefined`.
+5. `insufficient evidence is distinct from passing and follow-up dispatch cannot duplicate` — `needs_verification` persists;
+   a follow-up with a fresh requestId rejects `/followUpRequestId/`; with `review.followUpRequestId` it runs, and another follow-up returns the same worker.
+6. `restart recovers an interrupted notification and a fresh tool binding without replaying execution` — `sending`/`processing` become `pending`/`pending`
+   after reselecting the owner; `receive` then works and no CLI reran.
+7. `cancellation during transport suppresses the late receipt and mode-off pauses delivery` — with the mode off, pump does not call send at all;
+   after re-enabling, a send in flight plus `stop()` leaves `completion.state==='suppressed'` and `review.status==='cancelled'`.
+8. `report retries preserve accepted callback state and committed evaluation` — a report that throws once keeps `completion.state==='accepted'`
+   and `review.status==='failed'`; the next pump marks `review.reported` with two total report attempts.
+9. `native sender uses owning Loom token, rejects HTML success, and classifies HTTP retries` — `createCallbackSender` against
+   `parseConnection('https://fixture.invalid/being/?token=fixture-secret')`: path `/being/api/callback`, `token` query, `redirect:'error'`,
+   body free of the token; an HTML 200 is not accepted; 503 retryable, 403 not; a different owner rejects `/身份已变化/`.
+10. `receive is the only callback tool without a historical session token; review still requires scope` — desktop-tool-link schema. **Out of unit.**
+11. `accepted results schedule one explicit continuation after idle without rerunning the worker` — a `busy` resume is retried later;
+    `beforeSend()` persists `continuation.state==='sending'` to disk; one send, review stays `pending`, continuation `accepted`.
+12. `uncertain continuation delivery is not blindly posted again and cancellation wins before dispatch` — a throwing resume leaves
+    `continuation.state==='uncertain'` and is not retried; after deleting the continuation, a resume that stops the worker sees `beforeSend()===false`.
+13. `continuation sender uses explicit original-task notification and never changes SBS` — `/active` 204 then POST `/being/api/chat/stream`;
+    `beforeSend` must run before the POST; the message matches `/automatic Desktop notification/` and contains the session and callback ids,
+    never the token; a different owner rejects `/identity/`.
+14. `continuation treats an SSE model error as failure even when HTTP transport succeeds` — an `event: error` split across chunks with CRLF and
+    `"LLM API error 525 <html>UPSTREAM_HTML</html>"` gives `{accepted:false,failed:true,retryable:true,status:525}`;
+    HTTP 503 -> retryable, 403 -> not.
+15. `explicit model failures retry only evaluation with backoff and stop after three attempts` — three attempts with `advance()` between,
+    `continuation.attempts` 1..3, state `retrying` until attempt 3 which is `failed`; the worker never reruns and its result survives.
+16. `a committed review survives a later model failure and is delivered without another continuation` — a review committed inside `resume`
+    ends as `passed` + `reported`, with only one continuation send.
+17. `result previews are delivered to the original chat once and merged with a later review` — a `presentation` is reported once with
+    `presentationOnly:true`; a later review produces a second report (without the flag) that shares the worker id and `review.requestId`; no third report.
+18. `native completion delivery is independent of Worker bridge readiness; evaluation waits for its recovery` — completion delivery succeeds while
+    `toolsReady()` is false and `assertEnforced` throws `ORCHESTRATION_NOT_ENFORCED`; the continuation only runs once the bridge recovers.
+
 ---
 
 ## 进度
