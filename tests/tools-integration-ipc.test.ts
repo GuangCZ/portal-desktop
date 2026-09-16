@@ -388,6 +388,28 @@ describe("the approval queue over IPC", () => {
 });
 
 describe("the tool subsystem's wiring", () => {
+  it("pushes a fresh snapshot when the workspace changes, and only then", async () => {
+    // 0.8.26 pushes as soon as a project directory is chosen (src/main.cjs line
+    // 579). Here the only event that reaches the subsystem after `beings:save` is
+    // `connectionVerified`, whose identity guard returns early for the same
+    // Being — so without an explicit check the console pane's「在 X 运行」stays on
+    // the previous directory. I2 review fix, 2026-09-16.
+    const f = await fixture({ workspace: "/tmp/fixture-workspace" });
+    const states = () => f.pushes.filter(push => push.channel === "beings:tools-state");
+    f.subsystem.connectionVerified?.(null);
+    await f.settle();
+    const before = states().length;
+    (f.context.store.settings as { workspace: string }).workspace = "/tmp/another-workspace";
+    f.subsystem.connectionVerified?.(null);
+    await f.settle();
+    expect(states()).toHaveLength(before + 1);
+    expect((states().at(-1)!.payload as DesktopToolsState).workspace).toBe("/tmp/another-workspace");
+    // Re-verifying with nothing changed stays silent.
+    f.subsystem.connectionVerified?.(null);
+    await f.settle();
+    expect(states()).toHaveLength(before + 1);
+  });
+
   it("leaves the bridge in direct mode when no orchestration subsystem is installed", async () => {
     const f = await fixture();
     const tools = f.subsystem.tools!;

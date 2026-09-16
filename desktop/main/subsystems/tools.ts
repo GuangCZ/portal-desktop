@@ -130,6 +130,11 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
     },
   };
 
+  /** 0.8.26 reads `state.workspace.path`, which is the Desktop project workspace
+   * when one is chosen and the Portal's otherwise. `Settings` carries both halves
+   * (desktop/shared/types.ts). */
+  const currentWorkspace = () => ctx.store.settings.projectWorkspace || ctx.store.settings.workspace || '';
+
   let tools: DesktopTools | null = null;
   let links: BrowserLinks | null = null;
   let portalRequest: PortalRequestAdapter | null = null;
@@ -138,6 +143,12 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
   /** The identity the link and the terminal scopes currently belong to, as
    * `sessionPartition` names it. Empty until a Being has been verified. */
   let identity = '';
+  /** The workspace the panel was last told about. `snapshot().workspace` is read
+   * at snapshot time, so a workspace that changes without anything else changing
+   * leaves the console pane's「在 X 运行」on the previous directory until some
+   * unrelated event pushes. 0.8.26 has an explicit push for it
+   * (src/main.cjs line 579: `state.workspace = {…}; desktopTools?.changed();`). */
+  let workspace = '';
 
   /** Whether the client is still in a state where showing something is sensible.
    * 0.8.26 checks `!exitStarted && win && !win.isDestroyed() && desktopTools`. */
@@ -184,10 +195,7 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
         try { return parseConnection(address); }
         catch (error) { report('tools-connection', error); return null; }
       },
-      // 0.8.26 reads `state.workspace.path`, which is the Desktop project
-      // workspace when one is chosen and the Portal's otherwise. `Settings`
-      // carries both halves (desktop/shared/types.ts).
-      getWorkspace: () => ctx.store.settings.projectWorkspace || ctx.store.settings.workspace || '',
+      getWorkspace: currentWorkspace,
       orchestration,
       getTerminal: () => terminalPeer()?.terminal ?? null,
       showTerminal: async (terminalId: string) => {
@@ -225,6 +233,10 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
   }
 
   if (tools) {
+    // Whatever is saved right now is what the first snapshot will carry, so the
+    // first `connectionVerified` must not read as a change.
+    try { workspace = currentWorkspace(); }
+    catch (error) { report('tools-workspace', error); }
     links = createBrowserLinks({
       getBrowser: () => tools!.browser,
       showBrowser,
@@ -281,6 +293,16 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
       // every queued call with「工具连接已断开。」, and `terminalTools.reset()`
       // forgets the session scopes the previous Being's calls were bound to.
       if (closed || !tools) return;
+      // THE WORKSPACE, WHICH IS NOT ABOUT THE IDENTITY AND SO GOES FIRST.
+      // 0.8.26 pushes a tool state the moment a project directory is chosen; this
+      // shell has no separate event for it — `beings:save` re-verifies the
+      // connection — so the check rides along here, ahead of the identity guard's
+      // early return. Without it the console pane keeps showing the previous
+      // directory until an unrelated browser, console or link change pushes.
+      try {
+        const nextWorkspace = currentWorkspace();
+        if (nextWorkspace !== workspace) { workspace = nextWorkspace; tools.changed(); }
+      } catch (error) { report('tools-workspace', error); }
       let next = '';
       try { if (ctx.store.connectionAddress) next = sessionPartition(parseConnection(ctx.store.connectionAddress)); }
       catch (error) { report('tools-connection', error); }
