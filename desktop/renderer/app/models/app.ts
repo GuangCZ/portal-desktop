@@ -7,6 +7,7 @@ import type {
   UpdateState,
 } from "../../../shared/types";
 import { Store, errorText } from "../../shared/models/store";
+import { isQuittingRefusal } from "../../../shared/errors";
 import { WorkspaceModel } from "./workspace";
 import { TownModel } from "../../town/models/town";
 import { ConversationModel } from "../../conversation/models/conversation";
@@ -65,6 +66,10 @@ export class AppModel extends Store {
    * at the end of the constructor, so the built-in models above are complete
    * before any factory runs. */
   readonly features = {} as AppFeatureModels;
+  /** Set the first time a channel refuses because the client is on its way out.
+   * From then on no push is chased with a read: everything but `QUIT_ALLOWED`
+   * would be refused, and there is nothing left to show the answer to. */
+  private quitting = false;
   constructor(readonly api: DesktopAPI) {
     super();
     this.conversation = new ConversationModel({
@@ -138,9 +143,29 @@ export class AppModel extends Store {
           this.snapshot = { ...this.snapshot, portal: state };
           this.changed();
         }
+        // A push that arrives while the client is shutting down must not be
+        // chased with a read (2026-09-17, integration unit IN). `before-quit`
+        // sets the main process's quitting flag and THEN stops the Portal, so
+        // the last transitions of a shutdown arrive at a page that is still
+        // alive — and every one of them used to send `beings:snapshot` into a
+        // guard that can only refuse it, leaving a line in the client's error
+        // log and, worse,「客户端正在退出，请稍候。」in a toast on the way out
+        // (docs/migration/im-integration.md openIssue 7). The refusal is the
+        // only notice the renderer gets, so it is taken as one: the first is
+        // swallowed and no read is attempted after it. `active` is checked
+        // BEFORE the invoke as well as after, so a push racing teardown does not
+        // start a call that nobody is left to apply.
+        if (!active || this.quitting) return;
         void this.run(async () => {
-          const next = await this.api.snapshot();
-          if (active) this.applySnapshot(next);
+          let next;
+          try {
+            next = await this.api.snapshot();
+          } catch (error) {
+            if (!isQuittingRefusal(error)) throw error;
+            this.quitting = true;
+            return;
+          }
+          if (active && !this.quitting) this.applySnapshot(next);
         });
       }),
       this.api.onUpdate((state) => {

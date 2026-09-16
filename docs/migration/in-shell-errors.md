@@ -206,3 +206,31 @@ model 没建起来就 toast），`openFeature` 先查 `TASK_SHELL_PAGES` 再查 
 `workspace` **不进表**：本外壳根本没有工作区页，保持 toast。
 `tests/channel-integration-renderer.test.ts` 那条既有用例里，`model` 的断言改成「打开 models 对话框且没有 navigate」，
 并**补一条** `workspace` 仍然 toast——规则数 +1，没有删。
+
+### 3.5 【第 5 条】退出瞬间的 `beings:snapshot` ——已改，且把它降到「最多一次、不弹 toast」
+
+**先把成因查实**（读代码，不是猜）：`main.ts:631` 的 `before-quit` 先 `quitting = true`，
+**然后**才 `extensions.quitting()` / `portal.stop()`；`portal.stop()` 的每次状态变化都走
+`main.ts:498` `window.webContents.send('beings:portal-state', state)`——**页面这时还活着**。
+渲染层 `app/models/app.ts` 的 `onPortal` 收到推送后无条件 `this.api.snapshot()`，
+而 `beings:snapshot` 不在 `QUIT_ALLOWED` 上，于是被 `createTrustedHandle` 拒掉：
+终端一行 `Error occurred in handler`，**并且 `this.run(...)` 会把「客户端正在退出，请稍候。」弹成 toast**
+——IM 的 openIssue 7 只记了前半句，后半句是本单元读代码时发现的。
+
+改动：
+
+| 文件 | 改动 |
+| --- | --- |
+| `desktop/shared/errors.ts` | 新增 `QUITTING_MESSAGE`（原来是 `app/ipc.ts` 里的字面量）与 `isQuittingRefusal(error)`（认 Electron 的 `Error invoking remote method '…': Error: ` 前缀）。放 shared 是因为渲染层不能 import 主进程代码（`tests/architecture.test.ts`），而两边必须认同一句话。 |
+| `desktop/main/app/ipc.ts` | 字面量换成 `QUITTING_MESSAGE`，**行为一字不变**。 |
+| `desktop/renderer/app/models/app.ts` | `AppModel` 加私有 `quitting = false`；`onPortal` 里 `if (!active || this.quitting) return;` **在发起 invoke 之前**（原来只在 await 之后查 `active`）；读被拒且 `isQuittingRefusal` 为真时**吞掉并置位**，不再 toast、不再追。推送本身照旧合并进 `snapshot.portal`，所以还在屏幕上的面板不会显示过期相位。 |
+
+`tests/app-quit-snapshot.test.ts`（新，4 条）：正常运行时推送照旧触发一次读；
+**退出期第一次被拒之后不再读**（后续两次推送零 invoke）、不弹 toast、但推送仍被应用；
+**非退出的失败照旧 toast 且不停追**；拆卸后即使有人握着旧回调也不会发起 invoke。
+
+**剩下的一行没有清零**：`before-quit` 的第一次推送仍会换来一次被拒的 `beings:snapshot`（一行日志，不再有 toast）。
+要清零必须让主进程在 `quitting` 时不推（`main.ts:498` 加 `&& !quitting`）——**本单元没有做**，两个理由：
+(a) 任务书给本单元的 `main.ts` 授权是「只加 portalState 注入一行」；
+(b) 退出可以失败（`main.ts:642` 把 `quitting` 置回 false 并重新显示窗口），那时被跳过的推送没有补发点，
+面板会停在过期相位——要做得连补发一起做。写进 openIssues。

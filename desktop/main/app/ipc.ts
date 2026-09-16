@@ -13,6 +13,8 @@
 // crossing IPC even if they did. A channel whose caller must branch on the kind
 // of failure has to answer with data instead; see desktop/shared/chat-errors.ts.
 
+import { QUITTING_MESSAGE } from '../../shared/errors';
+
 /** The part of a `WebFrameMain` the sender check reads. Declared once so that
  * `senderFrame !== mainFrame` narrows the nullable side, exactly as it does in
  * electron's own types. */
@@ -71,7 +73,7 @@ export function createTrustedHandle(options: TrustedHandleOptions) {
       const window = options.window();
       const frame = event.senderFrame;
       if (!window || event.sender !== window.webContents || frame !== window.webContents.mainFrame || frame.url !== options.shellURL()) throw new Error('Untrusted IPC sender');
-      if (options.quitting() && !QUIT_ALLOWED.includes(channel)) throw new Error('客户端正在退出，请稍候。');
+      if (options.quitting() && !QUIT_ALLOWED.includes(channel)) throw new Error(QUITTING_MESSAGE);
       if (options.recoveryBlocked() && RECOVERY_BLOCKED.includes(channel)) throw new Error('Portal 升级恢复尚未完成，请重新启动客户端完成恢复。');
       try { return await callback(...args); }
       catch (error) { throw new Error(options.report(channel, error)); }

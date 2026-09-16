@@ -1,3 +1,16 @@
+/** What every channel but `QUIT_ALLOWED` answers once the client is on its way
+ * out (desktop/main/app/ipc.ts). It lives here because the renderer has to
+ * recognise it — a push that arrives during a shutdown must not be chased with a
+ * read that can only be refused — and the renderer may not import main-process
+ * code (tests/architecture.test.ts). One constant, two readers, no drift. */
+export const QUITTING_MESSAGE = '客户端正在退出，请稍候。';
+
+/** Whether a failure is that refusal, whichever layer wrapped it. Electron
+ * prefixes a rejected invoke with `Error invoking remote method '…': Error: `,
+ * so the sentence is matched inside the message rather than against it. */
+export const isQuittingRefusal = (error: unknown): boolean =>
+  String((error as { message?: unknown } | null | undefined)?.message ?? '').includes(QUITTING_MESSAGE);
+
 /** Only short guidance crosses into notices, dialogs and form errors. */
 export function publicErrorMessage(error: unknown, fallback = '操作未完成，请重试或查看日志。'): string {
   const message = String(error instanceof Error ? error.message : error)
