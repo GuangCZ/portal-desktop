@@ -163,6 +163,99 @@ status: worker.review?.summary ? worker.review.status : 'ready',
 summary: worker.review?.summary || '结果已生成，可以在 Desktop 内置浏览器中打开。', evidence: worker.review?.evidence || ''}`.
 Comment: worker history already owns persistence and identity; this projects display fields only.
 
+### src/agent-kits.cjs (67 lines)
+
+Exports `{AGENTS, detectAgents, normalizeMode, executable, probe}`. Depends on `platform.cjs#desktopEnvironment` and `agent-process.cjs#launchAgent`.
+
+`CLAUDE_SANDBOX = JSON.stringify({sandbox:{enabled:true,autoAllowBashIfSandboxed:true}})`.
+Comment (measured 2026-09-11 on Claude Code 2.1.245): Claude's own sandbox matches Codex `workspace-write`
+(`touch /tmp/x` -> "Operation not permitted", curl -> "deny network-outbound"); commands auto-allowed only where that sandbox exists (macOS/Linux).
+
+`AGENTS` (frozen array, order matters — it drives detection order and the title-agent ordering):
+1. `codex` / `Codex CLI` — commands `['codex']`, help `['exec','--help']`, features `['--json','--sandbox','--skip-git-repo-check']`,
+   args `['exec','--json','--sandbox','workspace-write','--skip-git-repo-check','--color','never','-']`,
+   auth `['login','status']`, authHint `'请先在终端完成 codex login，再重新检测。'`
+2. `claude` / `Claude Code CLI` — commands `['claude']`, help `['--help']`, features `['--output-format','--print','--permission-mode','--settings']`,
+   args `['-p','--output-format','stream-json','--verbose','--permission-mode','acceptEdits','--settings',CLAUDE_SANDBOX]`,
+   auth `['auth','status']`, authHint `'请先在终端完成 claude auth login，再重新检测。'`
+3. `cursor` / `Cursor CLI` — commands `['cursor-agent','agent']`, help `['--help']`, features `['--output-format','--print']`,
+   args `['--print','--output-format','stream-json']`, no auth probe
+4. `grok` / `Grok Build CLI` — commands `['grok']`, help `['--help']`, features `['--output-format','--prompt-file']`,
+   args `['--output-format','streaming-json']`, no auth probe
+
+`executable(commands, override='')` — directory list = `desktopEnvironment().PATH` split on `path.delimiter`, absolute entries only,
+plus `~/.local/bin`, `~/.cargo/bin`, plus `%APPDATA%/npm` when `process.env.APPDATA` is set; de-duplicated.
+With an override, that single path is the only candidate. Otherwise cartesian product dir x command x extension
+(win32: `['.exe','.cmd','.ps1']`; else `['']`). Skips non-absolute paths and paths containing NUL/CR/LF.
+Accepts the first candidate that `stat`s as a file and passes `fs.access` with `F_OK` on win32 / `X_OK` elsewhere. Returns `''` when nothing matches.
+
+`probe(file, args, launch=launchAgent)` — launches in `os.homedir()`, accumulates stdout+stderr into `output` capped at 65536
+(`overflow=true` once the cap would be exceeded), 15 s stop timer; resolves `{...result, output, overflow}`.
+
+`detectAgents(paths = {}, {find=executable, run=probe} = {})` — `Promise.all` over `AGENTS`. Base record
+`{id,name,path:'',status:'missing',detail:'未找到可执行程序。',auth:'unknown'}`.
+- no file -> base (`missing`).
+- `help` probe: `code!==0 || overflow || !features.every(flag => help.output.includes(flag))` -> `{status:'incompatible',detail:'程序无法运行或不支持所需的事件输出接口。'}`.
+- when `agent.auth`: run it; `code!==0` -> `{status:'needs_auth',auth:'required',detail:agent.authHint}`;
+  else `{status:'ready',auth:'configured',detail:'执行接口与本机登录状态已确认。'}`.
+- no auth probe -> `{status:'ready',detail:'执行接口可用；登录状态将在执行时确认，沿用 CLI 权限配置。'}` (auth stays `'unknown'`).
+- any throw -> `{status:'error',detail:'检测失败，请检查程序路径。'}`.
+
+`normalizeMode(value)` -> `{enabled: value?.enabled===true, defaultAgent: AGENTS.some(a=>a.id===value?.defaultAgent) ? value.defaultAgent : 'codex', paths}`
+where `paths[agent.id]` is copied only when it is a string, truncated to 4096 chars.
+
+### src/agent-process.cjs (60 lines)
+
+Exports `{launchAgent, psValue, agentEnvironment}`. Depends on `desktop-console.cjs#consoleEnvironment` and `#WINDOWS_RUNNER`.
+
+`CLI_ENVIRONMENT_KEYS` (lower-case set, allow-list; Desktop/Loom tokens and code-injection vars stay out):
+`http_proxy, https_proxy, all_proxy, no_proxy, codex_home, xdg_config_home, xdg_data_home, xdg_cache_home,
+openai_api_key, openai_base_url, openai_org_id, openai_organization, openai_project_id,
+cursor_api_key, xai_api_key, grok_api_key, anthropic_api_key, anthropic_auth_token, anthropic_base_url, claude_config_dir,
+node_extra_ca_certs, ssl_cert_file, ssl_cert_dir, requests_ca_bundle`.
+
+`psValue(value)` -> `` `[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('<base64 of value>'))` `` — encode as data, never interpolate user text as shell code.
+
+`agentEnvironment(source = process.env)` — starts from `consoleEnvironment(source)`, then copies every source key whose
+lower-case name is in the allow-list, when the value is a string without NUL.
+
+`launchAgent({file, args=[], input='', cwd, onData=()=>{}, platform=process.platform, spawnImpl=spawn, environment=process.env})`:
+- win32: builds a PowerShell script `"$agentExecutable = <psValue(file)>\n$agentArguments = @(<psValue(arg)>,...)\n"` plus
+  `` `${psValue(input)} | & $agentExecutable @agentArguments` `` when there is input, else `'& $agentExecutable @agentArguments'`;
+  spawns `<SystemRoot>/System32/WindowsPowerShell/v1.0/powershell.exe` (SystemRoot from env, default `C:\Windows`)
+  with `['-NoLogo','-NoProfile','-NonInteractive','-OutputFormat','Text','-EncodedCommand', base64(utf16le(WINDOWS_RUNNER))]`,
+  options `{cwd,env,windowsHide:true,shell:false,stdio:['pipe','pipe','pipe']}`; the script is written to stdin.
+- otherwise: `spawnImpl(file, args, {cwd, env, detached:true, shell:false, stdio:['pipe','pipe','pipe']})` and `input` written to stdin.
+- both: `stdin.on('error')` swallowed; stdout/stderr `setEncoding('utf8')` and forwarded as `onData(stream, text)`.
+- `done` resolves on `close` with `{code, signal, error: failed, stopped: stopping}` where `failed` is captured from the `error` event.
+- `stop()` — returns `done` immediately when the child already exited (`exitCode !== null || signalCode !== null`); sets `stopping=true`;
+  win32 `child.kill()` returning false throws `'无法停止 worker，请重试。'`; POSIX `process.kill(-child.pid,'SIGKILL')`, rethrowing anything but `ESRCH`.
+
+### src/orchestration-policy.cjs (47 lines)
+
+Exports `{OrchestrationPolicy}`. Depends on `desktop-identity.cjs#desktopPortalName` and `#validDesktopId`.
+`error(message)` = `Object.assign(new Error(message), {code:'ORCHESTRATION_NOT_ENFORCED'})`.
+Comment: enforcement is local to this Desktop's tool bridge; it does not touch Being's shared model endpoint or remote tools.
+
+`new OrchestrationPolicy({getIdentity,getDesktopId,getBridge,getMode,onChange=()=>{}})`;
+initial `state = {status:'unchecked', scope:'desktop', detail:'本机工具绑定尚未核验。'}`.
+- `publish(status, detail)` — no-op when both are unchanged; otherwise replaces state (`scope` always `'desktop'`) and calls `onChange({...state})`.
+- `configure(enabled)` — throws `'请先连接 Being。'` without identity, `'Desktop 身份尚未就绪。'` when `!validDesktopId(getDesktopId())`;
+  else publishes `'pending'`/`'本机编排已配置，等待 Worker 工具连接。'` or `'disabled'`/`'本机已切换为直接模式，其他 Desktop 的模式与模型配置不变。'`.
+- `syncBridge()` — mode disabled -> publish `disabled` with that same text and return.
+  When identity + valid desktop id + `bridge.place === desktopPortalName(id)` and (`bridge.status==='connecting'` or
+  `bridge.status==='connected' && !bridge.tools?.length`) -> publish `'pending'` with
+  `'配置已保存，正在连接本机调度工具。'` (connecting) or `'调度连接已建立，正在初始化 Worker 工具。'`; otherwise `await inspectForMessage()`.
+- `inspectForMessage()` — mode disabled -> `{status:'disabled',scope:'desktop'}` (no detail). Else `assertEnforced()` swallowing only
+  `ORCHESTRATION_NOT_ENFORCED`, returns `{...state}`.
+- `assertEnforced()` — throws (and publishes `'blocked'`) unless: identity present, `validDesktopId(id)`, mode enabled
+  (`'本机编排模式未启用或 Desktop 身份无效。'`); bridge place matches, `status==='connected'`, tools include `desktop_worker_start`
+  (`'本机 Worker 工具尚未连接，请重新连接本机调度工具。'`); every tool name starts with `desktop_worker_`
+  (`'本机编排工具范围未生效，本机执行已阻塞。'`). Success publishes
+  `'enforced'` / `'已核验当前 Desktop：本机执行通过 Worker 调度，Being 原生能力可直接使用。其他 Desktop 独立运行。'`.
+  On failure: publish `'blocked'` with the thrown message when it carries the code, else `'本机工具绑定检查失败，任务未发送。'`,
+  then throw `error(this.state.detail)`.
+
 ---
 
 ## 进度
