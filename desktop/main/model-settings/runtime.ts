@@ -26,15 +26,7 @@
 // replaced; it stays `null` (unknown) and the settings page says so rather than
 // claiming the Being is asleep.
 import { publicModelUrl } from '../common/loom-connection';
-
-export interface SideBySideState {
-  /** What the Being has saved: `sbs_enabled` from `/api/llm/config`. `null` is
-   * "not yet read / not answered", which is not the same as off. */
-  configured: boolean | null;
-  /** Whether the waking loop is running right now. Always `null` in this shell —
-   * see the header. */
-  active: boolean | null;
-}
+import type { ModelRuntimeState, ModelSideBySideState } from '../../shared/model-settings-types';
 
 export interface ActiveStreamState {
   active: boolean | null;
@@ -48,13 +40,13 @@ export interface RuntimeState {
   status: string;
   error: string;
   checkedAt: string | null;
-  configStatus: string;
+  configStatus: ModelRuntimeState['configStatus'];
   configError: string;
   configCheckedAt: string | null;
   model: string;
   provider: string;
   baseUrl: string;
-  sideBySide: SideBySideState;
+  sideBySide: ModelSideBySideState;
   activeStream: ActiveStreamState;
 }
 
@@ -123,4 +115,12 @@ export function updateRuntimeConfig(runtime: RuntimeState, snapshot: RuntimeConf
     model: config.model, provider: config.provider, baseUrl: config.baseUrl,
     sideBySide: { ...runtime.sideBySide, configured: config.sbsEnabled },
   };
+}
+
+/** The half of the runtime this subsystem publishes (`beings:model-settings-state`).
+ * `/api/status` and `/api/stream/active` are the conversation layer's to report,
+ * so they are dropped here rather than pushed twice from two timers. */
+export function modelRuntimeState(runtime: RuntimeState): ModelRuntimeState {
+  const { configStatus, configError, configCheckedAt, model, provider, baseUrl, sideBySide } = runtime;
+  return { configStatus, configError, configCheckedAt, model, provider, baseUrl, sideBySide: { ...sideBySide } };
 }

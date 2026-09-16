@@ -19,6 +19,9 @@
 // pushed back — `modelConfigDto` reads `has_api_key` and nothing else, and
 // `failure()` only ever carries one of the authored MESSAGES below.
 import { endpoint, publicModelUrl, type LoomConnection } from '../common/loom-connection';
+import type {
+  ModelConfigDto, ModelConfigValues, ModelPatchInput, ModelPresetOption, ModelProviderOption,
+} from '../../shared/model-settings-types';
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 
@@ -76,32 +79,7 @@ function plainText(value: unknown, limit: number): string {
   return typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, limit) : '';
 }
 
-export interface ModelProvider { id: string; name: string; baseUrl: string; keyless: boolean }
-export interface ModelPreset { id: string; presetId: string; name: string; provider: string; baseUrl: string; hasApiKey: boolean | null }
-export interface ModelConfigValues {
-  model: string;
-  provider: string;
-  baseUrl: string;
-  /** Whether the Being holds a key for this configuration. The key itself never
-   * leaves the Being, and this client never sends one back that it did not just
-   * receive from the user. */
-  hasApiKey: boolean | null;
-  thinking: string;
-  temperature: number | null;
-  /** Side by Side, the Being's own waking loop. `null` when the Being did not
-   * answer with the field at all — unknown is not the same as off. */
-  sbsEnabled: boolean | null;
-}
-export interface ModelConfigDto {
-  connectionId: number;
-  checkedAt: string;
-  config: ModelConfigValues;
-  models: ModelPreset[];
-  providers: ModelProvider[];
-  modelsError: string;
-}
-
-function providerDetails(id: string): ModelProvider {
+function providerDetails(id: string): ModelProviderOption {
   return { id, name: PROVIDERS[id]?.name || id, baseUrl: PROVIDERS[id]?.baseUrl || '', keyless: PROVIDERS[id]?.keyless === true };
 }
 
@@ -113,7 +91,7 @@ export function modelConfigDto(value: unknown, connectionId: number, checkedAt =
     thinking: plainText(value.thinking, 100), temperature: typeof value.temperature === 'number' && Number.isFinite(value.temperature) ? value.temperature : null,
     sbsEnabled: typeof value.sbs_enabled === 'boolean' ? value.sbs_enabled : null,
   };
-  const models: ModelPreset[] = [], seen = new Set<string>();
+  const models: ModelPresetOption[] = [], seen = new Set<string>();
   if (Array.isArray(value.presets)) {
     for (const preset of value.presets.slice(0, 2000)) {
       if (!record(preset) || typeof preset.model !== 'string' || typeof preset.provider !== 'string') continue;
@@ -135,13 +113,6 @@ export function modelConfigDto(value: unknown, connectionId: number, checkedAt =
   };
 }
 
-export interface ModelPatchInput {
-  connectionId: number;
-  model: string;
-  provider: string;
-  baseUrl?: string;
-  apiKey?: string;
-}
 /** The wire shape, snake_case, exactly the four fields Loom accepts. */
 export interface ModelPatch { model: string; provider: string; base_url?: string; api_key?: string }
 
