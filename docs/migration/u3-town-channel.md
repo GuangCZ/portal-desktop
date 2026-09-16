@@ -359,3 +359,10 @@ TownPairing 的 5 个用例（全部移植）：
 24. `missing or failed cached results never fall back to a Being chat request` — TownRefresh → skip
 25. `late cached and explicit private reads cannot cross room or identity changes` — TownBackground 围栏 → 可测
 26. `an accepted explicit read is never replayed while cache polling continues` — TownRefresh → skip
+
+### test/town-sdk-background.test.cjs（21 行，2 个 test）
+- `delay(ms)`；`identity = {beingId:'alice', connectionRevision:1, identityRevision:1}`；`snapshot(n) = {messages:[{id:String(n), content:'message '+n, beingId:'alice'}], latestSeq:n}`。
+- `new TownBackground({direct:true, getIdentity, townSession:{getBonfireMessages}})` —— 只给三个参数，其余走默认。
+1. `SDK background starts without SBS; an event during REST triggers a second authoritative read`：`lifecycle({enabled:true})` → 10ms 后 calls==1（自动读一次）；`notifyEvent({type:'bonfire'})` → 280ms 后 calls==2（250ms 合并窗口）；再 `notifyEvent` + resolve 第二次读 → calls==3；`cachedSnapshot({kind:'bonfire'}).snapshot.latestSeq === 3`。
+2. `SSE reconciliation after resume does not publish a response from the prior identity`：`notifyEvent({type:'hello'})` 后立刻换身份并 `lifecycle({enabled:true})`；280ms 后合并定时器因 `_cacheGeneration` 变化而 break；`cachedSnapshot` 的 identity 是 bob，calls 恰为 2。
+注：`notifyEvent` 的 250ms 合并用的是**全局 setTimeout**，不是注入的 clock。
