@@ -11,8 +11,23 @@
 // user's own composer, so the cases that matter most are the ugly ones: a control
 // character in a name, an id that is not an id, a duplicate handle, a thousand
 // and one entries.
-import { expect, test } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { afterEach, expect, test } from "vitest";
+import { createTrustedHandle } from "../desktop/main/app/ipc";
+import { installSubsystems } from "../desktop/main/extensions";
 import { composerData, memberOptions, normalizeComposerData } from "../desktop/main/chat/composer-data";
+import { installChatSubsystem } from "../desktop/main/subsystems/chat";
+import { installTownSubsystem } from "../desktop/main/subsystems/town";
+import { isTownErrorEnvelope, townErrorFromEnvelope } from "../desktop/shared/town-desktop-errors";
+import { publicErrorMessage } from "../desktop/shared/errors";
+import type { Connection } from "../desktop/main/chat/connection";
+
+const SHELL = "beings://desktop/";
+const cleanups: (() => Promise<void>)[] = [];
+afterEach(async () => { while (cleanups.length) await cleanups.pop()!(); });
 
 // A local Kit as `localKits` answers it. The name is the id the composer
 // addresses, and `readKit` already constrains it to
@@ -172,4 +187,98 @@ test("a Being switched during the read invalidates the whole answer", async () =
   await expect(f.read()).rejects.toMatchObject({ code: "SESSION_CHANGED", message: "Being 连接已变化。" });
   const g = fixture({ readMembers: async () => { g.connected = false; return { members: [] }; } });
   await expect(g.read()).rejects.toMatchObject({ code: "SESSION_CHANGED", message: "Being 连接已变化。" });
+});
+
+/* ---------------------------------------------------------------------------
+ * The revision the composer echoes, and the revision Town checks it against.
+ *
+ * `connectionRevision` leaves this file, travels through the renderer's composer
+ * plan (renderer/conversation/models/directory.ts `publish`), and comes back to
+ * the main process as the epoch `beings:town-speak` compares with its own
+ * (main/town/ipc-desktop.ts line 236). BeingDesktop reads one shell-wide
+ * `generation` at both ends (src/main.cjs lines 1336 and `sendBonfireMessage`);
+ * portal-desktop has a counter per subsystem, so the two are only the same number
+ * as long as they move together. If they ever drift, nothing fails loudly —
+ * every `@` mention is simply refused as「Being 连接已变化。」and the user is told
+ * the notification was not confirmed. That is what this pins.
+ * ------------------------------------------------------------------------- */
+
+const REVISION_ADDRESS = `https://echo.beings.town/cz_being/?token=${"c".repeat(64)}`;
+const REVISION_OTHER = `https://echo.beings.town/river_being/?token=${"c".repeat(64)}`;
+
+async function subsystems() {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "chat-town-revision-"));
+  const fetchImpl = (async (url: string) => {
+    const route = new URL(url).pathname.replace(/^\/(?:cz|river)_being/, "");
+    if (route === "/api/history") return new Response(JSON.stringify({ messages: [] }), { headers: { "Content-Type": "application/json" } });
+    if (route === "/api/stream/active") return new Response(null, { status: 204 });
+    return new Response(JSON.stringify({ ok: true, messages: [], global_latest_seq: 0 }), { headers: { "Content-Type": "application/json" } });
+  }) as unknown as typeof fetch;
+  const handlers = new Map<string, (event: any, ...args: any[]) => Promise<unknown>>();
+  const mainFrame = { url: SHELL };
+  const webContents = { mainFrame, isDestroyed: () => false, send: () => {} };
+  const window = { isDestroyed: () => false, webContents };
+  const store = { connection: null as Connection | null, connectionAddress: "" };
+  const secretStorage = {
+    isEncryptionAvailable: () => true,
+    encryptString: (value: string) => Buffer.from(value),
+    decryptString: (value: Buffer) => value.toString(),
+  };
+  const handle = createTrustedHandle({
+    register: (channel, listener) => { handlers.set(channel, listener); },
+    window: () => window, shellURL: () => SHELL,
+    quitting: () => false, recoveryBlocked: () => false,
+    report: (_channel, error) => publicErrorMessage(error),
+  });
+  const extensions = installSubsystems({
+    handle, exclusive: operation => operation(),
+    window: () => window, store, secretStorage, userData: directory,
+    desktopId: "11111111-1111-4111-8111-111111111111", clientVersion: "0.9.0", fetchImpl,
+    onError: () => {},
+  }, [installChatSubsystem, installTownSubsystem]);
+  const invoke = (channel: string, ...args: unknown[]) =>
+    handlers.get(channel)!({ sender: webContents, senderFrame: mainFrame }, ...args);
+  return {
+    extensions, directory,
+    connect: async (link: string) => {
+      store.connection = { endpoint: link.split("/?")[0], being: "b", token: "c".repeat(64), relaySecret: "c".repeat(64), link };
+      store.connectionAddress = link;
+      extensions.connectionVerified(store.connection);
+      await extensions.ready;
+      for (let i = 0; i < 25; i++) await new Promise(resolve => setImmediate(resolve));
+    },
+    /** The revision the composer would hand the renderer right now. */
+    echoed: async () => (await invoke("beings:chat-composer-data") as { connectionRevision: number }).connectionRevision,
+    /** What `beings:town-speak` answers when a mention is published with it. */
+    publish: async (connectionRevision: number) => {
+      const result = await invoke("beings:town-speak", {
+        kind: "bonfire", content: "@t_alice 你好", mentions: ["t_alice"],
+        connectionRevision, requestId: randomUUID(),
+      });
+      return isTownErrorEnvelope(result) ? String((townErrorFromEnvelope(result) as { code?: unknown }).code ?? "") : "";
+    },
+  };
+}
+
+test("the revision the composer echoes is the one a public mention is accepted under", async () => {
+  const f = await subsystems();
+  cleanups.push(async () => { await f.extensions.quitting(); await rm(f.directory, { recursive: true, force: true }); });
+  await f.connect(REVISION_ADDRESS);
+  const revision = await f.echoed();
+  // Not paired, so the send itself is refused — decision §5.7, and exactly the
+  // point: the refusal is about the credential, never about the epoch.
+  expect(await f.publish(revision)).toBe("AUTH_REQUIRED");
+  expect(await f.publish(revision + 1)).toBe("SESSION_CHANGED");
+  expect(await f.publish(revision - 1)).toBe("SESSION_CHANGED");
+  // Switching Beings moves both counters, and a plan composed against the
+  // previous one stays refused after the move.
+  await f.connect(REVISION_OTHER);
+  const next = await f.echoed();
+  expect(next).not.toBe(revision);
+  expect(await f.publish(next)).toBe("AUTH_REQUIRED");
+  expect(await f.publish(revision)).toBe("SESSION_CHANGED");
+  // Re-verifying the same Being is not a change, for either half.
+  await f.connect(REVISION_OTHER);
+  expect(await f.echoed()).toBe(next);
+  expect(await f.publish(next)).toBe("AUTH_REQUIRED");
 });

@@ -105,8 +105,23 @@ export function installChatSubsystem(ctx: SubsystemContext): ChatSubsystem {
           terminalTools: () => tools()?.terminalTools,
           orchestration,
           inspectPolicy: async () => ctx.registry.get('orchestration')?.policy.inspectForMessage() ?? { status: 'disabled', scope: 'desktop' },
-          // The Portal supervisor is not reachable from a subsystem; see the
-          // field's own comment in chat/environment.ts.
+          // NOT WIRED, and the frame says so in the safe direction: every
+          // message currently tells the Being「Portal 未配置 / 健康状况未知」.
+          //
+          // Integration decision §5.2 assigns this mapping to this unit and
+          // `chat/environment.ts` carries it in full — `portalRuntime`, nine
+          // rows, pinned line by line by tests/chat-integration-environment.ts.
+          // What is missing is the input: main.ts keeps `PortalSupervisor` in
+          // its own closure and `SubsystemContext` has no field for it, and both
+          // files are outside this unit. The whole of the remaining work is one
+          // field and one line:
+          //
+          //   subsystems/types.ts:  portalState?: () => PortalState | null;
+          //   main.ts:              portalState: () => portal.state,
+          //   here:                 getPortalState: () => ctx.portalState?.() ?? null,
+          //
+          // Nothing else changes — not the mapping, not its tests. Until then
+          // §5.2 is ported but not live (docs/migration/i5-conversation.md §7.1).
           getPortalState: () => null,
         }),
       }),
@@ -156,6 +171,15 @@ export function installChatSubsystem(ctx: SubsystemContext): ChatSubsystem {
 
   registerChatIpc({
     handle: ctx.handle, exclusive: ctx.exclusive, sessions: () => sessions, blocked: () => blocked,
+    // `connection().revision` is echoed to the renderer as `connectionRevision`
+    // and comes back on a public mention, where main/town/ipc-desktop.ts compares
+    // it with the TOWN subsystem's own generation. BeingDesktop reads one
+    // shell-wide `generation` at both ends (src/main.cjs line 1336); here they are
+    // two counters that have to move together, which they do because both are
+    // driven by the same `connectionVerified`/`connectionCleared` fan-out and both
+    // move exactly when the bound identity does. Drift would be silent — every
+    // `@` mention refused as「Being 连接已变化。」 — so the pair is asserted end to
+    // end in tests/chat-integration-composer.test.ts rather than left to reading.
     composerData: composerData({
       readKits: () => localKits(ctx.store.settings),
       readMembers: async options => {
