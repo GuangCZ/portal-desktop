@@ -9,14 +9,11 @@
 // SettingsStore reading a real profile, `restoreStartup()` → `verifyConnection()`
 // → `connectionVerified`, the real preload, the real renderer bundle.
 //
-// NOT WIRED INTO `npm run test:all`: both scripts/test-all.mjs and package.json
-// are frozen for the integration units (integration plan §4). Run it by hand
-// after `npm run package`:
+// Runs as `npm run test:model-settings` and as the `model-settings-e2e` step of
+// `npm run test:all` (wired on 2026-09-17, once the I6b merge unfroze
+// package.json and scripts/test-all.mjs). By hand, after `npm run package`:
 //
 //     node tests/model-settings-bound-e2e.mjs
-//
-// and whoever merges I6b should add it as a step next to `tools-e2e`, which is
-// there for the same reason (see the comment at the end of scripts/test-all.mjs).
 //
 // WHAT IT CATCHES. Removing the `void this.pull()` from
 // settings/models/model-settings.ts `start()` and repackaging fails it at

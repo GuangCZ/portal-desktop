@@ -31,7 +31,8 @@
     "test:browser": "node tests/browser-e2e.mjs",
     "test:tools": "node tests/tools-e2e.mjs",
     "test:terminal": "node tests/terminal-e2e.mjs",
-    "test:sidebar": "node tests/sidebar-e2e.mjs"
+    "test:sidebar": "node tests/sidebar-e2e.mjs",
+    "test:model-settings": "node tests/model-settings-bound-e2e.mjs"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.2",

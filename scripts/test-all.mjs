@@ -97,6 +97,7 @@ try {
   await npm('tools-e2e', ['run', 'test:tools']);
   await npm('terminal-e2e', ['run', 'test:terminal']);
   await npm('sidebar-e2e', ['run', 'test:sidebar']);
+  await npm('model-settings-e2e', ['run', 'test:model-settings']);
   report.status = 'passed';
 } catch (error) { report.status = 'failed'; report.error = String(error); console.error(String(error)); process.exitCode = 1; }
 finally { report.finishedAt = new Date().toISOString(); await persist(); console.log('\n测试报告：test-results/summary.md（结构化结果：summary.json）'); }
