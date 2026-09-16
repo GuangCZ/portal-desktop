@@ -149,3 +149,12 @@
 建议的正式修法写进 openIssues：把 `WorkerPresenter.describe` 的返回放宽成 `| null | undefined`、
 `open` 放宽成 `Promise<WorkerPresentationValue | null>`、`PresentationWorker.presentation` 放宽成
 `Record<string, unknown> | null`。
+
+## 基线
+
+`next` @ 9794cab：`npm run typecheck` 通过；`npx vitest run` **1071 通过 / 58 跳过**（96 文件通过 / 8 跳过）。
+
+## 进度
+
+- [x] 类型收敛（`tools/types.ts` 的索引签名、`DesktopBrowserOptions`、`DesktopBrowserLike.newTab`、
+  `DesktopTerminalLike.write/readSince`）——typecheck + vitest 数字不变。

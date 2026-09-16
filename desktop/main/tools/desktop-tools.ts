@@ -11,6 +11,7 @@ import type { ConsoleSnapshot, DesktopConsoleOptions } from './console';
 import { DesktopToolLink } from './tool-link';
 import type { ToolLinkCapabilities, ToolLinkOptions, ToolLinkSnapshot } from './tool-link';
 import { DesktopTerminalTools } from './terminal-tools';
+import type { ElectronBrowserHost } from './browser/host';
 import type {
   BrowserSnapshot, DesktopBrowserLike, DesktopPortalName, DesktopTerminalLike,
   OrchestrationLike, PreparedAction, ToolCallContext, ToolResult,
@@ -32,7 +33,15 @@ export interface DesktopToolLinkLike {
   disconnect(): ToolLinkSnapshot;
   dispose(): ToolLinkSnapshot;
 }
-export interface DesktopBrowserOptions { WebContentsView?: unknown; session?: unknown; getWindow?: () => unknown; onChange: () => void }
+/** What `DesktopTools` hands the browser constructor.
+ *
+ * I2 (2026-09-16) replaced three `unknown` members with the real host: the
+ * constructor parameter of a `new (...)` type is checked contravariantly, so
+ * `unknown` here made `typeof DesktopBrowser` — whose own options declare
+ * `BrowserViewConstructor`, `BrowserSessionFactory` and a window getter —
+ * unassignable to `DesktopBrowserConstructor` below. Measured with tsc; see
+ * docs/migration/i2-tools.md「类型对齐实测」and integration plan §3.2. */
+export type DesktopBrowserOptions = ElectronBrowserHost & { onChange: () => void };
 export type DesktopBrowserConstructor = new (options: DesktopBrowserOptions) => DesktopBrowserLike;
 export type DesktopConsoleConstructor = new (options: DesktopConsoleOptions) => DesktopConsoleLike;
 export type DesktopToolLinkConstructor = new (options: ToolLinkOptions) => DesktopToolLinkLike;
@@ -103,7 +112,12 @@ export class DesktopTools {
     this.getTerminal=getTerminal;
     this.terminalTools=new DesktopTerminalTools({getTerminal,showTerminal});
     this.requests=new Map();this.remoteJobs=new Set();this.jobOrigins=new Map();this.generation=0;this.disposed=false;this.notifyQueued=false;this.requestResult=null;
-    this.browser=new Browser({WebContentsView,session,getWindow,onChange:()=>this.changed()});
+    // The three electron touchpoints stay `unknown` on DesktopToolsOptions so the
+    // shell can pass `SubsystemContext.electron`'s own `unknown` members straight
+    // through (desktop/main/subsystems/types.ts explains why they are typed that
+    // way). One cast, here, is what the browser's own contract costs; the browser
+    // validates all three at runtime and refuses with「浏览器依赖无效。」.
+    this.browser=new Browser({WebContentsView,session,getWindow,onChange:()=>this.changed()} as DesktopBrowserOptions);
     this.console=new Console({getWorkspace,onChange:()=>this.changed()});
     this.link=new ToolLink({shouldReconnect:()=>!this.disposed && orchestration?.mode.enabled===true && !orchestration.configuring,...(desktopId?{portalName:desktopPortalName(desktopId)}:{}),onChange:()=>this.changed(),toolAllowed:name=>orchestration?.mode.enabled?name.startsWith('desktop_worker_'):!name.startsWith('desktop_worker_') && (!name.startsWith('desktop_terminal_') || Boolean(getTerminal()) && ['win32','darwin'].includes(process.platform)),invokeTool:(name,args,context)=>this.request(name,args,context)});
   }

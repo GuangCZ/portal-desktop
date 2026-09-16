@@ -15,6 +15,14 @@ export interface ToolResult { content: ToolContent[]; isError?: boolean }
 export interface ToolCallContext { signal?: AbortSignal; requestKey?: string }
 export type InvokeTool = (name: string, args: Record<string, unknown>, context: ToolCallContext) => ToolResult | Promise<ToolResult>;
 
+// I2 (2026-09-16) removed the `[key: string]: unknown` members these three used
+// to carry. They were what let a hand-written fixture answer with whatever it
+// liked, but they also made the REAL browser unassignable: `BrowserTabState`
+// (./browser/types) is an interface, and TypeScript grants an implicit index
+// signature only to type-alias object types, so `DesktopBrowser.snapshot()` was
+// rejected by `DesktopBrowserLike` — measured with tsc, see
+// docs/migration/i2-tools.md「类型对齐实测」. Every field the loose shapes
+// declare still exists on the real ones, so widening stayed a deletion.
 export interface BrowserTab {
   id: string;
   url?: string;
@@ -22,16 +30,14 @@ export interface BrowserTab {
   revision?: number;
   isLoading?: boolean;
   error?: string;
-  [key: string]: unknown;
 }
 export interface BrowserSnapshot {
   tabs: BrowserTab[];
   activeTabId: string | null;
   visible?: boolean;
-  [key: string]: unknown;
 }
 /** `newTab` on a live browser returns a snapshot; lighter hosts return the id only. */
-export interface NewTabResult { activeTabId: string | null; tabs?: BrowserTab[]; [key: string]: unknown }
+export interface NewTabResult { activeTabId: string | null; tabs?: BrowserTab[] }
 export interface PrepareActionRequest { id: string; selector: string; expectedRevision?: number; kind: 'click' | 'fill' }
 export interface PreparedAction { targetToken?: string; summary?: string }
 export interface BrowserScreenshot { mimeType: string; data: string }
@@ -39,7 +45,11 @@ export interface BrowserScreenshot { mimeType: string; data: string }
 /** The DesktopBrowser surface DesktopTools drives. */
 export interface DesktopBrowserLike {
   snapshot(): BrowserSnapshot;
-  newTab(options: { url?: string; active?: boolean }): NewTabResult;
+  /** A live browser answers every navigation with its whole snapshot, `newTab`
+   * included (src/desktop-browser.cjs, and ./browser/browser.ts after it). The
+   * declaration used to say `NewTabResult`, which only the lighter
+   * `BrowserTabOpener` below actually returns. I2, 2026-09-16. */
+  newTab(options: { url?: string; active?: boolean }): BrowserSnapshot;
   activateTab(id: string): unknown;
   closeTab(id: string): unknown;
   navigate(options: { id?: string; url?: string }): unknown;
@@ -65,15 +75,23 @@ export interface PresentationBrowser extends BrowserTabOpener {
 /** `normalizeBrowserUrl` from src/desktop-browser.cjs, injected by the browser unit. */
 export type NormalizeBrowserUrl = (value: string) => string;
 
-export interface TerminalSession { id: string; status?: string; [key: string]: unknown }
-export interface TerminalSnapshot { sessions: TerminalSession[]; [key: string]: unknown }
+// Same widening as the browser shapes above, for the same measured reason:
+// `TerminalSessionState` (./terminal/types) is an interface and carries no
+// implicit index signature, so the real `DesktopTerminal` could not be handed to
+// `getTerminal`.
+export interface TerminalSession { id: string; title?: string; cwd?: string; status?: string; pid?: number | null; cols?: number; rows?: number; exitCode?: number | null }
+export interface TerminalSnapshot { sessions: TerminalSession[]; activeSessionId?: string | null }
 /** The DesktopTerminal surface DesktopTerminalTools drives. */
 export interface DesktopTerminalLike {
   shell?: string;
   snapshot(): TerminalSnapshot;
   create(options: { cwd?: string }): Promise<{ sessionId: string }>;
-  write(options: { id: string; data: string }): Record<string, unknown>;
-  readSince(id: string, afterSequence: number): Record<string, unknown>;
+  // Both used to answer `Record<string, unknown>`, which the real terminal's own
+  // result interfaces cannot satisfy for the index-signature reason above; the
+  // spread sites in terminal-tools.ts only need the members to be enumerable.
+  // I2, 2026-09-16.
+  write(options: { id: string; data: string }): object;
+  readSince(id: string, afterSequence: number): object;
   activate(id: string): unknown;
   close(id: string): unknown | Promise<unknown>;
 }
