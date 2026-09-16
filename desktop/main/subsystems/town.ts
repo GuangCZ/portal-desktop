@@ -218,9 +218,15 @@ export function installTownSubsystem(ctx: SubsystemContext): TownSubsystem {
     memberCache.clear();
     cachedReads.invalidateMembers();
     const metadata = session.invalidateMembers();
-    // A profile change is an identity change for the purpose of fencing: a read
-    // that started under the old directory must not be merged with the new one.
-    identityRevision++;
+    // `identityRevision` is deliberately NOT bumped here, and BeingDesktop does not
+    // bump it either (src/main.cjs line 455): it is part of `background.getIdentity()`,
+    // so raising it would read as a new identity three layers down — TownRefresh
+    // would drop the accumulated timeline (town/timeline/refresh.ts line 533),
+    // TownBackground would stop and reset the bonfire reader (town/channel/
+    // town-background.ts line 163), and every in-flight read would fail
+    // `_assertCurrent` with SESSION_CHANGED. A rename changes names, not feeds.
+    // The two caches fence themselves: TownCachedReads bumps its own members
+    // revision and TownSession fences its own directory.
     ctx.push(MEMBERS_INVALIDATED, metadata);
     publish();
     return metadata;

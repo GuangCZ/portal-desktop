@@ -12,7 +12,7 @@
 // things about the nine channels of the Town layer decision §5.1 removed.
 import { afterEach, expect, it } from 'vitest';
 import { PLAIN_CHANNELS, TOWN_CHANNELS, townFixture, type TownFixture } from './town-fixture';
-import { json } from './town-fixture';
+import { json, settle } from './town-fixture';
 
 const open: TownFixture[] = [];
 afterEach(async () => { while (open.length) await open.pop()!.cleanup(); });
@@ -209,4 +209,44 @@ it('P1 identity keeps the Loom name, the verified Town ID and the display name s
   expect(identity.sendAs).toBe('t_IzYOPP3G0ABJuK2M');
   expect(identity.sendAs).not.toBe(identity.loomBeingId);
   expect(identity.beingId).toBe('t_IzYOPP3G0ABJuK2M');
+});
+
+it('invalidates the directory on a rename and leaves the feeds exactly where they were', async () => {
+  const f = await fixture({ online: true });
+  await f.connect();
+  await f.pair();
+  const hear = json({
+    ok: true, global_latest_seq: 9,
+    messages: [{ seq: 9, being: 'cz_being', town_id: 't_Willow', message: '改名前后都在的一句', at: '2026-09-12T00:00:00Z' }],
+  });
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  f.on('/api/bonfire/hear', async () => { await held; return hear; });
+  const pending = f.call('beings:town-read', { kind: 'bonfire' });
+  await settle();
+
+  // A rename lands while that read is in flight. `identityRevision` is part of the
+  // identity TownBackground and TownRefresh fence against — raise it here and the
+  // read above is refused with SESSION_CHANGED on arrival
+  // (town/channel/town-background.ts line 258), the accumulated timeline is
+  // dropped (town/timeline/refresh.ts line 533) and the bonfire reader is stopped
+  // and reset on the next lifecycle sync (town-background.ts line 163).
+  // BeingDesktop does not raise it in `invalidateTownMembers` (src/main.cjs line
+  // 455) and neither does this: a rename changes names, not feeds.
+  const before = (await f.call('beings:town-app')).identity.identityRevision;
+  await f.call('beings:town-profile-changed');
+  await settle();
+  release();
+
+  const envelope = await pending;
+  expect(envelope.envelope.snapshot.messages.map((message: { content: string }) => message.content))
+    .toEqual(['改名前后都在的一句']);
+  const after = await f.call('beings:town-app');
+  expect(after.identity.identityRevision).toBe(before);
+  expect(after.sync.bonfire.lastSuccessAt).toBeGreaterThan(0);
+  expect((await f.call('beings:town-timeline', { kind: 'bonfire' })).snapshot.messages).toHaveLength(1);
+
+  // What the channel IS for still happens: the directory is invalidated and every
+  // consumer is told, so the names are re-read while the messages stay put.
+  expect(f.pushes.some(push => push.channel === 'beings:town-members-invalidated')).toBe(true);
 });
