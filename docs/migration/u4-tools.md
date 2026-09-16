@@ -272,8 +272,8 @@ ToolLink=DesktopToolLink}`。
 
 | 测试 | 源文件 | 目标 | 状态 |
 | --- | --- | --- | --- |
-| security | test/security.test.cjs | tests/tools-security.test.ts | 未开始 |
-| browser-links | test/browser-links.test.cjs | tests/tools-browser-links.test.ts | 未开始 |
+| security | test/security.test.cjs | tests/tools-security.test.ts | 测试通过（7/7） |
+| browser-links | test/browser-links.test.cjs | tests/tools-browser-links.test.ts | 测试通过（5/5） |
 | network | test/desktop-network.test.cjs | tests/tools-network.test.ts | 未开始 |
 | console | test/desktop-console.test.cjs | tests/tools-console.test.ts | 未开始 |
 | tool-link | test/desktop-tool-link.test.cjs | tests/tools-tool-link.test.ts | 未开始 |
@@ -298,3 +298,4 @@ ToolLink=DesktopToolLink}`。
 - `target=tab.url || tab.title` 保留原表达式，只加了 `as string`（不是 `|| ''`），保证 url/title 都为空时
   运行期取值与 BeingDesktop 一致。
 - `desktop-tools` 测试里的 `desktopPortalName` 夹具逐行抄自 `src/desktop-identity.cjs` 5..10 行。
+- `browser-links` 测试同样内联 `normalizeBrowserUrl` + `navigationUrl` 夹具（src/desktop-browser.cjs 16..34 行）。
