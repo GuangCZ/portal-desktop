@@ -661,3 +661,42 @@ const scrollSummary = (changes = {}) => ({id:'wer79LxF', being_id:'alice', displ
 - 用例 36：两次 `listBeings()` 都读 `/api`，`protectedReads === 0`；`context.connected = false` 后仍返回 2 条（**listBeings 不做 `_context` 连接检查**）。
 - 用例 37：`identityRevision++` 后迟到响应 → `SESSION_CHANGED`；`being_id:'../bad'` → `INVALID_RESPONSE`。
 - 用例 39：`[{ready:true},'connected']`、`[{ready:false},'registered']`、`[{ready:'true'},'unknown']`、`[{},'unknown']`、`[{status:'disabled',ready:true},'disabled']`；第二个渠道恒 `'unknown'`。
+
+### 测试 test/p1-name-rules.test.cjs（173 行，15 个用例，已读完）—— 只挑针对本单元四模块的
+
+共享夹具（原样照抄）：
+```js
+const choices = [{town_id:'t_a',display_name:'Neuromancer'},{town_id:'t_b',display_name:'Neuromancer'}];
+const warnings = [{mention:'@Neuromancer',reason:'ambiguous',candidates:choices,server_field:'preserve this'}];
+const json = (value,status=200) => new Response(JSON.stringify(value),{status,headers:{'content-type':'application/json'}});
+function clientFixture(response, onEvent=()=>{}) {
+  const context={key:'test-session',beingId:'cz_being',revision:1,connected:true};
+  const calls=[];
+  const profile={town_id:'t_self',display_name:'Before',mentions:[]};
+  const client=new TownClient({getContext:()=>context,
+    store:{loadCredential:async()=>({token:'a'.repeat(64),townId:'t_self'})},onEvent,
+    fetchImpl:async(url,options)=>{
+      const route=new URL(url).pathname;calls.push({route,method:options.method});
+      if(route==='/api/bonfire/mentions')return json(profile);
+      assert(response,'No unexpected external route');return response(route,options);
+    }});
+  return {client,calls,profile,context};
+}
+```
+> 这里 `store` 有 `loadCredential` 且返回 `townId:'t_self'`，所以 `_townId` 一开始就绑定好，`_verifyIdentity` 不走首次迁移分支。
+
+**本单元要移植的用例**：
+1. `P1 speak keeps mention_warnings verbatim and emits exactly one simulated POST`（TownClient.speak）—— 回执 `{ok:true, town_id:'t_self', seq:17, mentions:['t_c'], mention_warnings: warnings}` → `result.mention_warnings` 深等于 `warnings`（**原样保留服务端字段 `server_field`**），`result.mentions` 等于 `['t_c']`，POST 只发一次。
+2. `P1 private recipient 400 reads candidates and preserves a definite not-sent result through preload`（TownClient.sendDirectMessage 部分）—— 400 回包 `{error:'ambiguous recipient', candidates:[...choices, {town_id:'../invalid', display_name:'No'}]}` → 抛 `NOT_SENT`，`e.detail === 'ambiguous recipient'`，`e.candidates` 深等于 `choices`（**非法 town_id 被过滤**），POST 只发一次。**preload 那半截（`preload.cjs` vm 加载）不在本单元，删掉该断言并在 notes 说明。**
+3. `P1 malformed candidate fields cannot become executable UI or escape the IPC DTO`（`candidates` 纯函数）—— `candidates([{town_id:'t_a',display_name:'<img src=x>',secret:'hidden'},{town_id:'t_a',display_name:'duplicate'},null])` 深等于 `[{town_id:'t_a',display_name:'<img src=x>'}]`（**不转义、只去重与剥字段**）。
+4. `P1 identity exposes distinct Loom, verified Town and display fields`（TownClient.identity 部分）—— 初始 `state().townId === ''`；`identity()` 返回 `{loomBeingId:'cz_being', townId:'t_self', displayName:'Before'}`；`state().beingId === 'cz_being'`、`state().loomBeingId === 'cz_being'`、`state().townId === 't_self'`；`reset()` 后 `state().townId === ''`。**TownController 那半截不在本单元。**
+5. `P1 ambiguous and reused historical names stay unknown while an explicit ID survives`（`messagesDto`）—— `envelope={ok:true,global_latest_seq:1,messages:[{seq:1,being:'Echo',message:'past'}]}`；三组 members（`[{id:'t_new_owner',name:'Echo'}]`、`[{id:'t_a',name:'Echo'},{id:'t_b',name:'Echo'}]`、`[]`）都得到 `beingId===''`、`authorUnknown===true`、`beingName==='Echo'`；加上 `town_id:'t_original'` 后 `townId==='t_original'`、`beingId==='t_original'`、`authorUnknown===undefined`。
+   > 注意：`members` 数组元素是 `{id, name}`，`messagesDto` 里 `members.find(m => m.id === item.being)` 用 `item.being === 'Echo'` 去找 id 为 `'Echo'` 的成员 —— 三组都找不到，所以 `beingId` 为 `''`。
+6. `P1 channel reads verify town_id-only preflight and status against the pinned binding`（TownSession.getChannelStatus）—— context 带 `townId:'t_self'`；mentions 返回 `{town_id:'t_self',mentions:[]}`；status 返回 `{town_id: wrong?'t_other':'t_self', channels:[{channel:'feishu',ready:true}]}`；wrong → `IDENTITY_MISMATCH`，否则 `channels[0].status === 'connected'`；所有请求都是 GET。
+7. `P1 members cache keys current metadata by ID, expires, refreshes manually and fences rename invalidation`（TownSession 成员缓存）—— `getContext:()=>({})`（**空 context**，`getMembers` 不走 `_context`）、`now:()=>time`、`membersTtlMs:50`。两次 `getMembers()` 只发一次网络；`time+=51` 后重新读到 `'After'`（calls=2）；`getMembers({force:true})`（calls=3）后 `memberDisplayName('t_self')==='After'`；在飞行中 `invalidateMembers()` → pending 抛 `SESSION_CHANGED`，`memberCacheState().expiresAt===0`，`memberDisplayName('t_self')===''`。
+8. `P1 verified local profile refresh emits cache invalidation without sending a message`（TownClient.identity → profile_changed + TownSession.invalidateMembers）—— `identity()` 一次，改 `profile.display_name='After'`，`identity({force:true})` 一次 → `events` 等于 `[{type:'profile_changed',townId:'t_self'}]`，`session.memberCacheState().expiresAt===0`，所有请求都是 GET。
+9. `P1 exact acceptance fixture keeps Loom, Town and display identities separate across IPC`（只取 `matchesTownIdentity` 部分）—— `identity={loomBeingId:'cz_being',townId:'t_IzYOPP3G0ABJuK2M',displayName:'Neuromancer'}`；`matchesTownIdentity({town_id:identity.townId}, identity)===true`；`[{town_id:'t_izyopp3g0abjuk2m'},{town_id:identity.townId,being:'different_loom'},{display_name:'Neuromancer'}]` 全 `false`；`matchesTownIdentity({town_id:identity.townId},{loomBeingId:'cz_being',townId:''})===false`。**TownController/preload/isOwnMessage 部分不在本单元。**
+10. `P1 SDK and relay receipts keep warnings through TownSession and preload without directory-dependent ID addressing`（只取 sdk 分支）—— `body='@t_missing_in_cache @Neuromancer fixture'`；`TownSession({..., writeImpl: request => client.speak({kind:request.kind,message:request.content})})`，`fetchImpl` 断言**不得被调用**（精确 ID 不需要名字目录）；`sendBonfireMessage({content:body, mentions:['t_missing_in_cache'], connectionRevision:1, requestId})` → `receipt.ok===true`、`receipt.mention_warnings` 深等于 `warnings`、POST 一次。**relay 分支与 preload 不在本单元。**
+
+**不在本单元的用例**（BeingTownWriter / TownCachedReads / TownController / preload / renderer town-mentions 的 `isOwnMessage`·`resolve`）：
+`P1 relay accepts pinned town_id-only receipts…`、`P1 relay cannot accept an unbound or conflicting Town identity`、`P1 own-message classification uses only the verified Town ID…`、`P1 persisted member snapshots expire…`、`P1 manual names stay raw…`。
