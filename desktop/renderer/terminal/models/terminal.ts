@@ -84,14 +84,20 @@ export class TerminalModel extends Store {
    * (renderer/app/models/registry.ts). */
   start(): () => void {
     const revision = ++this.lifecycle;
+    // Subscribe before reading, and let a push that arrives first win. The main
+    // process only sends on a change, so a snapshot that was true when the read
+    // was issued can be stale by the time it answers — and accepting it would
+    // drop the sessions the push just announced. Same shape as the shell
+    // browser's panel (renderer/browser/page.tsx).
+    let received = false;
     const stops = [
-      this.api.terminal.onState(state => { if (revision === this.lifecycle) this.accept(state); }),
+      this.api.terminal.onState(state => { if (revision !== this.lifecycle) return; received = true; this.accept(state); }),
       this.api.terminal.onData(event => { if (revision === this.lifecycle) this.receive(event); }),
       this.api.terminal.onReveal(({ id }) => { if (revision === this.lifecycle) this.reveal(id); }),
     ];
     void this.api.terminal
       .state()
-      .then(state => { if (revision === this.lifecycle) this.accept(state); })
+      .then(state => { if (revision === this.lifecycle && !received) this.accept(state); })
       .catch(error => { if (revision === this.lifecycle) this.unavailable = errorText(error); this.changed(); });
     return () => {
       this.lifecycle++;
@@ -147,14 +153,16 @@ export class TerminalModel extends Store {
     if (event.sequence > view.sequence + 1) {
       // A gap. Queue it and re-read: the retained buffer is the authority.
       view.pending.push(event);
-      void this.replay(event.id);
+      void this.replay(event.id, true);
       return;
     }
     view.sequence = event.sequence;
     view.sink.write(event.data);
   }
 
-  private async replay(id: string): Promise<void> {
+  /** `recovering` marks the read a gap asked for. See the bottom of this method:
+   * it is the difference between one re-read and an unbounded loop. */
+  private async replay(id: string, recovering = false): Promise<void> {
     const view = this.views.get(id);
     if (!view) return;
     const generation = ++view.generation;
@@ -178,7 +186,20 @@ export class TerminalModel extends Store {
     const queued = view.pending;
     view.pending = [];
     view.replaying = false;
-    for (const event of queued.sort((a, b) => a.sequence - b.sequence)) this.receive(event);
+    for (const event of queued.sort((a, b) => a.sequence - b.sequence)) {
+      // DEVIATION from BeingDesktop, and the only one in this protocol. 0.8.26
+      // re-delivers the queue unconditionally (terminal-panel.js line 90), so an
+      // event still ahead of the freshly read cursor calls `replay` again, which
+      // re-delivers it, which calls `replay` again — forever. It never fired in
+      // 0.8.26 because the main process appends to the retained buffer BEFORE it
+      // emits (tools/terminal/terminal.ts `append`), so a read always answers at
+      // or past every event already sent. If that invariant ever breaks, a
+      // request storm is a worse failure than a gap: the buffer has just told us
+      // it does not hold the missing chunks, and reading it again cannot produce
+      // them. Take the loss, keep the newest output, and stop asking.
+      if (recovering && event.sequence > view.sequence + 1) view.sequence = event.sequence - 1;
+      this.receive(event);
+    }
   }
 
   show(): void {

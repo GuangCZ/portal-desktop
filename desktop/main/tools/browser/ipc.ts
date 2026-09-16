@@ -55,15 +55,6 @@ function tabId(value: unknown, required = true): string | undefined {
   return value;
 }
 
-function bounds(value: unknown): { x: number; y: number; width: number; height: number } {
-  const rect = fields(value, ['x', 'y', 'width', 'height'], '浏览器显示');
-  for (const key of ['x', 'y', 'width', 'height']) {
-    const number = rect[key];
-    if (typeof number !== 'number' || !Number.isFinite(number)) throw invalid('浏览器显示参数无效。');
-  }
-  return rect as { x: number; y: number; width: number; height: number };
-}
-
 export const TOOL_BROWSER_UNAVAILABLE = '内置浏览器在当前运行环境不可用。';
 
 export function registerToolBrowserIpc({ handle, browser, blocked }: ToolBrowserIpcOptions) {
@@ -83,17 +74,17 @@ export function registerToolBrowserIpc({ handle, browser, blocked }: ToolBrowser
   handle('beings:tool-browser-action', (action: unknown, value: unknown): ToolBrowserState => {
     const current = required();
     switch (action) {
-      case 'new': {
-        const options = fields(value, ['url', 'active'], '标签页');
-        if (options.url !== undefined && typeof options.url !== 'string') throw invalid('标签页参数无效。');
-        if (options.active !== undefined && typeof options.active !== 'boolean') throw invalid('标签页参数无效。');
-        return state(current.newTab(options));
-      }
+      // Types and grammar belong to `DesktopBrowser`: `newTab` refuses a
+      // non-boolean `active` and hands `url` to `normalizeBrowserUrl`, whose
+      // refusals name what a valid address looks like. Re-checking them here would
+      // give the same input two different sentences depending on which layer spoke
+      // first. Only the whitelist — which `DesktopBrowser` has no notion of — is
+      // this layer's.
+      case 'new': return state(current.newTab(fields(value, ['url', 'active'], '标签页')));
       case 'activate': return state(current.activateTab(tabId(value)));
       case 'close': return state(current.closeTab(tabId(value)));
       case 'navigate': {
         const options = fields(value, ['id', 'url'], '网址');
-        if (typeof options.url !== 'string') throw invalid('请输入完整网址，例如 https://example.com。');
         return state(current.navigate({ id: tabId(options.id, false), url: options.url }));
       }
       case 'back': return state(current.goBack(tabId(value, false)));
@@ -107,14 +98,11 @@ export function registerToolBrowserIpc({ handle, browser, blocked }: ToolBrowser
   // Where the panel's placeholder is, in window coordinates. `visible:false`
   // without bounds keeps the last rectangle, which is what `DesktopBrowser`
   // expects when a panel is merely hidden rather than resized.
-  handle('beings:tool-browser-viewport', (value: unknown): ToolBrowserState => {
-    const options = fields(value, ['visible', 'bounds'], '浏览器显示');
-    if (typeof options.visible !== 'boolean') throw invalid('浏览器显示参数无效。');
-    return state(required().setViewport({
-      visible: options.visible,
-      ...(options.bounds === undefined ? {} : { bounds: bounds(options.bounds) }),
-    }));
-  });
+  handle('beings:tool-browser-viewport', (value: unknown): ToolBrowserState =>
+    // `setViewport` owns both checks: a non-boolean `visible` is
+    //「浏览器显示选项无效。」and a rectangle that is not four finite numbers in
+    // range is「浏览器显示区域无效。」.
+    state(required().setViewport(fields(value, ['visible', 'bounds'], '浏览器显示'))));
 }
 
 /** The one push, given the window to send on. */
