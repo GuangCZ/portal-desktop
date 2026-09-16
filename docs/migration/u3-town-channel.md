@@ -266,3 +266,43 @@ TownPairing 的 5 个用例（全部移植）：
   - 否则 SERVICE_ERROR，detail `'无法取得 Being 的渠道结果，请稍后重新检查。'`。
   catch 先 `_context(revision, snapshot)`（可能抛 SESSION_CHANGED 覆盖），再 `_set('error', detail, channel)`，最后 `throw fail(code, detail)`。
 - `_run` 里 BeingClient 通过 `await import('../extensions/being-anywhere/being-client.mjs')` 动态载入 → 移植为可注入的 `createClient(url, fetchLike)` 工厂。
+
+### test/channel-being.test.cjs（330 行，24 个 test）
+公共夹具：
+- `event(type,data) = 'event: <type>\ndata: <json>\n\n'`。
+- `contract(options)`：从 `JSON.parse(options.body).message` 里用正则取回 `requestId`（`^\[Being Desktop Town sync:([^\]]+)\]`）、`route`（`任务路线：([^。]+)。`）、`beingId`（`当前 Being：([^；]+)；`），protocol 固定 `being-desktop-channel-result/1`。
+- `turn(reply, sessionId='server-wechat', options)`：有 options 时先发 `meta {scene_id: body.scene_id}`，再 `content_block_delta {delta:{text: reply 为 string 则原文，否则 JSON.stringify({...(options?contract(options):{}), ...reply})}}`，最后 `message_stop {session_id}`。
+- `stream(text) = new Response(text, {headers:{'Content-Type':'text/event-stream'}})`；`deferred()`。
+- `harness(respond = 默认返回 wechat/pending, overrides = {})`：context `{configured:true, connected:true, exiting:false, connectionId:4, identityRevision:1, beingName:'alice', connection: parseConnection('https://being.test/alice?token=loom-test-private')}`；`new ChannelBeing({getContext:()=>({...context}), onChange, onRequest, fetchImpl, ...overrides})`；返回 `{channel, context, calls, changes, requests}`。
+- `wechat = {channel:'wechat', connectionRevision:4}`；`feishu = {channel:'feishu', connectionRevision:4}`。
+
+用例名（顺序）：
+1. `channel clicks send fixed background requests only to authenticated Loom`
+2. `every channel uses its own scene from the first request and ignores legacy server session IDs`
+3. `202 only means pending and does not replay automatically`
+4. `every reply is consumed until EOF and only the final completed reply supplies the outcome`
+5. `prose, malformed schema, and mismatched channel never imply connection success`
+6. `new channel flows reject stale UUID, wrong route or Being, legacy untagged and extra-field replies`
+7. `channel enrollment runs exactly before sending, stays four-field and cannot permit a stale POST`
+8. `correlated JSON fences are parsed and legacy outcome parsing still omits private unknown fields`
+9. `connection credential echoes and credential fields are redacted in structured and prose replies`
+10. `credential entry rejects locally without reading getters or contacting a server`
+11. `strict channel requests reject extra fields, getters, unsupported channels, and stale identity before sending`
+12. `duplicate requests are rejected while an HTTP stream is running`
+13. `reset aborts pending streams and stale outcomes cannot replace the cleared state`
+14. `identity changes without reset are fenced before final results`
+15. `truncated or errored operations report result unknown, retain no sensitive error, and never retry`
+16. `failed status checks and invalid Loom credentials use distinct fixed errors`
+17. `only bounded raster data URLs are displayed and URL-only QR replies trigger no download`
+18. `documented QR image URLs load without Loom credentials, redirects or cookies`
+19. `private, credential-echo, wrong-domain, and non-HTTPS QR addresses never trigger a fetch`
+20. `unsafe or oversized QR content does not invalidate an accepted channel operation`
+21. `an accepted or broken first request keeps its allocated channel scene without replay`
+22. `foreign and unscoped replies cannot supply channel results even with matching JSON`
+23. `allocated Desktop channel scenes are used directly and a missing session fails before POST`
+24. `an identity change without reset does not reuse the previous channel scene`
+25. `automatic channel inspection reads existing binding without allocating a session or sending a message`
+26. `inspection permission errors do not trigger a Being request and reset cancels stale inspection`
+（实为 26 个 test。）
+
+关键观测：夹具的 `fetchImpl` 看到的 URL 是 `https://being.test/alice/api/chat/stream?token=loom-test-private`，options 含 `method:'POST'`、`redirect:'error'`、`credentials:'omit'`、`referrerPolicy:'no-referrer'`，body 的 key 顺序必须是 `['message','scene_id','scene_meta','client_ref']` —— 这些全部由 BeingClient.send 决定，必须逐行移植 being-client.mjs 的 send。
