@@ -129,3 +129,37 @@ BeingDesktop **没有** SBS 写入路径（`validateModelPatch` 白名单里没�
 `tests/sbs-refresh.mjs` 的旧脚本还钉住了四条行为，重写时逐条保留：
 未确认时开关 disabled 且 `aria-pressed` 为 null；被拒绝的 PATCH 不乐观翻转；
 更早发出的 GET 不能撤销随后确认的成功切换；503 / 字段缺失 → 状态回到「未知」，刷新可恢复。
+
+### 1.8 `renderer/model-settings.js`（205 行）与 `test/model-settings-ui.cjs`（363 行 / 26 条 check）
+
+界面状态机（要逐条保真）：
+
+- 身份 = `JSON.stringify([ready, beingName, displayUrl, identityRevision, connectionRevision])`；
+  身份变则 `generation++`、清空 snapshot/models/providers/draft/apiKey/feedback、`attempted=false`、折叠服务设置。
+  `ready = connection.configured === true && connection.status === 'connected'`。
+- `load()`：未连接或忙则不发；**有脏草稿时保留草稿**（`preserveDraft`），成功后提示「已刷新支持的模型，保留了未保存的更改。」；
+  过期（`request !== generation`）的答复直接丢弃，既不写状态也不清 busy。
+- `save()`：payload = `{model, provider, baseUrl, connectionId}`，`apiKey` 只在非空时带上；
+  `finally` 里 `delete payload.apiKey`（密钥不在内存里多停留一拍）。
+- 模型下拉：按 provider 分组，`keyless`（自部署）组排最前；选项文本 `名称 · 模型ID · 服务商`（名称与 ID 相同时省略中段）；
+  末尾一条「自定义模型…」（`__custom__`）。
+- 选模型：provider 跟着变；endpoint 取 `model.baseUrl || (provider 变了 ? providers[provider].baseUrl : '')`；
+  provider 变或 endpoint 变时**自动展开** `model-service-settings`。
+- 选 provider：base-url 换成该 provider 的默认值（没有就清空）；若当前选中的 preset 不属于该 provider，切到自定义并把模型名带过去。
+- `keyNote`：`hasApiKey` → 「已有密钥；留空保留，填写新密钥可替换。」否则「当前配置未提供密钥；按服务要求填写。」；
+  keyless provider 覆盖成「<名称>服务通常不填 API Key；Being 提示需要时填写后重新保存。」（注释标注为 2026-09-11 实测：
+  Loom 切 keyless 不送 key，但 Being 仍可能索要）。
+- `保存` 按钮：`!editable || !isDirty() || !modelName() || !provider` 时禁用；忙时文案「正在保存…」。
+- 错误文案 `cleanError` 剥掉 `Error invoking remote method 'being:xxx': `前缀。
+- API Key 输入框 `type=password`，**永不回填**；断开连接时草稿与密钥一起清空。
+
+26 条 check 的映射见本文档 §5「测试映射」。
+
+### 1.9 `test/model-config.test.cjs`（12 条）
+
+全部要移植：DTO 脱敏与去重、自部署 keyless 预设、patch 白名单与原型/getter 闸门、
+同源路由 + `X-Relay-Secret` + `redirect/credentials/cache` 四项、PATCH 后必须重读确认且绝不自动重试、
+`NEEDS_KEY`/`ROLLED_BACK`/`AUTH_REQUIRED`/`RESULT_UNKNOWN` 四码互不串味且不泄露 `private`、
+传输异常/超大响应不泄露凭据、陈旧表单不发请求、切 Being 后的答复一律丢弃、
+并发 `BUSY` 与旧读丢弃、`updateRuntimeConfig` 只动 config 半边、
+地址未变则不发 `base_url`（保住私有查询参数）、卡住的保存不会锁住新 Being。
