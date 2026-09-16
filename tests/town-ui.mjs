@@ -19,6 +19,16 @@
 // asks the main process once for this feed and prepends what came back") and the
 // pairing surface, which is new to this shell.
 //
+// EXTENDED 2026-09-17 (integration unit IT) with the three rules from that same
+// BeingDesktop file that need a caret, a focus ring or a scroll offset to mean
+// anything — "background revisions and deletions preserve draft focus selection
+// and scroll" and "Fireside background changes preserve draft focus and scroll",
+// split into the draft half and the list half, plus the background-collection
+// status strip ("refreshLabel", renderer/town-app.js:163) actually reaching the
+// page. Their model halves — which ring an answer belongs to, which target a
+// receipt clears, and the whole wording table of the strip — are in
+// tests/town-conversation-rules.test.ts.
+//
 // Nothing here is a real credential, a real message or a real Town: every
 // request is answered inside the application by `protocol.handle`, and any
 // request to another origin fails the run.
@@ -119,10 +129,12 @@ try {
         // 「成员目录还没到」= 请求真的挂着，直到 `releaseMembers()`。这正是下面两条
         // check 名字里的场景，也是 BeingDesktop test/town-conversation-ui.cjs
         //「while the member directory remains pending」的原样。
-        // 它当然会让篝火 feed 一起停住——那不是夹具的毛病，是
+        // 在 IT 之前它会让篝火 feed 一起停住——那不是夹具的毛病，是
         // desktop/main/town/session/session.ts 的 `getBonfireMessages` 把
         // `/api/bonfire/hear` 和 `getMembers()` 放进同一个 `Promise.all`，
-        // `.catch` 接得住「拒绝」接不住「慢」（复审 finding 2，记录 §8 openIssue 10）。
+        // `.catch` 接得住「拒绝」接不住「慢」（IM 复审 finding 2 / openIssue 10）。
+        // 现在目录只起飞不被等，所以这个挂起**应该**再也停不住 feed —— 下面那两条
+        // check 就是量这件事的，夹具这一行必须继续真的挂着，别改成快速失败。
         if (globalThis.town.holdMembers) await globalThis.town.membersHeld;
         return Response.json({ community: [{ town_id: 't_River', display_name: '河流', description: '' }] });
       }
@@ -144,7 +156,12 @@ try {
         // 夹具原来每次都回同样的 seq 7/8，所以那条 check 断言的场景从来没被造出来过；
         // IM 2026-09-16 首次执行到这里时才看见。`fresh` 就是「刷新之后 Town 多了一条」。
         const fresh = globalThis.town.fresh ? [message(9, '刷新之后的新消息')] : [];
-        const all = [message(1, '更早的消息 @t_River'), message(7, '篝火消息 @t_River'), message(8, '第二条篝火消息'), ...fresh];
+        // `bulk` 只在最后一段用：要断言「背景更新不动滚动位置」，列表必须真的能滚。
+        // 它只增加消息，不改动上面任何一条 check 见过的场景。
+        const bulk = globalThis.town.bulk
+          ? Array.from({ length: 60 }, (_, index) => message(100 + index, `用于核对滚动位置的第 ${index} 条消息，` + '内容需要足够长才会把列表撑出可滚动的高度。'.repeat(2)))
+          : [];
+        const all = [message(1, '更早的消息 @t_River'), message(7, '篝火消息 @t_River'), message(8, '第二条篝火消息'), ...fresh, ...bulk];
         // 分页语义按实测记录（docs/town-sdk-integration.md「时间线累积」/ hear 分页）：
         // 不带 since = 最新的一页；带 since = 序号**大于** since 的最早 N 条，没有 before。
         // 夹具原来对任何 since 都只回 seq 1，那等于宣告「seq>0 里只有这一条」，
@@ -209,17 +226,20 @@ try {
   // 并顺带把「两条都出来了」也断言上，比原来的写法更强，不是更松。
   const beforeDirectory = rendered ? await page.locator('.social-message').allTextContents() : [];
   const readsWhilePending = await app.evaluate(() => globalThis.town.reads.length);
-  pending('messages render while the member directory is still pending',
+  check('messages render while the member directory is still pending',
     rendered
     && beforeDirectory.length === 2
-    && beforeDirectory.some(text => text.includes('篝火消息') && text.includes('@t_River')),
-    'desktop/main/town/session/session.ts getBonfireMessages: `/api/bonfire/hear` 与 `getMembers()` '
-    + '在同一个 `Promise.all` 里，`.catch` 接得住拒绝接不住慢，目录慢多久 feed 就空多久'
-    + '（最长 session/client.ts 的 AbortSignal.timeout(20000)）。修法：先用缓存/空目录渲染，'
-    + '目录到了再补 mention 标签——下一条 check 断言的正是那条路径已经存在。');
-  pending('the pending directory did not stop the feed read', readsWhilePending === 1,
-    `打开一次篝火发了 ${readsWhilePending} 次 feed 读（首次绘制 1 条，约 250ms 后第 2 条，since 都是 null）;`
-    + ' 与目录是否就绪无关，记录 §8 openIssue 2。');
+    && beforeDirectory.some(text => text.includes('篝火消息') && text.includes('@t_River')));
+  // An UPPER bound as well as a lower one, or the line proves nothing the check
+  // above it has not already proved by rendering messages at all. Two is what
+  // this window can legitimately hold: the page's own read, plus — if the render
+  // above happened to take longer than 250 ms — the live reader reconciling the
+  // SSE `hello`, whose coalescing window is explained at length further down.
+  check('the pending directory did not stop the feed read', readsWhilePending >= 1 && readsWhilePending <= 2);
+  // Let the live reader's 250 ms reconcile window pass, so the next check
+  // measures the DIRECTORY's effect and nothing else. See the note below.
+  await page.waitForTimeout(800);
+  const beforeArrival = await app.evaluate(() => globalThis.town.reads.length);
   // The directory arrives.
   await app.evaluate(() => { globalThis.town.holdMembers = false; globalThis.town.releaseMembers(); });
   await page.locator('.social-message').first().waitFor();
@@ -228,8 +248,58 @@ try {
     (await page.locator('.town-mention').first().textContent()) === '@河流'
     && (await page.locator('.town-mention').first().getAttribute('title')) === '@t_River');
   check('a directory arrival costs no second message read',
-    (await app.evaluate(() => globalThis.town.reads.length)) === 1);
+    (await app.evaluate(() => globalThis.town.reads.length)) === beforeArrival);
 
+  // ONE public-directory read, however many callers want it (IT, 2026-09-17).
+  //
+  // MEASURED (IM 2026-09-16, packaged build): a single clean opening asked
+  // https://beings.town/api FOUR times, and nine to twelve while it was failing,
+  // because `TownSession.getMembers` wrote its 60 s cache only AFTER a success —
+  // so concurrent callers had nothing to share and each opened its own request.
+  // They now join the one in flight (desktop/main/town/session/session.ts), which
+  // is the rule BeingDesktop keeps one layer up in renderer/town-app.js:1957 and
+  // :1972, where the load already started is reused rather than repeated
+  // (`cachedMembers || loadBonfireMembers()`).
+  //
+  // The burst is driven deliberately rather than read off the opening sequence:
+  // pairing legitimately resets the session and invalidates the directory, and a
+  // read that was abandoned at a reset is not a read that failed to merge. Five
+  // forced reads issued in one tick, against a directory that is held again, have
+  // no such excuse.
+  await app.evaluate(() => {
+    globalThis.town.holdMembers = true;
+    globalThis.town.membersHeld = new Promise(resolve => { globalThis.town.releaseMembers = resolve; });
+    globalThis.town.membersBefore = globalThis.town.members;
+  });
+  const burst = page.evaluate(() => Promise.allSettled(
+    Array.from({ length: 5 }, () => window.beings.townDesktop.members({ force: true }))));
+  await page.waitForTimeout(500);
+  const shared = await app.evaluate(() => globalThis.town.members - globalThis.town.membersBefore);
+  await app.evaluate(() => { globalThis.town.holdMembers = false; globalThis.town.releaseMembers(); });
+  await burst;
+  check('five directory reads at once are one request on the wire', shared === 1);
+
+  // WHY THESE THREE COUNT AGAINST A BASELINE INSTEAD OF AGAINST 1 (IT, 2026-09-17).
+  //
+  // MEASURED on the packaged build with a timestamped probe over this very
+  // fixture: one opening produces the page's own read at t=0 and a SECOND read
+  // 245-251 ms later. Its source is not the page. Pairing completes by opening
+  // the SSE stream, whose `hello` frame lands 2-7 ms before the first read;
+  // `TownBackground.notifyEvent` coalesces a live event for 250 ms and then
+  // reconciles (desktop/main/town/channel/town-background.ts, ported byte for
+  // byte from BeingDesktop src/town-background.cjs:60-82, including the 250).
+  // That read is Town saying something changed, not the page asking twice, and
+  // suppressing it would mean dropping an update the server announced.
+  //
+  // IM's original `=== 1` was measuring the defect it sat beside rather than a
+  // rule: while the feed read was stuck behind the member directory its flight
+  // never settled, so the live reconcile joined it (timeline/refresh.ts:543
+  // `if (this._flight) return this._flight.promise`) and never reached the wire.
+  // Take the directory out of the way and the reconcile becomes a request of its
+  // own. So each rule is now asserted as itself — the directory did not stop the
+  // read, the directory's arrival cost nothing, and an opening costs at most one
+  // read — each against what was on the wire immediately before it.
+  const beforeReopen = await app.evaluate(() => globalThis.town.reads.length);
   // Leaving and re-entering repaints from the cache and reads once more; two
   // rapid entries share the one read rather than starting a second.
   await townPage('私信');
@@ -238,7 +308,7 @@ try {
   await townPage('篝火');
   await page.locator('.social-message').first().waitFor();
   check('repeated openings never start more than one read per opening',
-    (await app.evaluate(() => globalThis.town.reads.length)) <= 3);
+    (await app.evaluate(() => globalThis.town.reads.length)) - beforeReopen <= 2);
 
   // ── the accumulating timeline ──────────────────────────────────────────────
   // Town gains a message between the first read and the refresh, which is the
@@ -253,6 +323,81 @@ try {
   await page.waitForFunction(count => document.querySelectorAll('.social-message').length > count, beforeOlder);
   check('loading older prepends what came back and asks with `since` only',
     (await app.evaluate(() => globalThis.town.reads.some(read => read.since !== null))) === true);
+
+  // ── a background update must not disturb what the user is doing ────────────
+  // ADDED 2026-09-17 (integration unit IT). BeingDesktop
+  // test/town-conversation-ui.cjs 「background revisions and deletions preserve
+  // draft focus selection and scroll」 and 「Fireside background changes preserve
+  // draft focus and scroll」. Only a real window can answer these three — caret,
+  // focus, list scrollTop — which is why they are here and not in
+  // tests/town-conversation-rules.test.ts, where the model half of the same
+  // family lives.
+  //
+  // The update is a REAL background one: the fixture's own SSE controller emits a
+  // `bonfire` event, the live reader marks the feed dirty and refreshes 250 ms
+  // later (desktop/main/town/channel/town-background.ts `notifyEvent`, ported
+  // byte for byte from BeingDesktop src/town-background.cjs:60-82), and the new
+  // envelope is pushed to the page. Nothing here fakes the push.
+  const backgroundUpdate = async () => {
+    const before = await app.evaluate(() => globalThis.town.reads.length);
+    await app.evaluate(() => globalThis.town.stream.enqueue(
+      new TextEncoder().encode('event: bonfire\ndata: {"type":"bonfire"}\n\n')));
+    for (let waited = 0; waited < 60; waited++) {
+      if ((await app.evaluate(() => globalThis.town.reads.length)) > before) return true;
+      await page.waitForTimeout(100);
+    }
+    return false;
+  };
+  await page.locator('#town-write').click();
+  await page.locator('#town-send-content').fill('尚未发送的草稿');
+  await page.locator('#town-send-content').evaluate(element => { element.focus(); element.setSelectionRange(2, 4); });
+  const draftUpdated = await backgroundUpdate();
+  await page.waitForTimeout(200);
+  const draftState = await page.evaluate(() => {
+    const draft = document.getElementById('town-send-content');
+    return { value: draft.value, start: draft.selectionStart, end: draft.selectionEnd, focused: document.activeElement === draft };
+  });
+  check('a background update preserves the draft, its caret and its focus',
+    draftUpdated && draftState.value === '尚未发送的草稿' && draftState.start === 2 && draftState.end === 4 && draftState.focused === true);
+  await page.locator('#town-send-close').click();
+  await page.locator('#town-send-dialog').waitFor({ state: 'hidden' });
+
+  // Enough messages for the list to actually scroll, then the same background
+  // update again. Which element scrolls is a layout detail — several ancestors
+  // carry `overflow:auto` and only one of them ends up taller than its box — so
+  // it is found rather than assumed, and a run where nothing scrolls fails
+  // loudly on `scrolled > 0` instead of passing vacuously.
+  await app.evaluate(() => { globalThis.town.bulk = true; });
+  await page.locator('#town-refresh').click();
+  await page.waitForFunction(() => document.querySelectorAll('.social-message').length > 10);
+  const scroller = () => page.evaluate(() => {
+    for (let node = document.querySelector('.social-messages'); node; node = node.parentElement)
+      if (node.scrollHeight - node.clientHeight > 40) return node.className || node.id;
+    return '';
+  });
+  const scrollerName = await scroller();
+  const setScroll = (name, value) => page.evaluate(([key, top]) => {
+    const node = document.getElementById(key) || document.getElementsByClassName(key)[0];
+    if (top !== null) node.scrollTop = top;
+    return node.scrollTop;
+  }, [scrollerName, value]);
+  await setScroll(scrollerName, await page.evaluate(key => {
+    const node = document.getElementById(key) || document.getElementsByClassName(key)[0];
+    return Math.floor((node.scrollHeight - node.clientHeight) / 3);
+  }, scrollerName));
+  const scrolled = await setScroll(scrollerName, null);
+  const scrollUpdated = await backgroundUpdate();
+  await page.waitForTimeout(200);
+  check('a background update leaves the list where the reader left it',
+    scrolled > 0 && scrollUpdated && (await setScroll(scrollerName, null)) === scrolled);
+
+  // The strip that says where background collection stands. BeingDesktop
+  // renderer/town-app.js `refreshLabel` (:163); the wording table is asserted
+  // exhaustively in tests/town-conversation-rules.test.ts, this is the one that
+  // proves it reaches the page at all.
+  check('the page says where background collection stands',
+    /最近采集|等待 Town 同步|已显示读取结果|正在同步 Town 消息/.test(
+      await page.locator('#town-refresh-status').textContent()));
 
   // ── sending ────────────────────────────────────────────────────────────────
   await townPage('私信');

@@ -166,6 +166,15 @@ export function Town({ model }: { model: TownModel }) {
         >
           {town.status}
         </div>
+        <div
+          id="town-refresh-status"
+          className="list-status"
+          role="status"
+          aria-live="polite"
+          hidden={!feed || !refreshLabel(town)}
+        >
+          {feed ? refreshLabel(town) : ""}
+        </div>
         <div id="town-body" aria-busy={town.loading ? true : undefined}>
           {definition && <TownBody town={town} />}
         </div>
@@ -193,6 +202,60 @@ export function liveMessage(town: TownModel): string {
   if (client.status === "identity_mismatch") return "Town 返回的身份与已保存的配对不一致，读取已停止；已读取的内容仍可阅读。";
   if (client.status === "paused") return "Town 连接已暂停（离线或休眠）。";
   return "正在连接 Town…";
+}
+
+/** Where the background collection stands for the feed on screen.
+ *
+ * Ported from BeingDesktop renderer/town-app.js `refreshLabel` (:163-175) and its
+ * `backgroundNotConfigured` (:161), keeping the sentences and their order:
+ * prefix · 最近检查 · 最近采集 · 显示上次同步内容. The rules it encodes are the ones
+ * test/town-conversation-ui.cjs names —「empty background cache uses the message
+ * placeholder without a status strip」,「missing background registration is shown
+ * in the empty message area」,「authorization pause labels retained snapshot stale
+ * instead of claiming empty or fresh」— which is why an idle feed with nothing
+ * collected yet produces NO strip at all rather than a reassuring one.
+ *
+ * NO ADDITION over BeingDesktop: every sentence here is said on the condition
+ * 0.8.26 says it on, and「后台采集尚未设置」in particular is said only when the
+ * reader itself reports `SBS_NOT_CONFIGURED` / `sbs_not_configured`.
+ *
+ * An earlier revision of this unit also said it whenever Side by Side was known
+ * to be unconfigured (`beings:model-settings-state`). That was WRONG HERE, and it
+ * was wrong in a way that hid real states: background collection in this shell is
+ * the direct SDK reader (`direct: true`, desktop/main/subsystems/town.ts, with no
+ * `readCachedSnapshot` wired anywhere in the tree), so it does not run through the
+ * Being's waking loop and does not care whether that loop is configured. Because
+ * the sentence sat ahead of `REQUEST_ACCEPTED` / `being_busy` / `refreshing` /
+ * `error` in the chain, every user who had never turned Side by Side on — the
+ * default — was told「后台采集尚未设置」while the true state was「正在同步 Town
+ * 消息」or「结果检查失败 · 可刷新显示」. `TownModel.sideBySide` is still kept up to
+ * date from that channel (and no reader of /api/llm/config is opened for it,
+ * docs/migration/i6b-model-settings.md openIssue 2), but it never speaks for the
+ * reader: what is or is not being collected is the reader's own report. */
+export function refreshLabel(town: TownModel): string {
+  const status = town.timelineStatus;
+  if (!status) return "";
+  const timestamp = (value: number | null, label: string) => {
+    const date = value ? new Date(value) : null;
+    return date && !Number.isNaN(date.getTime())
+      ? `${label} ${date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
+      : "";
+  };
+  const checked = timestamp(status.lastCheckedAt, "最近检查");
+  const collected = timestamp(status.lastSuccessAt, "最近采集");
+  const paused = status.status === "paused";
+  const permission = /auth|trust|permission/i.test(`${status.reason || ""} ${status.errorCode || ""}`);
+  const notConfigured = status.errorCode === "SBS_NOT_CONFIGURED" || status.reason === "sbs_not_configured";
+  const prefix = !town.connected ? "等待连接"
+    : paused && permission ? "Town 需要配对"
+    : notConfigured ? "后台采集尚未设置，可立即同步"
+    : status.errorCode === "REQUEST_ACCEPTED" ? "请求已送达 · 等待 Being 完成"
+    : status.reason === "being_busy" ? "Being 正忙 · 稍后可读取一次"
+    : status.status === "refreshing" ? "正在同步 Town 消息"
+    : status.status === "error" ? "结果检查失败 · 可刷新显示"
+    : status.reason === "waiting_sbs" || !collected ? "等待 Town 同步"
+    : "已显示读取结果";
+  return [prefix, checked, collected, status.stale ? "显示上次同步内容" : ""].filter(Boolean).join(" · ");
 }
 
 function TownBody({ town }: { town: TownModel }) {

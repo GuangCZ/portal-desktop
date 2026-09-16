@@ -8,6 +8,9 @@ type Call = { url: URL; options: RequestInit };
 type Overrides = {
   readImpl?: TownReadImpl;
   request?: (url: URL, options: RequestInit, calls: Call[]) => Response | Promise<Response> | undefined;
+  /** The deadline on the shared public-directory read. Production uses 20 s; a
+   * test that wants to watch it expire says so here. */
+  membersReadTimeoutMs?: number;
 };
 
 function deferred<T = unknown>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
@@ -17,6 +20,7 @@ function harness(overrides: Overrides = {}) {
   const calls: Call[] = [];
   const session = new TownSession({
     getContext: () => ({ ...context }), readImpl: overrides.readImpl ?? null,
+    ...(overrides.membersReadTimeoutMs === undefined ? {} : { membersReadTimeoutMs: overrides.membersReadTimeoutMs }),
     fetchImpl: (async (url: string, options: RequestInit) => {
       const parsed = new URL(url);
       calls.push({ url: parsed, options });
@@ -97,8 +101,12 @@ describe("Town session (direct reads, writes and channels)", () => {
     expect(result.messages[0]).toEqual({ id: "4", beingId: "", authorUnknown: true, beingName: "Echo", content: "Hello", createdAt: "2026-09-07T12:00:00+08:00", revisedAt: "", mentions: [] });
     expect(result.latestSeq).toBe(4);
     expect(calls[0].url.searchParams.get("since_id")).toBe("9223372036854775807");
-    expect(calls[1].url.searchParams.get("since")).toBe("3");
-    expect(calls[1].url.searchParams.get("limit")).toBe("20");
+    // Addressed by route rather than by position: the member directory is now
+    // started alongside the feed read (IT, 2026-09-17) and may land in `calls`
+    // on either side of it. Every parameter this case asserted still is.
+    const hear = calls.find(call => call.url.pathname === "/api/bonfire/hear");
+    expect(hear?.url.searchParams.get("since")).toBe("3");
+    expect(hear?.url.searchParams.get("limit")).toBe("20");
   });
 
   // The TownRefresh accumulator is migrated by a separate unit; this case keeps the
@@ -580,6 +588,165 @@ describe("Town session (direct reads, writes and channels)", () => {
     expect(calls.length).toBe(0);
     expect(session.state().scroll.status).toBe("unknown");
     expect(session.state().beings.status).toBe("unknown");
+  });
+
+  // ── the member directory never holds up the messages (IT, 2026-09-17) ──────
+  //
+  // BeingDesktop src/town-session.cjs:335-336 puts `/api/bonfire/hear` and
+  // `getMembers()` in one `Promise.all`. Its `.catch` handles a directory that
+  // REFUSES and cannot handle one that is merely slow, so the feed stayed empty
+  // for as long as the directory took (packaged evidence: tests/town-ui.mjs
+  // 「messages render while the member directory is still pending」).
+  // The rule BeingDesktop keeps is one layer up, in renderer/town-app.js:1607
+  // (`loadBonfire` = two independent loads) and :1581 (`loadBonfireMembers`
+  // paints from the cache first, re-renders when the fresh directory lands).
+  it("a pending member directory does not hold up the bonfire messages", async () => {
+    const held = deferred<Response>();
+    const { session, calls } = harness({ request: url => url.pathname === "/api" ? held.promise : undefined });
+    const started = Date.now();
+    const page = await session.getBonfireMessages({ limit: 10 });
+    expect(page.messages.map(message => message.id)).toEqual(["4"]);
+    // Started alongside — the request is out — but nothing waited for it.
+    expect(calls.some(call => call.url.pathname === "/api")).toBe(true);
+    // This fixture's payload names its author only by display name, so the page
+    // does spend the bounded grace below on it (MEMBERS_GRACE_MS, 300 ms). The
+    // rule this case is here for is that the wait is BOUNDED: the directory never
+    // lands at all, and the messages arrive regardless.
+    expect(Date.now() - started).toBeLessThan(2000);
+    held.resolve(json({ community: [] }));
+  });
+
+  // The narrow case the directory still matters for after the merge above: a
+  // payload that carries neither `town_id` nor `being_id`. A bonfire page becomes
+  // the accumulated timeline and is written to disk, and when the Town page is
+  // closed no renderer will fetch the directory and re-render — so a cold first
+  // background collection would persist those authors as unknown.
+  it("a directory that lands inside the grace still names an author the payload only spells", async () => {
+    const { session } = harness({ request: url => {
+      if (url.pathname === "/api") return new Promise<Response>(resolve => setTimeout(() => resolve(json({ community: [{ being_id: "echo", display_name: "Echo", about: null }] })), 30));
+      if (url.pathname === "/api/bonfire/hear") return json({ ok: true, global_latest_seq: 4, messages: [{ seq: 4, being: "echo", message: "Hello", at: "2026-09-07T12:00:00+08:00", revised_at: null }] });
+      return undefined;
+    } });
+    const page = await session.getBonfireMessages({ limit: 10 });
+    expect(page.messages[0]).toMatchObject({ beingId: "echo" });
+    expect(Object.hasOwn(page.messages[0], "authorUnknown")).toBe(false);
+  });
+
+  it("a directory that never lands costs the page the grace and no more, and the author stays unknown", async () => {
+    const held = deferred<Response>();
+    const { session } = harness({ request: url => {
+      if (url.pathname === "/api") return held.promise;
+      if (url.pathname === "/api/bonfire/hear") return json({ ok: true, global_latest_seq: 4, messages: [{ seq: 4, being: "echo", message: "Hello", at: "2026-09-07T12:00:00+08:00", revised_at: null }] });
+      return undefined;
+    } });
+    const started = Date.now();
+    const page = await session.getBonfireMessages({ limit: 10 });
+    const elapsed = Date.now() - started;
+    expect(page.messages[0]).toMatchObject({ beingId: "", authorUnknown: true, content: "Hello" });
+    expect(elapsed).toBeLessThan(2000);
+    held.resolve(json({ community: [] }));
+  });
+
+  // …and a page whose authors are all resolvable never waits for the directory at
+  // all, cold cache or not: the grace is spent only where it can change something.
+  it("a payload that names its own author waits for no directory even on a cold cache", async () => {
+    const held = deferred<Response>();
+    const { session, calls } = harness({ request: url => {
+      if (url.pathname === "/api") return held.promise;
+      if (url.pathname === "/api/bonfire/hear") return json({ ok: true, global_latest_seq: 4, messages: [{ seq: 4, being: "Echo", town_id: "t_Echo", message: "Hello", at: "2026-09-07T12:00:00+08:00", revised_at: null }] });
+      return undefined;
+    } });
+    const started = Date.now();
+    const page = await session.getBonfireMessages({ limit: 10 });
+    expect(page.messages[0]).toMatchObject({ beingId: "t_Echo", townId: "t_Echo" });
+    expect(Date.now() - started).toBeLessThan(200);
+    expect(calls.some(call => call.url.pathname === "/api")).toBe(true);
+    held.resolve(json({ community: [] }));
+  });
+
+  it("a directory that is already warm still resolves an author the payload only names", async () => {
+    const { session } = harness({ request: url => url.pathname === "/api/bonfire/hear"
+      ? json({ ok: true, global_latest_seq: 4, messages: [{ seq: 4, being: "echo", message: "Hello", at: "2026-09-07T12:00:00+08:00", revised_at: null }] })
+      : undefined });
+    await session.getMembers();
+    const page = await session.getBonfireMessages({ limit: 10 });
+    expect(page.messages[0]).toMatchObject({ beingId: "echo" });
+    expect(Object.hasOwn(page.messages[0], "authorUnknown")).toBe(false);
+  });
+
+  // MEASURED (IM, 2026-09-16, packaged build): one clean opening of the bonfire
+  // asked https://beings.town/api four times, nine to twelve while it failed,
+  // because the cache above `getMembers` is only written AFTER a success.
+  it("concurrent directory reads share one request, and a failure is not sticky", async () => {
+    const held = deferred<Response>();
+    let opened = 0;
+    const { session } = harness({ request: url => { if (url.pathname !== "/api") return undefined; opened++; return held.promise; } });
+    const first = session.getMembers(), second = session.getMembers(), third = session.getMembers({ force: true });
+    expect(opened).toBe(1);
+    held.resolve(json({ community: [{ being_id: "echo", display_name: "Echo" }] }));
+    for (const result of [await first, await second, await third]) expect(result.members).toEqual([{ id: "echo", name: "Echo", description: "" }]);
+    expect(opened).toBe(1);
+
+    const failing = harness({ request: url => url.pathname === "/api" ? json({ error: "nope" }, 503) : undefined });
+    await expect(failing.session.getMembers()).rejects.toBeTruthy();
+    await expect(failing.session.getMembers()).rejects.toBeTruthy();
+    expect(failing.calls.filter(call => call.url.pathname === "/api").length).toBe(2);
+  });
+
+  it("one caller giving up on the directory leaves the shared read running for the others", async () => {
+    const held = deferred<Response>();
+    let opened = 0;
+    const { session } = harness({ request: url => { if (url.pathname !== "/api") return undefined; opened++; return held.promise; } });
+    const controller = new AbortController();
+    const abandoned = session.getMembers({ signal: controller.signal });
+    const patient = session.getMembers();
+    controller.abort();
+    await expect(abandoned).rejects.toMatchObject({ code: "ABORTED" });
+    held.resolve(json({ community: [{ being_id: "echo", display_name: "Echo" }] }));
+    expect((await patient).members).toEqual([{ id: "echo", name: "Echo", description: "" }]);
+    expect(opened).toBe(1);
+  });
+
+  // The shared slot is the reason this deadline has to exist. Before the merge,
+  // each caller opened its own request, and one that never landed cost only that
+  // caller; now everybody waits on the same promise, and `_request` sets no
+  // timeout of its own — it honours the CALLER's signal, and the shared read
+  // deliberately carries none. The 20 s in session/client.ts is on another route
+  // (the token reads); this public one never goes near it.
+  it("a directory read that never lands frees the shared slot instead of stranding every later caller", async () => {
+    let opened = 0;
+    const { session } = harness({
+      membersReadTimeoutMs: 40,
+      request: (url, options) => {
+        if (url.pathname !== "/api") return undefined;
+        opened++;
+        // A request that answers nothing and only ever ends by being aborted.
+        return new Promise<Response>((_, reject) => {
+          options.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
+        });
+      },
+    });
+    const first = session.getMembers(), joined = session.getMembers();
+    expect(opened).toBe(1);
+    await expect(first).rejects.toMatchObject({ code: "ABORTED" });
+    await expect(joined).rejects.toMatchObject({ code: "ABORTED" });
+    // And the slot is free again: the next caller opens its own read rather than
+    // awaiting a promise that will never settle.
+    await expect(session.getMembers()).rejects.toMatchObject({ code: "ABORTED" });
+    expect(opened).toBe(2);
+  });
+
+  it("invalidating the directory starts a fresh read rather than joining the doomed one", async () => {
+    const held = deferred<Response>();
+    let opened = 0;
+    const { session } = harness({ request: url => { if (url.pathname !== "/api") return undefined; opened++; return opened === 1 ? held.promise : json({ community: [{ being_id: "echo", display_name: "Echo" }] }); } });
+    const stale = session.getMembers();
+    session.invalidateMembers();
+    const fresh = await session.getMembers();
+    expect(opened).toBe(2);
+    expect(fresh.members).toEqual([{ id: "echo", name: "Echo", description: "" }]);
+    held.resolve(json({ community: [{ being_id: "old", display_name: "Old" }] }));
+    await expect(stale).rejects.toMatchObject({ code: "SESSION_CHANGED" });
   });
 
   it("channel status accepts current ready booleans without mistaking missing data for an unbound channel", async () => {
