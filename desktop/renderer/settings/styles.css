@@ -25,3 +25,30 @@
 .sidebar-add-project{display:flex;align-items:center;gap:6px;width:100%;padding:6px 8px;border-radius:7px;font-size:11px;color:var(--muted);text-align:left}
 .sidebar-add-project:hover:not(:disabled){color:var(--text)}
 .sidebar-add-project svg{width:12px;height:12px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+
+/* 模型配置 and Side by Side; 2026-09-16 (integration unit I6b). The layout is
+   BeingDesktop 0.8.26's settings card (renderer/index.html line 300) narrowed to
+   the dialog this shell opens it in. Variables are the shell's, so both themes
+   come for free. */
+.model-page{max-width:none}
+.model-config-form{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.model-choice-heading{display:flex;align-items:baseline;gap:12px}
+.model-choice-heading label{margin:0;flex:1}
+.model-choice-heading .text-button{margin:0;padding:4px 6px;font-size:11px}
+.model-config-field{display:flex;flex-direction:column}
+.model-page select,.model-page input:not([type=checkbox]){width:100%;font:inherit;font-size:12px;color:var(--text);background:var(--control,transparent);border:1px solid var(--line);border-radius:7px;padding:8px 9px}
+.model-page select:disabled,.model-page input:disabled{opacity:.5}
+.model-service-settings{border-top:1px solid var(--line);margin-top:14px;padding-top:4px}
+.model-service-settings>summary{font-size:12px;color:var(--secondary);padding:8px 0;cursor:pointer}
+.model-config-footer{display:flex;align-items:center;gap:14px;margin-top:18px}
+.model-config-footer .field-help{flex:1;margin:0}
+.tone-error{color:#b76a46}
+
+.model-sbs{border-top:1px solid var(--line);margin-top:6px;padding-top:14px}
+.model-sbs h4{margin:0 0 6px;font-size:13px;font-weight:500}
+.model-sbs .detail-row{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:6px 0;font-size:12px;color:var(--muted)}
+.model-sbs .detail-row strong{font-size:12px;font-weight:500;color:var(--text)}
+.model-sbs-footer{display:flex;align-items:center;gap:14px;margin-top:10px}
+.model-sbs-footer .field-help{flex:1;margin:0}
+.sbs-header-switch{flex-shrink:0;border:1px solid var(--line);border-radius:8px;padding:7px 13px;font-size:12px;color:var(--secondary);white-space:nowrap}
+.sbs-header-switch[aria-pressed=true]{background:var(--selected);color:var(--text)}

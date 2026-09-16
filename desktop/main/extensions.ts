@@ -34,6 +34,7 @@ import { installOrchestrationSubsystem } from './subsystems/orchestration';
 import { installShellStateSubsystem } from './subsystems/shell-state';
 import { installTownSubsystem } from './subsystems/town';
 import { installChannelSubsystem } from './subsystems/channel';
+import { installModelSettingsSubsystem } from './subsystems/model-settings';
 
 const INSTALLERS: SubsystemInstaller[] = [
   installChatSubsystem,
@@ -44,6 +45,7 @@ const INSTALLERS: SubsystemInstaller[] = [
   installShellStateSubsystem,
   installTownSubsystem,
   installChannelSubsystem,
+  installModelSettingsSubsystem,
 ];
 // ──────────────────────────────────────────────────────────────────────────────
 

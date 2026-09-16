@@ -25,6 +25,7 @@ import { featureTasksModel } from '../../features/models/feature-tasks';
 import { ShellStateModel } from '../../settings/models/shell-state';
 import { conversationMentionsModel } from '../../conversation/models/publisher';
 import { channelModelFactory } from '../../channel/models/channel';
+import { ModelSettingsModel } from '../../settings/models/model-settings';
 
 /** Each feature adds its key with a `declare module '.../models/registry'` block
  * in its own file, so landing a feature never edits this one. */
@@ -60,5 +61,6 @@ export const FEATURE_MODELS: FeatureModelFactory[] = [
   { key: 'shellState', create: (api, app) => new ShellStateModel(api, app) },
   conversationMentionsModel,
   channelModelFactory,
+  { key: 'modelSettings', create: (api, app) => new ModelSettingsModel(api, app) },
 ];
 // ──────────────────────────────────────────────────────────────────────────────

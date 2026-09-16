@@ -18,6 +18,7 @@ import { orchestration } from './orchestration';
 import { shellState } from './shell-state';
 import { townDesktop } from './town';
 import { channel } from './channel';
+import { modelSettings } from './model-settings';
 
 export const desktopChannels = {
   chat,
@@ -28,6 +29,7 @@ export const desktopChannels = {
   shellState,
   townDesktop,
   channel,
+  modelSettings,
 };
 // ──────────────────────────────────────────────────────────────────────────────
 

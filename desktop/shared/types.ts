@@ -5,6 +5,7 @@ import type { OrchestrationAPI } from './desktop-types';
 import type { ShellStateAPI } from './shell-state-types';
 import type { TownDesktopAPI } from './desktop-types';
 import type { ChannelAPI } from './desktop-types';
+import type { ModelSettingsAPI } from './model-settings-types';
 export interface UpdateState {
   phase: 'idle' | 'checking' | 'available' | 'current' | 'unavailable';
   currentVersion: string; latestVersion?: string; message: string; releaseUrl: string;
@@ -117,6 +118,8 @@ export interface DesktopAPI {
   townDesktop: TownDesktopAPI;
   /** Feishu/WeChat channels, the Town catalogue and composer drafts (channel-types.ts). */
   channel: ChannelAPI;
+  /** 模型配置 and Side by Side (model-settings-types.ts). */
+  modelSettings: ModelSettingsAPI;
   // ────────────────────────────────────────────────────────────────────────────
 }
 declare global { interface Window { beings: DesktopAPI } }
