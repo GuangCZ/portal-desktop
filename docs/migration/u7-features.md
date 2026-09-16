@@ -404,6 +404,69 @@ vitest 改写注意：`assert.rejects(p, c => c === error)` → `await expect(p)
 `assert.rejects(p, {code:'X'})` → `expect(p).rejects.toHaveProperty("code","X")`（提前建立以免未处理拒绝）；
 `assert.ok(arr.every(...))` → `expect(...).toBe(true)`。
 
+### src/feature-task-history.cjs（148 行，已逐行读完）
+
+导出：`module.exports = {FeatureTaskHistory}`。
+依赖：`node:fs/promises`、`node:path`、`node:crypto`（`createHash`、`randomUUID`）、
+`./feature-tasks.cjs` 的 `FeatureTasks`、**`./loom-town-sync.cjs` 的 `normalizeTownSyncRecords`**
+（后者属于 Town/Loom 单元，本 worktree 不存在 → 必须作为构造参数注入）。
+常量 `MAX_FILE_BYTES = 128 * 1024 * 1024`。
+
+`constructor({identityKey, directory, safeStorage, onChange = () => {}} = {})`：
+- `identityKey` 必须是 string 且匹配 `/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/`，否则 `TypeError('Invalid task history identity')`
+  （**注意：与 FeatureTasks 的 `identity()` 不同，这里不允许空串**）。
+- `directory` 必须是非空 string、`onChange` 必须是函数，否则 `TypeError('Invalid task history configuration')`。
+- `this.directory = path.resolve(directory)`；
+  `this.filePath = path.join(this.directory, \`${createHash('sha256').update(identityKey).digest('hex')}.bin\`)`。
+- 内部状态：`_persistenceError = false`、`_records = []`、`_blocked = false`、`_dirty = false`、`_generation = 0`、
+  `_restorePromise = null`、`_savePromise = null`；最后 `this.ledger = this._ledger()`。
+
+属性：`get records()` → `structuredClone(this._records)`；`get persistenceError()` → `this._persistenceError`。
+
+- `_ledger(initialSnapshot)`：`new FeatureTasks({identityKey: this.identityKey, initialSnapshot, onChange: () => {
+   this._generation++; this._notify(); void this.save(); }})` —— **账本每次变化都 +generation、推送、异步落盘**。
+- `_notify()`：`try { this.onChange({tasks: this.ledger.list(), persistenceError: this.persistenceError}); } catch {}`。
+- `_encryptionAvailable()`：`try` 包住，要求 `safeStorage?.isEncryptionAvailable` 是函数且**返回值 === true**，
+  且 `encryptString`、`decryptString` 都是函数；任何异常 → false。
+- `restore()`：记忆化 `_restorePromise`，`await` 后 `return this`。
+- `_restore()`：
+  1. `!_encryptionAvailable()` → `_blocked = true; _persistenceError = true; _notify(); return`。
+  2. `fs.stat(filePath)`，非文件或 `size > MAX_FILE_BYTES` → 抛 `Error('Invalid encrypted task history')`；
+     `fs.readFile`，`ciphertext.length > MAX_FILE_BYTES` 同样抛。
+  3. `payload = JSON.parse(this.safeStorage.decryptString(ciphertext))`。
+  4. 校验（任一不满足 → 抛 `Error('Task history identity or schema mismatch')`）：payload 是非数组对象、
+     **`Object.keys(payload).length === 4`**、`version === 1`、`identityKey === this.identityKey`、
+     `payload.ledger` 真值且 `ledger.version === 1`、`ledger.identityKey === this.identityKey`、
+     `Array.isArray(ledger.records)`、`Array.isArray(payload.records)`、`payload.records.length <= 256`。
+  5. **合并首次磁盘读取期间提交的工作**：`current = this.ledger.snapshot()`，`currentIds = new Set(current.records.map(t => t.id))`；
+     `records = this._generation ? [...current.records, ...payload.ledger.records.filter(t => !currentIds.has(t?.id))] : payload.ledger.records`；
+     `this.ledger = this._ledger({...payload.ledger, records})`；
+     `this._records = normalizeTownSyncRecords([...payload.records, ...this._records])`。
+  6. `catch (error) { if (error?.code !== 'ENOENT') { this._blocked = true; this._persistenceError = true; } }`
+     —— **文件不存在是正常首启，不算错误、不置 blocked**。
+  7. 无论成败最后 `this._notify()`。
+- `register(record)`：`candidate = normalizeTownSyncRecords([record])`，长度 !== 1 → `return false`；
+  `next = normalizeTownSyncRecords([...this._records, candidate[0]])`；
+  `accepted = next.some(item => item.requestId === candidate[0].requestId)`；
+  `JSON.stringify(next) !== JSON.stringify(this._records)` 时才 `_records = next; _generation++; _notify(); void this.save();`；返回 `accepted`。
+- `save()`：`_dirty = true`；若无在途 `_savePromise` 则 `_savePromise = this._drain().finally(() => {
+   this._savePromise = null; if (this._dirty && !this._blocked) void this.save(); })`；返回 `_savePromise`。
+- `_drain()`：先 `await this.restore()`；然后 `while (this._dirty && !this._blocked)`：
+  - `this._dirty = false`；`let temporary`（try/catch/finally）：
+  - `!_encryptionAvailable()` → `_blocked = true` 并抛 `Error('Task history encryption unavailable')`；
+  - `this.ledger.identityKey !== this.identityKey` → `_blocked = true` 并抛 `Error('Task history identity changed')`；
+  - `payload = JSON.stringify({version:1, identityKey: this.identityKey, ledger: this.ledger.snapshot(), records: this._records})`
+    （**磁盘明文格式，四个键，顺序固定**）；
+  - `ciphertext = this.safeStorage.encryptString(payload)`，抛错 → `_blocked = true` + `Error('Task history encryption failed')`；
+  - 非 Buffer / 空 / 超限 → `_blocked = true` + `Error('Invalid encrypted task history')`；
+  - `fs.mkdir(this.directory, {recursive: true})`；`temporary = \`${this.filePath}.${randomUUID()}.tmp\``；
+    `fs.writeFile(temporary, ciphertext, {flag:'wx', mode: 0o600})`；`fs.rename(temporary, this.filePath)`；`temporary = null`；
+  - 写成功且此前有 `persistenceError` → `_persistenceError = false; _notify()`（**恢复也要推送**）。
+  - `catch { this._persistenceError = true; this._dirty = false; this._notify(); }`
+  - `finally { if (temporary) { try { await fs.unlink(temporary); } catch {} } }` —— **临时文件必清理**。
+  - 循环结束 `return !this.persistenceError`。
+- `flush()`：`while (this._savePromise) await this._savePromise;` 然后 `return !this.persistenceError`。
+
 ## 进度
 
 | 模块 | 状态 |
@@ -412,7 +475,7 @@ vitest 改写注意：`assert.rejects(p, c => c === error)` → `await expect(p)
 | docs/interfaces.md §3/§5/§7 | 已读 |
 | src/feature-tasks.cjs | 已读 |
 | src/feature-task-runner.cjs | 已读 |
-| src/feature-task-history.cjs | 未开始 |
+| src/feature-task-history.cjs | 已读 |
 | src/feature-task-discussion.cjs | 未开始 |
 | test/feature-tasks.test.cjs | 已读（15 个用例） |
 | test/feature-task-runner.test.cjs | 已读（21 个用例） |
