@@ -160,3 +160,201 @@
 - renderer：`desktop/renderer/app/components/sidebar.tsx:204/244` 已有 `session-activity-light`（talking/waiting/inactive），
   但该文件**不在本单元可触碰清单内** → BD 的「Worker running 让会话灯变 talking 且优先于等待回复」这条规则本单元做不了（写进 openIssues）。
   同理 `appendSession` 的「挂在每个会话行下面」做不到，`SidebarSlot` 只能是 `sidebar-scroll` 里的一个独立段落。
+
+---
+
+## 做了什么
+
+### 1. 两个逐字节移植
+
+`desktop/main/orchestration/instructions.ts` 是 BD `src/orchestration-message.cjs:4-14` 的**字节级副本**：
+模板串用脚本从源文件第 5-13 行原样抽出再写入，事后 `diff` 校验 `identical: true 3069 3069`。
+`tests/orchestration-integration-wiring.test.ts` 里放的是同一份源码片段的副本（夹具，3115 字节），
+测试直接比对两者，所以以后任何人手滑改一个标点都会红。
+形参类型写成 `{ enabled?: boolean } & Record<string, unknown>`，与 `chat/frame.ts:46`
+`setOrchestrationInstructions(impl)` 的形状一致 —— 注入处不需要任何 cast。
+
+`desktop/main/features/town-sync.ts` 的 `normalizeTownSyncRecords` 逐行移植自 BD
+`src/loom-town-sync.cjs:9-29`，`libraryRoute` 直接 import 本仓库既有的
+`desktop/main/town/session/library-contract.ts`（不再自带副本）。
+`tests/features-feature-task-history.test.ts` 里的**四份本地副本**
+（`normalizeTownSyncRecords` / `libraryRoute` / `detailId` / `RESERVED_SCROLL_IDS`）已删除，
+改成从真实模块 import —— 方案 §3.4「要收敛的副本」的最后一项就此清零。
+
+### 2. 主进程装配
+
+一个子系统 `desktop/main/subsystems/orchestration.ts` 同时装编排与功能任务账本，理由写在文件头：
+它们是同一条生命周期（同一个身份键、同一次 `connectionVerified` 重绑、runner 要给编排通道记账），
+BeingDesktop 也把它们放在同一个 composition root。
+
+| 装配点 | BD `src/main.cjs` | 本仓库 |
+| --- | --- | --- |
+| `new Orchestration({...})` | 163-170 | `subsystems/orchestration.ts:120-139`，`directory=<userData>/workers`、`getWorkspace` 取 `projectWorkspace‖workspace`、`getSessionIds` 取会话快照、`getExecutionContext` 给 `{desktopId, place}`、`onChange` 推 `beings:workers` 并调 `sessions.workersChanged()` |
+| `callbacks.setTransport({...})` | 171-176 | `:160-179`，`send`/`resume` 用 `createCallbackSender`/`createContinuationSender`（注入 `net.fetch`、`parseConnection`、`sessionPartition`、`getTarget=capabilities().place`），`ready = !closed && Boolean(bound)`，`toolsReady` 查桥的 `desktop_worker_status` |
+| `new OrchestrationPolicy({...})` + `assertEnforced` | 359-362 | `:141-152`，`validDesktopId`/`desktopPortalName` 从 `app/identity.ts` 注入（policy 自带的两份默认值只为单测存在） |
+| 编排指令注入 | `being-chat` 的 message 组装 | `:183` `setOrchestrationInstructions(orchestrationInstructions)` |
+| 账本状态（`featureHistories`/`openFeatureHistories`/`featureHistoryCache`） | 114-122 | `features/history-cache.ts` 一个类全包（`identity()`/`ledger`/`current`/`records`/`load()`/`register()`/`flush()`） |
+| `loadFeatureHistory`/`publishFeatureTasks`/`featureHistoryCurrent` | 490-520 | 同上；`load()` 串行化成一条**永不 reject** 的 `loading` 链，且**先推空列表再读盘**（身份切换时界面不会短暂显示上一个身份的任务） |
+| `handle()` 的三段守卫 | 721-735 | `features/methods.ts` 的 `run(args, {operation, serialized}, body)`，`serialized` 走 `ctx.exclusive` |
+| `registerFeatureRequest` | 512-520 | 子系统的 `register(record, owner = runner.currentTask())` |
+| 退出 flush | 1623 | `quitting()`：先 `orchestration.dispose()` 再 `histories.flush()`（顺序有意：还在写事件的 worker 会把刚 flush 的账本再弄脏） |
+
+`featureMethods` 按定案 5.2 放在 `desktop/main/features/methods.ts`，**不列成员名单**：
+各功能单元自己调 `methods.run(...)`。它同时接 `operation`（**BD 方法名**，喂给 `FeatureTaskRunner`）
+与通道名 —— `OPERATIONS` 的键是 `listScrolls`/`startPortal`/… 这种驼峰方法名，
+传 kebab 通道名会让账本定义全部落空、任务标题变成空壳，这是实读 `feature-task-runner.ts` 才发现的。
+
+SESSION_CHANGED 三句逐字移植在 `features/methods.ts`：
+`连接身份已变化，请重新读取功能任务。` / `连接身份正在切换，请稍后重新选择功能。` / `连接身份已变化，请重新选择功能。`
+
+### 3. IPC 通道清单
+
+全部经 `ctx.handle`（来源校验 + quitting 守卫 + 错误压成一句可展示的文本）。
+BD 里这 11 条都不是「Town 包络」，所以 preload 一律 `ipcRenderer.invoke`，没有一条走 `enveloped`。
+
+| 通道 | 参数 | 返回 | 备注 |
+| --- | --- | --- | --- |
+| `beings:orchestration` | — | `OrchestrationSnapshot` | |
+| `beings:orchestration-inspect` | `paths?: Record<string,string>` | `AgentRecord[]` | 白名单四个 kit 键、值必须是 string、原型必须干净 |
+| `beings:orchestration-save` | `OrchestrationMode` | `OrchestrationSnapshot` | **串行**（`ctx.exclusive`）；`normalizeMode` → `policy.configure` → `saveExtra({orchestration})` |
+| `beings:worker` | `id: string` | `WorkerRecord` | |
+| `beings:worker-cancel` | `id: string` | `WorkerRecord` | |
+| `beings:worker-retry` | `id: string` | `WorkerRecord` | `callbacks.retry` |
+| `beings:workers-reconnect` | — | `OrchestrationLinkSnapshot` | 桥不在时抛「本机调度工具尚未就绪，请稍后重试。」 |
+| `beings:feature-tasks` | `{feature?}`（只认这一个键） | `{tasks, persistenceError}` | |
+| `beings:feature-task` | `id: string` | `FeatureTaskRecord ‖ null` | |
+| `beings:feature-task-end` | `id: string` | 被取消的 `FeatureTaskRecord` | reading 判定逐字移植自 BD `src/main.cjs:1247` |
+| `beings:feature-task-discuss` | `id: string` | `{prepared:true, taskId}` | **串行**；`prepareDraft` 未注入时明确拒绝 |
+
+推送（只发主窗口，`ctx.push` 自带窗口守卫）：
+
+| 通道 | 载荷 | 时机 |
+| --- | --- | --- |
+| `beings:workers` | `OrchestrationSnapshot` | `Orchestration.onChange`（管理器自带 50ms 合并） |
+| `beings:feature-tasks` | `{tasks, persistenceError}` | 账本变化；**身份切换时先推一次空列表**，再读盘后推真列表 |
+
+### 4. 渲染层
+
+| 插槽 | key | 内容 |
+| --- | --- | --- |
+| `PANEL_SLOTS` | `orchestration` | 编排设置（四个 kit 行、自动保存、重试）、Worker 列表、单个 Worker 详情 |
+| `PANEL_SLOTS` | `feature-tasks` | 功能任务页（两个筛选、计数、详情、讨论、结束跟踪） |
+| `SIDEBAR_SLOTS` | `session-workers` | 按会话分组的 Worker 折叠段 |
+| `TOPBAR_SLOTS` | `orchestration` | 两个开关；编排按钮带「执行中」角标 |
+| `FEATURE_MODELS` | `orchestration` / `featureTasks` | `OrchestrationModel`（含 `OrchestrationSettingsModel`）、`FeatureTasksModel` |
+
+BD 的四套词典（worker 状态 8 项、review、delivery、agent status 5 项）、
+`featureNames` 9 项、`statusNames` 6 项、六个筛选、`canEnd`、三句 `showModeStatus`、
+`仅保留最近 300 条事件；早期事件已截断。` 等文案逐字搬运，并由两个渲染层测试钉住。
+
+### 5. 共享文件触碰行（逐行）
+
+```
+desktop/main/extensions.ts
+  + import { installOrchestrationSubsystem } from './subsystems/orchestration';
+  +   installOrchestrationSubsystem,                       // INSTALLERS
+
+desktop/preload/channels/index.ts
+  + import { orchestration } from './orchestration';
+  +   orchestration,                                       // desktopChannels
+
+desktop/shared/desktop-types.ts
+  + export * from './orchestration-types';
+
+desktop/shared/types.ts
+  + import type { OrchestrationAPI } from './desktop-types';   // 独立一行，既有 import 未动
+  +   orchestration: OrchestrationAPI;                     // DesktopAPI，紧跟 chat
+
+desktop/renderer/app/slots.tsx
+  + import { featureTasksPanel, orchestrationActions, orchestrationPanel, sessionWorkersSection } from '../orchestration/slot';
+  +   orchestrationPanel,                                  // PANEL_SLOTS
+  +   featureTasksPanel,                                   // PANEL_SLOTS
+  +   sessionWorkersSection,                               // SIDEBAR_SLOTS
+  +   orchestrationActions,                                // TOPBAR_SLOTS
+
+desktop/renderer/app/models/registry.ts
+  + import { orchestrationModel } from '../../orchestration/models/workers';
+  + import { featureTasksModel } from '../../features/models/feature-tasks';
+  +   orchestrationModel,                                  // FEATURE_MODELS
+  +   featureTasksModel,                                   // FEATURE_MODELS
+```
+
+`main.ts`、`package.json`、`package-lock.json`、`forge.config.ts`、`vite.*.config.ts`、
+`tsconfig*`、`vitest.config.ts`、`subsystems/types.ts`、`subsystems/chat.ts` 一个字都没改。
+CSS 由 `renderer/orchestration/slot.tsx` 自己 `import './styles.css'`，
+**没有**去动 `renderer/main.tsx`（那会是第七个共享文件）。
+
+## 与方案的偏差（三处，都有原因）
+
+1. **面板而不是 place sheet。** §3.4 想让设置与 Worker 详情进 `SHEET_SLOTS`。
+   全屏页的标题由壳层从 `renderer/town/models/town.ts` 的 `definitions` 取 —— 那是 I1 的文件，
+   本单元不能改 —— 注册进去的 sheet 会顶着「对话」的标题打开。改成两个可停靠面板，标题是自己的。
+   后续任何单元往 `definitions` 加一行就能把它们搬回全屏页。
+2. **侧栏是一个独立分组，不是挂在每个会话行下面。** BD 的 `appendSession` 把 Worker 列表插在
+   每个会话行之后，那要改 `renderer/app/components/sidebar.tsx`（不在可触碰清单内）。
+   `SidebarSlot` 只能是 `sidebar-scroll` 里的一段，于是做成「会话 → Worker」的两级折叠分组，
+   折叠状态仍存 localStorage `being.workerGroups.collapsed`（键名与 BD 一致）。
+3. **`desktop/shared/types.ts` 新增的是一行独立 `import type`**，没有把 `OrchestrationAPI`
+   塞进既有那行 —— 既有行一个字符都没动，合回时冲突面更小。
+
+## 改了三个既有测试（都不是弱化）
+
+- `tests/chat-ipc.test.ts`：夹具从「装全部 `INSTALLERS`」改成
+  `installSubsystems(context, …, [installChatSubsystem])`。
+  那两条断言（注册的通道集合恰好是这 N 条、所有推送都是 chat 通道）本来就是**关于 chat 子系统**的，
+  原写法把「别的单元没上线」当成了前提。改成按单元装，断言强度不变，而且从此对任何后续单元免疫。
+- `tests/renderer-slots.test.ts`：两条「插槽数组是空的」改成对模块加载期快照的
+  well-formedness / key 唯一性 / order 单调断言。空数组不是接缝契约，是 I0 当时的现状。
+- `tests/features-feature-task-history.test.ts`：删掉四份本地副本改 import（见上）。
+
+其余既有测试**一条没删、一条没改、一条没 skip**。
+
+## 门槛
+
+- `npm run typecheck`：干净。
+- `npx vitest run`：`Test Files 100 passed | 8 skipped (108)`、`Tests 1108 passed | 58 skipped (1166)`。
+  **连跑八次全绿**——前面抓到过一次偶发失败：`tests/features-integration-identity.test.ts` 在身份切换后只用
+  `settle()`（30 轮 `setImmediate`）等账本换好，而换账本要真读一次磁盘文件，并发负载下读不完就断言 `currentIdentity()`。
+  改成 `await f.extensions.ready`（`connectionVerified` 交给生产代码的同一个 promise）后不再复现。
+  断言本身一个字没放松。
+- 基线是**实测**的，不是抄的：`git archive 9794cab` 解到 scratchpad、软链 `node_modules` 后跑同一条命令，
+  得 **1071 passed / 58 skipped**（i0 文档写的 1070/57 少算了一条；那次唯一的失败只因为缺 `heart-portal` 子模块）。
+  1108 − 1071 = **+37**，正是本单元新增的 37 条；skip 没增没减。
+
+## 真机冒烟（如实记录）
+
+`npm run start` 在本 worktree 跑过两次（日志留在 scratchpad 的 `start.log` / `start2.log`）：
+
+- Vite 两个 target（`desktop/main/main.ts`、`desktop/preload/preload.ts`）都构建成功，Electron 起来了，
+  窗口加载了，渲染层发出了 `beings:chat-view` / `beings:snapshot`。
+- 两份日志里**没有任何** `subsystem-install:` 错误，也没有 `orchestration-*` / `feature-task` / `worker` 相关报错 ——
+  即 `installOrchestrationSubsystem` 装上了、启动那趟 `bind()` + `inspect()` 没抛。
+- 第一次的退出路径完整跑到了 `extensions.quitting()` 扇出（日志里能看到 `ChatSessions.end`、
+  `PortalSupervisor.stop`、`ClientBrowser.close`），本子系统的 `dispose() + flush()` 在其中，没有报错。
+- **但两次都是被 SIGTERM 收掉的**（`GPU process exited unexpectedly: exit_code=15`）：后台任务的进程组被终止，
+  第二次的渲染层甚至是在退出过程中才起来的，所以那两条 chat IPC 被 quitting 守卫拒了
+  （`客户端正在退出，请稍候。`——这是守卫在正常工作，不是本单元的问题）。
+- **没有做成的是交互验收**：没能在真窗口里点开编排面板、开开关看它存盘、检测到本机 Codex、
+  起一个 Worker、看到 `beings:workers` 推送回来。
+- 现在也不能补：另一个 worktree（`.local/i3-terminal-browser`）的 Electron 正在跑，
+  `desktop/main/main.ts:632` 是 `else if (!app.requestSingleInstanceLock()) app.quit();` ——
+  两个 worktree 共用同一个 app 名与 userData，第二个实例只会立刻退出；
+  而那个进程属于另一个会话，不能杀，更不能让自己的实例去写它正在用的 profile。
+
+## 没做 / 待后续单元
+
+- **`orchestration.presentation` 仍是空的。** 这是 I2（工具桥）的活：它在自己的 `linked()` 里给
+  `registry.require('orchestration').orchestration.presentation` 赋值。在那之前，
+  Worker 的「验收卡片」在对话里看不见 —— 这是方案接受的中间态，不是缺陷。
+- **验收卡片本体属于 I5。** 本单元的 `report` 回调只做原生投递（校验身份 + 会话仍在 → `sessions.workersChanged()`），
+  真正把 `workerResults` 画成卡片是对话补全单元的事。
+  `tests/orchestration-native-results.test.ts` 里缺的那条断言也在那边。
+- **侧栏活动灯不认 Worker。** BD 的规则是「有 Worker 在跑 → 会话灯 `talking`，且优先于『等待回复』」，
+  实现在 `renderer/app/components/sidebar.tsx`（本单元不可触碰）。现在 Worker 在跑不会点亮会话灯。
+  改法：`OrchestrationModel.hasActiveWorkers(sessionId)` 已经写好了，侧栏单元接一行即可。
+- **`connectionCleared()` 依然没有调用方**（P1 遗留，I0 未改）。本子系统实现了它（`generation++`、
+  `selectOwner('')`、重载账本），但 `main.ts` 从来没调过，所以「断开连接」时账本不会主动清空 ——
+  需要能改 `main.ts` 的单元来接。
+- **桥不在时的两条通道**（`beings:workers-reconnect`、`toolsReady`）只在测试里用替身验证过，
+  真桥要等 I2。
+- **交互冒烟未做**，见上。
