@@ -26,6 +26,19 @@ import type { DesktopAPI } from "../desktop/shared/types";
 const Nothing = () => null;
 const app = {} as AppModel;
 
+// What the integration units have actually registered, captured at import time —
+// `afterEach` empties the live arrays so the cases below can drive them, and the
+// registrations must be read before that happens. The first case in each half
+// used to assert the arrays were EMPTY, which was true only until the first unit
+// landed (I4, 2026-09-16). What replaced it is the claim that survives every
+// unit: each registration is well formed and uniquely keyed, so two branches
+// appending never collide and a bad entry fails here rather than at mount.
+const REGISTERED = {
+  panels: [...PANEL_SLOTS], sections: [...SIDEBAR_SLOTS],
+  actions: [...TOPBAR_SLOTS], sheets: [...SHEET_SLOTS],
+  models: [...FEATURE_MODELS],
+};
+
 afterEach(() => {
   PANEL_SLOTS.length = 0;
   SIDEBAR_SLOTS.length = 0;
@@ -42,8 +55,19 @@ const action = (key: string, order: number): TopbarSlot => ({ key, order, Action
 const sheet = (key: string, view: string): SheetSlot => ({ key, view, Sheet: Nothing });
 
 describe("the renderer slot registry", () => {
-  it("ships empty, so the shell renders exactly what it did before any unit landed", () => {
-    expect([PANEL_SLOTS, SIDEBAR_SLOTS, TOPBAR_SLOTS, SHEET_SLOTS].map(list => list.length)).toEqual([0, 0, 0, 0]);
+  it("holds well-formed, uniquely keyed registrations from whichever units landed", () => {
+    const keyed = [...REGISTERED.panels, ...REGISTERED.sections, ...REGISTERED.actions];
+    for (const slot of keyed) {
+      expect(typeof slot.key).toBe("string");
+      expect(slot.key).not.toBe("");
+      expect(Number.isFinite(slot.order)).toBe(true);
+    }
+    for (const list of [REGISTERED.panels, REGISTERED.sections, REGISTERED.actions, REGISTERED.sheets]) {
+      expect(new Set(list.map(slot => slot.key)).size).toBe(list.length);
+    }
+    for (const slot of REGISTERED.panels) expect(typeof slot.visible).toBe("function");
+    for (const section of REGISTERED.sections) expect(["head", "scroll", "foot"]).toContain(section.placement);
+    for (const sheetSlot of REGISTERED.sheets) expect(typeof sheetSlot.view).toBe("string");
   });
 
   it("orders by `order` then `key`, whichever order the branches appended in", () => {
@@ -119,9 +143,14 @@ const register = <K extends keyof AppFeatureModels>(key: K, model: AppFeatureMod
 };
 
 describe("the renderer feature-model registry", () => {
-  it("ships empty, so the shell builds exactly the models it did before any unit landed", () => {
-    expect(FEATURE_MODELS).toEqual([]);
-    expect(new AppModel(desktop()).features).toEqual({});
+  it("builds one model per registration, under its own key and nothing else", () => {
+    expect(new Set(REGISTERED.models.map(factory => factory.key)).size).toBe(REGISTERED.models.length);
+    FEATURE_MODELS.push(...REGISTERED.models);
+    // `AppFeatureModels` is augmented per unit and so never carries an index
+    // signature — the same reason `models/app.ts` goes through `unknown`.
+    const features = new AppModel(desktop()).features as unknown as Record<string, unknown>;
+    expect(Object.keys(features).sort()).toEqual(REGISTERED.models.map(factory => String(factory.key)).sort());
+    for (const value of Object.values(features)) expect(value).toBeInstanceOf(Store);
   });
 
   // The point of the whole case: a model registered here gets the same lifecycle

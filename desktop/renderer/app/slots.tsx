@@ -20,6 +20,7 @@
 // a title bar or a placeholder for it.
 import type { ComponentType, ReactNode } from 'react';
 import type { AppModel } from './models/app';
+import { featureTasksPanel, orchestrationActions, orchestrationPanel, sessionWorkersSection } from '../orchestration/slot';
 
 /** A dockable panel in the workspace body, after the tool browser. */
 export interface PanelSlot {
@@ -59,12 +60,16 @@ export interface SheetSlot {
 }
 
 export const PANEL_SLOTS: PanelSlot[] = [
+  orchestrationPanel,
+  featureTasksPanel,
 ];
 
 export const SIDEBAR_SLOTS: SidebarSlot[] = [
+  sessionWorkersSection,
 ];
 
 export const TOPBAR_SLOTS: TopbarSlot[] = [
+  orchestrationActions,
 ];
 
 export const SHEET_SLOTS: SheetSlot[] = [
