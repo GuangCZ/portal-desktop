@@ -184,3 +184,24 @@ BeingDesktop **没有** SBS 写入路径（`validateModelPatch` 白名单里没�
 - `renderer/settings/`：`ShellPagesSection`（`SIDEBAR_SLOTS` 的 foot 槽）里已经有「关于 · 隐私」两个按钮 + 一个
   `Dialog#shell-page-dialog`，`ShellStateModel.page: ShellPage` 控制打开哪一页。
   本单元加第三个入口「模型」，把 `ShellPage` 扩成 `"" | "about" | "privacy" | "models"`。
+
+### 1.11 装配与错误面（读完 BD main.cjs 与本壳层 ipc/error-log 后的定论）
+
+- `src/main.cjs:358`：`new ModelConfig({getContext:()=>({connection,connectionId:generation,exiting:exitStarted}),fetchImpl:(url,options)=>net.fetch(url,options)})`。
+- `src/main.cjs:363-369` `publishModelConfig(snapshot)`：**先校验** `!connection || snapshot.connectionId!==generation` → 抛「Being 连接已变化，请重新读取模型配置。」；
+  然后 `modelConfigRevision++`、`state.runtime=updateRuntimeConfig(state.runtime,snapshot)`、`broadcast()`、返回 snapshot。
+  两条 handle 都经它（`getModelConfig` 直接；`saveModelConfig` 先 `modelConfigRevision++` 再经它，成功后写 activity）。
+- **`getModelConfig` / `saveModelConfig` 不在 `townMethods` 里**（`src/main.cjs:125`）→ BD **没有**给它们包络，失败是
+  `throw new Error(sanitizeText(error.message))`，`renderer/model-settings.js` 的 `cleanError` 剥前缀后直接显示。
+  `docs/interfaces.md:73-74` 也只给 `saveModelConfig` 标了「串行」，没标「包络」。
+- 本壳层 `app/ipc.ts:59`：handler 抛出的东西一律被换成 `new Error(errorLog.report(channel, error))`；
+  `error-log.ts:37` 返回 `publicErrorMessage(error, fallback)`，`shared/errors.ts` 保留 ≤110 字、无换行/路径的中文短句。
+  → **文案能活下来，`code` 活不下来。**
+- 结论（§4.3 展开）：任务书把 `beings:model-config-save` 标为「包络」是**有意偏离 BD**，因为本壳层丢 `code`；
+  本单元照办，并把 `beings:sbs-set` 一并包络（理由见 §4.3）。
+  `shared/chat-errors.ts` 的 `CHAT_ERROR_CODES` 缺 `NEEDS_KEY` / `ROLLED_BACK`，要追加一行（第七处共享文件触碰，§6 记录）。
+  核实过没有任何 exhaustive switch 依赖这个联合类型（消费者只有 `chat/ipc.ts`、`preload/channels/bridge.ts`、`tests/chat-ipc.test.ts`）。
+- `preload/channels/bridge.ts` 的 `enveloped<T>()` 就是包络通道的渲染端入口，注释明说「不只对话通道用」。
+- `renderer/settings/` 现状：`entry.tsx` 的 `ShellPagesSection` = 两个按钮 + 一个 `Dialog#shell-page-dialog`，
+  `ShellStateModel.page: ShellPage = "" | "about" | "privacy"`，`open(page)` 切换。本单元加第三个入口。
+  `NO_SHELL_STATE` 的惰性兜底模式要照抄给模型设置模型。

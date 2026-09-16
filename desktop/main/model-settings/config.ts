@@ -73,7 +73,7 @@ const record = (value: unknown): value is Record<string, unknown> =>
  * `‮` in one of them would reverse the other. */
 function plainText(value: unknown, limit: number): string {
   // eslint-disable-next-line no-control-regex
-  return typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f‪-‮⁦-⁩]/g, '').slice(0, limit) : '';
+  return typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, limit) : '';
 }
 
 export interface ModelProvider { id: string; name: string; baseUrl: string; keyless: boolean }
