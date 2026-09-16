@@ -42,8 +42,13 @@ const action = (key: string, order: number): TopbarSlot => ({ key, order, Action
 const sheet = (key: string, view: string): SheetSlot => ({ key, view, Sheet: Nothing });
 
 describe("the renderer slot registry", () => {
-  it("ships empty, so the shell renders exactly what it did before any unit landed", () => {
-    expect([PANEL_SLOTS, SIDEBAR_SLOTS, TOPBAR_SLOTS, SHEET_SLOTS].map(list => list.length)).toEqual([0, 0, 0, 0]);
+  it("holds exactly the slots the landed units declare, and nothing else", () => {
+    // `[0, 0, 0, 0]` until 2026-09-16, when the first unit landed a slot. Naming
+    // the keys rather than counting them keeps the case doing its job as units
+    // arrive: appending a line to slots.tsx appends a key here, and a slot
+    // nobody meant to register still fails.
+    expect([PANEL_SLOTS, SIDEBAR_SLOTS, TOPBAR_SLOTS, SHEET_SLOTS].map(list => list.map(slot => slot.key)))
+      .toEqual([[], ["town-feeds"], [], []]);
   });
 
   it("orders by `order` then `key`, whichever order the branches appended in", () => {
