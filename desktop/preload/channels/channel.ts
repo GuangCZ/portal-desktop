@@ -30,6 +30,7 @@ async function enveloped<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 export const channel: ChannelAPI = {
+  state: () => ipcRenderer.invoke('beings:channel-status'),
   begin: request => enveloped('beings:channel-begin', request),
   check: request => enveloped('beings:channel-check', request),
   inspect: request => enveloped('beings:channel-inspect', request),

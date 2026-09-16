@@ -116,9 +116,22 @@ export interface ChannelWorkerState {
   status: string;
   detail: string;
   qrCodeDataUrl?: string;
+  /** The epoch a channel request must carry. It is THIS subsystem's own counter,
+   * not Town's `identity.connectionRevision`: `ChannelBeing` compares the request
+   * against the identity it holds, and two counters that merely tend to agree
+   * would reject every request the moment they stopped. */
+  connectionRevision: number;
+  /** A Being is bound and has answered. BeingDesktop's
+   * `state.connection.status === 'connected'`, which is what gates every control
+   * on the page (renderer/town-app.js line 948). */
+  connected: boolean;
 }
 
 export interface ChannelAPI {
+  /** This client's own channel state: the epoch, whether a Being is bound, and
+   * the last outcome. Read once on mount; `onState` carries every change after
+   * that. It asks the service nothing. */
+  state(): Promise<ChannelWorkerState>;
   /** 功能任务. Asks the Being to actually connect the channel. */
   begin(request: ChannelRequestInput): Promise<ChannelOutcomeState>;
   /** 功能任务. Asks the Being to read back the channel's real state. */

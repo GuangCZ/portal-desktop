@@ -43,7 +43,7 @@ import { requireDraftContext } from './draft';
 import { townErrorEnvelope } from '../../../shared/town-desktop-errors';
 import type { ChannelBeing } from './channel-being';
 import type { DraftAck, NativeDraftContextReader, PrepareNativeDraft } from './draft';
-import type { ChannelDraftRequest, ChannelTownCatalog } from '../../../shared/channel-types';
+import type { ChannelDraftRequest, ChannelTownCatalog, ChannelWorkerState } from '../../../shared/channel-types';
 
 type RegisterHandler = (channel: string, callback: (...args: any[]) => unknown) => void;
 
@@ -73,6 +73,9 @@ export interface ChannelIpcOptions {
   draftContext: NativeDraftContextReader;
   /** The renderer answering a pushed draft. */
   settleDraft: (id: string, ack: DraftAck) => boolean;
+  /** This client's own channel state: the epoch, the binding and the last
+   * outcome. Not a service read — nothing leaves the process. */
+  state: () => ChannelWorkerState;
   /** `browserLinks().open(...)` — the built-in tool browser, as BeingDesktop's
    * `openTownPage` uses it (src/main.cjs line 1252). Null when the tool bridge is
    * not installed. */
@@ -116,7 +119,11 @@ function draftRequest(value: unknown): ChannelDraftRequest {
 export const PAIRING_DRAFT = '请为当前 Being 的 Being Desktop 生成一次性 Town 配对码：使用原生 http POST https://beings.town/api/client/pair。只返回六位配对码和有效期，不输出任何长期 token 或凭据。';
 
 export function registerChannelIpc(options: ChannelIpcOptions): void {
-  const { handle, exclusive, channel, afterChannel, methods, draft, draftContext, settleDraft, openPage } = options;
+  const { handle, exclusive, channel, afterChannel, methods, draft, draftContext, settleDraft, openPage, state } = options;
+
+  // Local only: the renderer needs the epoch before it may send its first
+  // request, and a push alone would leave a freshly mounted page without one.
+  handle('beings:channel-status', (): ChannelWorkerState => state());
 
   /** A「功能任务」channel: recorded when a ledger is open, run either way. */
   const accounted = <T>(operation: string, args: unknown[], body: () => Promise<T>): Promise<T> => {

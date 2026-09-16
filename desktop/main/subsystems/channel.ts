@@ -35,8 +35,8 @@ import { ChannelBeing } from '../town/channel/channel-being';
 import { createDraftAcks, createNativeDraft, type NativeDraftContext } from '../town/channel/draft';
 import { registerChannelIpc, type ChannelFeatureMethods } from '../town/channel/ipc';
 import { parseConnection, type LoomConnection } from '../common/loom-connection';
-import type { ChannelBeingState } from '../town/channel/channel-being';
 import type { ChannelSession } from '../town/channel/types';
+import type { ChannelWorkerState } from '../../shared/channel-types';
 import type { FeatureTaskContext, PrepareFeatureTaskDraft } from '../features/types';
 import type { DesktopSubsystem, SubsystemContext } from './types';
 
@@ -51,6 +51,8 @@ export interface ChannelSubsystem extends DesktopSubsystem {
   readonly prepareDraft: (prompt: string, getContext: () => NativeDraftContext) => Promise<{ prepared: true }>;
   /** The connection epoch a draft is fenced against. */
   draftContext(): NativeDraftContext;
+  /** What the renderer paints: the epoch, the binding and the last outcome. */
+  state(): ChannelWorkerState;
 }
 
 declare module './types' { interface SubsystemMap { 'channel': ChannelSubsystem } }
@@ -107,6 +109,11 @@ export function installChannelSubsystem(ctx: SubsystemContext): ChannelSubsystem
     exiting,
   });
 
+  /** The snapshot the renderer reads on mount and receives on every change. The
+   * epoch is this subsystem's own — see `ChannelWorkerState`. */
+  const state = (): ChannelWorkerState => ({ ...channel.state(), connectionRevision: generation, connected: connected && !exiting });
+  const publish = () => { try { ctx.push('beings:channel-state', state()); } catch (error) { report('channel-publish', error); } };
+
   const acks = createDraftAcks();
   const prepareDraft = createNativeDraft({ push: ctx.push, waitAck: (id, ms) => acks.wait(id, ms) });
 
@@ -138,7 +145,7 @@ export function installChannelSubsystem(ctx: SubsystemContext): ChannelSubsystem
     // BeingDesktop wraps every Being-facing fetch this way (src/main.cjs line
     // 425): no cookies and no referrer leave this client.
     fetchImpl: (url, init) => ctx.electron.net.fetch(url as string, { ...init, credentials: 'omit', referrerPolicy: 'no-referrer' }),
-    onChange: (state: ChannelBeingState) => { try { ctx.push('beings:channel-state', state); } catch (error) { report('channel-publish', error); } },
+    onChange: () => publish(),
     // `registerFeatureRequest`: the Being's own outgoing request joins the ledger
     // of whichever task started it. The record carries the prompt, never a
     // credential — `ChannelBeing` builds it from its own fixed template.
@@ -167,6 +174,7 @@ export function installChannelSubsystem(ctx: SubsystemContext): ChannelSubsystem
     draft: prepareDraft,
     draftContext,
     settleDraft: (id, ack) => acks.settle(id, ack),
+    state,
     openPage: url => {
       const browser = links();
       if (!browser) return false;
@@ -180,6 +188,7 @@ export function installChannelSubsystem(ctx: SubsystemContext): ChannelSubsystem
     channel,
     prepareDraft,
     draftContext,
+    state,
     linked() {
       // The one thing a lazy getter cannot express (./types.ts): orchestration's
       // `beings:feature-task-discuss` needs THIS unit's preparer, and I4 left the
@@ -209,12 +218,14 @@ export function installChannelSubsystem(ctx: SubsystemContext): ChannelSubsystem
       }
       beingName = verified?.being || connection?.beingName || beingName;
       connected = true;
+      publish();
     },
     async connectionCleared() {
       address = ''; connection = null; beingName = ''; connected = false;
       generation++; identityRevision++;
       channel.reset();
       acks.reset();
+      publish();
     },
     async quitting() {
       exiting = true;
