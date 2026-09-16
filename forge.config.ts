@@ -73,8 +73,9 @@ const FOREIGN_PREBUILD = /^\/node_modules\/node-pty\/prebuilds\/([^/]+)/;
 // (binding.gyp builds the target only under `OS=="mac"`).
 //
 // MEASURED 2026-09-16 against @electron/asar 3.4.1, which is what actually
-// decides this — `minimatch(relativePath, unpack, { matchBase: true })`
-// (lib/asar.js:147) — by packaging a node-pty-shaped tree twice: with the
+// decides this — `minimatch(filename, unpack, { matchBase: true })` at
+// lib/asar.js:147, where `filename` is the ABSOLUTE path, which is why the rule
+// opens with `**/` — by packaging a node-pty-shaped tree twice: with the
 // plugin's glob alone both spawn-helper copies stay inside app.asar; with this
 // one merged in, all four of build/Release/{pty.node,spawn-helper} and
 // prebuilds/<host>/{pty.node,spawn-helper} land in app.asar.unpacked, the
@@ -162,8 +163,10 @@ const config: ForgeConfig = {
   // macOS spawn-helper it cannot see.
   //
   // node-pty 1.1.0 ships N-API prebuilds for darwin-arm64, darwin-x64, win32-x64
-  // and win32-arm64, so no electron-rebuild step is needed on the platforms this
-  // client ships — the binary is ABI-stable across Node and Electron versions.
+  // and win32-arm64, so `npm install` needs no toolchain on the platforms this
+  // client ships. Packaging still runs @electron/rebuild ("Preparing native
+  // dependencies"), and its `build/Release` output is what the packaged app
+  // loads — measured, twice; `prebuilds/` is only the fallback.
   // Linux has no prebuild: a Linux MakerZIP target would need python3 + make +
   // g++ on the build machine. See docs/migration/i0-seams.md.
   plugins: [new AutoUnpackNativesPlugin({}), new VitePlugin({

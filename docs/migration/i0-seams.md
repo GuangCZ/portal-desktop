@@ -122,6 +122,8 @@ shared 纯净 + `renderer/shared/` 不反向依赖；`renderer/chat/` 必须不�
 - [x] §2.6 ws 提级、node-pty + xterm + auto-unpack-natives、`packagerIgnore`
 - [x] §2.7 typecheck / vitest / architecture / prepare:desktop / **package 实测通过**
 - [x] 记录（本文件 + MIGRATION.md「集成阶段 I0」）
+- [x] 复审第二轮：finding 1（spawn-helper 未 unpack）/ 2（缺 `linked?()`）/ 3（feature model 无 start）全部核实并修复，
+      外加实测逼出的第四处（`AppFeatureModels` 有键之后 `models/app.ts` 编译不过）
 
 ---
 
@@ -431,3 +433,19 @@ app.asar.unpacked/node_modules/node-pty/bin/darwin-arm64-149/node-pty.node   ←
    已在 `forge.config.ts` 注释里写明：哪天关掉 rebuild，就得补一个 chmod。
 2. **`packagerIgnore` 的 `FOREIGN_PREBUILD` 只按 platform 过滤，不按 arch**，所以 arm64 机器上打包会把 `prebuilds/darwin-x64/` 也带进去（约 170 KB）。
    这是既有行为，`tests/packaging-contract.test.ts` 第 96–100 条就是这么钉的（foreign 取 win32），不是本轮引入的，没动。
+
+### 复审这一轮的门槛
+
+- `npm run typecheck` 退出码 0。
+- `npx vitest run`：96 个文件通过 / 8 个跳过，**1070 通过 / 57 跳过**。
+  对照：4a663ac 基线 1036/57，复审那次 1063/57。本轮净增 7 条（packaging 1、subsystem 2、renderer 4），无回归。
+- 没有删除或重命名任何测试文件（`git diff --diff-filter=DR 4a663ac..HEAD -- tests/` 为空），没有新增任何 `.skip` / `.todo`。
+  唯一被删掉的两行断言是 `packaging-contract` 里那两条，被同一个文件里更强的替代：
+  `typeof unpack === "string"`（`resolvedUnpack()` 内）、原来的 `toMatch(/\*\.node/)` 原样保留、外加 `toContain(NATIVE_UNPACK)` 与真打包那条。
+- `electron-forge package` 真跑过一次（见上），`codesign --verify --deep --strict` 通过。
+
+### 复审后的待办（如实记录）
+
+- 复审给我的正文在 finding 3 的 `fix` 处被截断了，**如果它后面还有 low 级条目，我没有看到**。已处理的是 1 high + 2 medium 全部。
+- `connectionCleared()` 仍然没有调用方（P1 就有的缺口，两轮复审都没要求改，原样保留）。
+- Linux 的 node-pty 依然没有 prebuild，也不需要 spawn-helper；Linux 打包未验证，不在本轮范围内。
