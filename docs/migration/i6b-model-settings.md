@@ -205,3 +205,194 @@ BeingDesktop **没有** SBS 写入路径（`validateModelPatch` 白名单里没�
 - `renderer/settings/` 现状：`entry.tsx` 的 `ShellPagesSection` = 两个按钮 + 一个 `Dialog#shell-page-dialog`，
   `ShellStateModel.page: ShellPage = "" | "about" | "privacy"`，`open(page)` 切换。本单元加第三个入口。
   `NO_SHELL_STATE` 的惰性兜底模式要照抄给模型设置模型。
+
+---
+
+## 2. 产出清单
+
+### 2.1 独占新文件
+
+| 文件 | 内容 |
+| --- | --- |
+| `desktop/main/model-settings/config.ts` | `PROVIDERS`（9 项，逐字节镜像 Loom 1.8.0）、`MESSAGES`（9 条）、`modelConfigDto`、`validateModelPatch`、`responseJson`（1 MiB 闸门）、`ModelConfig` 类（`busy` / `get()` / `save()` / **新增 `setSideBySide()`**） |
+| `desktop/main/model-settings/runtime.ts` | `emptyRuntime`、`readRuntime`、`updateRuntimeConfig`、**新增 `failRuntimeConfig`** 与 `modelRuntimeState`（推送用的投影） |
+| `desktop/main/model-settings/ipc.ts` | `registerModelSettingsIpc`（3 条通道）、`modelSettingsPush`（1 条推送） |
+| `desktop/main/subsystems/model-settings.ts` | 装配：`ModelConfig` + 纪元 + `publishModelConfig` 等价物（`accept`）+ 连接生命周期 |
+| `desktop/preload/channels/model-settings.ts` | `modelSettings` 桥接片（读走 `ipcRenderer.invoke`，两条写走 `enveloped`） |
+| `desktop/shared/model-settings-types.ts` | `ModelProviderOption` / `ModelPresetOption` / `ModelConfigValues` / `ModelConfigDto` / `ModelPatchInput` / `ModelSideBySideState` / `ModelRuntimeState` / `ModelSettingsState` / `ModelSettingsAPI` |
+| `desktop/renderer/settings/models/model-settings.ts` | `ModelSettingsModel`（BD `renderer/model-settings.js` 的状态机）、`NO_MODEL_SETTINGS`、`CUSTOM_MODEL` |
+| `desktop/renderer/settings/components/model-settings.tsx` | 模型页（DOM id 与 BD `renderer/index.html:300-316` 一一对应） |
+| `tests/model-settings-config.test.ts` | 17 条（BD 13 条逐条 + SBS 3 条 + 运行时失败半边 1 条） |
+| `tests/model-settings-ipc.test.ts` | 9 条（真 `SettingsStore` + 真 `createTrustedHandle` + 假 Being） |
+| `tests/model-settings-renderer.test.ts` | 21 条（BD `test/model-settings-ui.cjs` 26 条 check 的映射，见 §5） |
+
+### 2.2 重写的既有文件
+
+- `tests/sbs-refresh.mjs`：原脚本驱动已删除的 `beings://chat` iframe，一直报 `SKIPPED:`。
+  重写为「production preload + production renderer + production 子系统 + 本地假 Being HTTP 夹具」的
+  Electron 夹具（方法同 `tests/sidebar-e2e.mjs`），**26 条 check，实跑通过**。
+  `scripts/test-all.mjs` 的 skipped 名单因此少一项（只减不增 ✓）。
+
+### 2.3 共享文件触碰行（逐行）
+
+| 文件 | 追加的行 |
+| --- | --- |
+| `desktop/main/extensions.ts` | `import { installModelSettingsSubsystem } from './subsystems/model-settings';` |
+| `desktop/main/extensions.ts` | `  installModelSettingsSubsystem,`（`INSTALLERS` 末尾） |
+| `desktop/preload/channels/index.ts` | `import { modelSettings } from './model-settings';` |
+| `desktop/preload/channels/index.ts` | `  modelSettings,`（`desktopChannels` 末尾） |
+| `desktop/shared/desktop-types.ts` | `export * from './model-settings-types';` |
+| `desktop/shared/types.ts` | `import type { ModelSettingsAPI } from './model-settings-types';` |
+| `desktop/shared/types.ts` | `  /** 模型配置 and Side by Side (model-settings-types.ts). */` + `  modelSettings: ModelSettingsAPI;`（`DesktopAPI`，`townDesktop` 之后） |
+| `desktop/renderer/app/models/registry.ts` | `import { ModelSettingsModel } from '../../settings/models/model-settings';` |
+| `desktop/renderer/app/models/registry.ts` | `  { key: 'modelSettings', create: (api, app) => new ModelSettingsModel(api, app) },`（`FEATURE_MODELS` 末尾） |
+| `MIGRATION.md` | 「集成阶段 I1 起」表格末尾一行 |
+| **`desktop/shared/chat-errors.ts`** | `  'NEEDS_KEY', 'ROLLED_BACK',`（`CHAT_ERROR_CODES` 末尾，**第七处共享文件，方案六处之外**，理由见 §4.3） |
+
+`desktop/renderer/app/slots.tsx` **没有碰**：模型页挂在 I6 已注册的 `ShellPagesSection` 里，少一处共享冲突。
+
+### 2.4 例外目录 `desktop/renderer/settings/**`（任务书授权，本轮只有 I6b 动它）
+
+- `components/entry.tsx`：加第三个入口按钮 `#open-models`，对话框标题与内容加一条 `page === "models"` 分支。
+- `models/shell-state.ts`：`ShellPage` 从 `"" | "about" | "privacy"` 扩成 `… | "models"`。
+- `styles.css`：追加 `.model-*` / `.sbs-header-switch` 一组规则（用壳层变量，两套主题自动成立）。
+
+---
+
+## 3. IPC 清单
+
+| 通道 | BD 对应 | 队列 | 包络 | payload |
+| --- | --- | --- | --- | --- |
+| `beings:model-config-get` | `being:getModelConfig` | 否 | 否（同 BD） | `() → ModelConfigDto` |
+| `beings:model-config-save` | `being:saveModelConfig`（BD 标「串行」） | `ctx.exclusive` | **是**（偏离 BD，§4.3） | `(ModelPatchInput) → ModelConfigDto` |
+| `beings:sbs-set` | **无**（BD 只显示） | `ctx.exclusive` | **是**（§4.3） | `(enabled: boolean, connectionId: number) → ModelConfigDto` |
+| `beings:model-settings-state` | BD 的 `being:state` 里的 `state.runtime` 半边 | 推送 | — | `ModelSettingsState = {connected, connectionId, runtime}` |
+
+三条 invoke 全部经 `ctx.handle` 注册（继承来源校验与 quitting 守卫），推送经 `ctx.push`（窗口守卫在里面）。
+
+**输入校验**：`beings:model-config-save` 的唯一闸门是 `validateModelPatch`（白名单 5 键、原型必须是 `Object.prototype`、
+每个自有属性必须是数据属性——带 getter 的输入**不读取**就拒绝、`connectionId` 必须是 ≥0 安全整数、
+`model` ≤512 / `provider` ≤100 且匹配 `^[a-zA-Z0-9][a-zA-Z0-9._-]*$` / `baseUrl` ≤2048 且 http(s) 无凭据无查询无片段 / `apiKey` ≤16384）。
+IPC 层**不再复写一遍弱化版**——两份校验迟早会分叉。`beings:sbs-set` 的两个参数在 `setSideBySide` 里校验，同一条原则。
+
+---
+
+## 4. 决定与偏差
+
+### 4.1 纪元跟身份走，不跟验证次数走（偏离 BD，有意）
+
+BD 传 `connectionId: generation`，而 `generation` 每次 `verifyConnection` 都 `++`
+（`src/main.cjs:358`）——重新验证**同一个** Being 会作废用户正在填的表单、打断在途保存。
+本单元照 `subsystems/chat.ts`：纪元只在**身份**（`sessionPartition(parseConnection(address))`）变化时 `++`，
+并且**保留同一个 `LoomConnection` 对象**——`ModelConfig` 按引用比较 connection，重新 parse 出的等值对象会被当成新 Being，
+让所有在途请求以 `SESSION_CHANGED` 失败。由 `tests/model-settings-ipc.test.ts`「the epoch follows the Being's identity」钉住。
+
+### 4.2 不给 `Snapshot` 加字段，自开推送
+
+BD 把 runtime 放在 `publicState()` 里整体广播。本壳层的 `beings:snapshot` 在 `main.ts` 里组装，集成单元不得改 `main.ts`
+（方案 §4），所以本子系统自开 `beings:model-settings-state`——与 I6 处理侧栏账本的做法一致（`i6-shell-state.md` §4.1）。
+`ModelSettingsState` 里多了一个 BD 没有的 `connected` 布尔：渲染端否则得从 `beings:snapshot` 推断「有没有连上」，
+而两条通道的到达顺序没有保证。
+
+### 4.3 两条写通道包络，并往 `CHAT_ERROR_CODES` 追加两个码（第七处共享文件）
+
+**实测**：BD 的 `getModelConfig` / `saveModelConfig` **不在** `townMethods` 里（`src/main.cjs:125`），
+`docs/interfaces.md:73-74` 也只标了「串行」没标「包络」——BD 是抛错，`renderer/model-settings.js` 的 `cleanError` 剥前缀后显示。
+BD 那样可行是因为它自己的 handle 包装 `throw new Error(sanitizeText(error.message))`。
+
+**本壳层不一样**：`app/ipc.ts:59` 把 handler 抛出的东西换成 `new Error(errorLog.report(channel, error))`，
+`shared/errors.ts` 的 `publicErrorMessage` 会保留 ≤110 字的中文短句——**文案活得下来，`code` 活不下来**。
+而 `NEEDS_KEY`（去填密钥）/ `ROLLED_BACK`（Being 撤销了）/ `RESULT_UNKNOWN`（没人知道，去重读）是三条不同的用户指令。
+所以两条写通道按任务书标的「包络」走 `chatErrorEnvelope`，读通道保持抛错（同 BD，它的调用方不分支）。
+
+`CHAT_ERROR_CODES` 原来 9 条，缺 `NEEDS_KEY` / `ROLLED_BACK`，未知码会被降级成 `TOWN_ERROR` + 通用文案，
+把「此服务需要 API Key…」这句必须原样到达用户的话吃掉。因此追加一行。
+核实过没有任何 exhaustive switch 依赖这个联合类型（消费者只有 `chat/ipc.ts`、`preload/channels/bridge.ts`、`tests/chat-ipc.test.ts`），
+加码只会放宽、不会改变既有行为；`npx vitest run` 全绿佐证。
+**这是方案六处共享文件之外的第七处**，如实记在 §2.3 与 openIssues。
+
+任务书把 `beings:sbs-set` 只标了「串行」。本单元**一并包络**，因为它与 save 同属「PATCH 后重读确认」这一类，
+而「503 → 状态回到未知」这条 E2E 钉死的规则需要渲染端分辨 `RESULT_UNKNOWN`。
+
+### 4.4 读失败要自己发布（偏离 BD 的实现，保住 BD 的可观察行为）
+
+BD 的 `getModelConfig` 失败时不发布任何东西，靠 `doRefresh` 轮询（`src/main.cjs:972`，同时读三条路由）把
+`configStatus` 置 error、`sideBySide.configured` 重置为 null。**本壳层没有这条定时器**——本子系统是 `/api/llm/config` 的唯一读者。
+所以失败在 `readConfig` 里就地记录（`failRuntimeConfig`，即 `readRuntime` 的 else 分支），
+保住 E2E 钉的那条可观察规则：503 或字段缺失 → Side by Side 回到「未知」，刷新可恢复。
+`SESSION_CHANGED` / `BUSY` / `NOT_CONNECTED` 三个码不算「读失败」——纪元已经换了（状态跟着重置过），
+或者有写在途（它自己的结果会发布，而 BD `src/main.cjs:977` 正是明确保护写的快照不被并发读覆盖）。
+
+### 4.5 SBS 写入协议是实测的，不是推断的
+
+BD **没有** SBS 写入路径。wire shape 来自两处独立实测且一致（详见 §1.7）：Loom 1.8.0 页面源码的 `toggleSbs`
+（`PATCH /api/llm/config`，`{sbs_enabled: 'on'|'off'}`，**字符串**不是布尔，回读是布尔），
+以及本仓库 `tests/sbs-refresh.mjs` 当年对着真 Loom 写的假 Being 夹具。
+确认方式与 `save()` 一致（PATCH 后重读），但**只确认 `sbs_enabled` 一项**——不带 model 的 PATCH 无法用 `patch.model` 校验。
+Loom 自己的注释也写明「不做乐观翻转，以服务端回声为准」，渲染端照此实现。
+
+### 4.6 `sideBySide.active` 恒为 null，并且照实说
+
+BD 的「运行中」来自 Loom 页面 post 的 `beings:sbs-state` 消息，该页已被原生对话取代，本壳层没有来源。
+页面显示「未知」而不是「已关闭」——把不知道说成已关闭是在撒谎。
+
+### 4.7 BiDi 覆写字符改成 `\uXXXX` 转义
+
+`plainText` 的正则在 BD 里写作 `‪-‮⁦-⁩`；移植稿里一度是**字面不可见字符**（hexdump 核实码位一致）。
+改回显式转义：字面 U+202E 出现在源码里本身就是 trojan-source 的经典手法，而且审阅者看不见。语义不变。
+
+### 4.8 身份串不从 `main/chat/` 取
+
+`connectionVerified` 需要身份串。`chat/connection.ts` 的 `beingIdentityKey` 可用，但那是 I5 的目录。
+改用 `main/common/loom-connection.ts` 的 `sessionPartition(parseConnection(address))`——
+`tests/identity-partition.test.ts` 已经钉住两者相等，少一处跨单元耦合。
+
+---
+
+## 5. 测试映射：BD `test/model-settings-ui.cjs` 26 条 check 去哪了
+
+BD 那套在隐藏 Electron 窗口里驱动真实 DOM。本壳层没有 `renderer/index.html`，vitest 也没有 DOM，
+所以规则搬进 `settings/models/model-settings.ts`，check 搬进 `tests/model-settings-renderer.test.ts`（21 条，按名对应）。
+
+| BD check | 去处 |
+| --- | --- |
+| `disconnected-cannot-load-or-save` | renderer #1 |
+| `list-retry-loads-through-preload` | renderer #2 |
+| `supported-list-and-custom-option`、`self-hosted-group-is-listed-first-with-provider-names`、`existing-key-is-never-filled` | renderer #3 |
+| `same-provider-model-keeps-configured-proxy`、`periodic-state-preserves-model-selection` | renderer #4 |
+| `supported-model-save-omits-blank-key` | renderer #5 |
+| `self-hosted-model-fills-default-endpoint-with-key-optional`、`self-hosted-save-sends-default-endpoint-without-key`、`saved-self-hosted-model-stays-selected` | renderer #6 |
+| `provider-without-default-clears-previous-endpoint`、`duplicate-model-and-preset-ids-select-correct-provider` | renderer #7 |
+| （BD 没单独命名的 provider 切换带走模型名） | renderer #8 |
+| `periodic-state-preserves-entire-custom-draft`、`explicit-list-refresh-preserves-custom-draft` | renderer #9 |
+| `pending-save-disables-submit`、`duplicate-submit-does-not-duplicate-save`、`custom-save-sends-config-and-new-key`、`saved-custom-stays-editable-with-key-cleared` | renderer #10 |
+| `save-error-keeps-draft-and-allows-retry`、`error-feedback-hides-electron-wrapper` | renderer #11 |
+| `initial-read-error-disables-editing-and-allows-retry`、`read-error-offers-retry` | renderer #12 |
+| `empty-list-allows-custom-model`、`list-error-keeps-custom-configuration-available` | renderer #13 |
+| `previous-identity-load-cannot-replace-new-config` | renderer #14 |
+| `previous-identity-save-cannot-replace-new-config` | renderer #15 |
+| `disconnect-clears-draft-and-secret` | renderer #16 |
+| `model-settings-never-send-being-messages` | 结构性成立：本单元只注册 3 条通道，`tests/model-settings-ipc.test.ts` 断言通道集合；渲染端 model 只调 `api.modelSettings.*` |
+| `model-panel-is-selected-and-other-panels-are-hidden` | `tests/sbs-refresh.mjs`（真窗口里点 `#open-models`，等 `#model-settings-page`） |
+| `*-no-horizontal-overflow`、`*-fits`、`fixture-window-never-shown` | **未移植**：几何与截图规则，model 层答不了；本壳层没有对应的响应式回归脚本。写进 openIssues |
+| `no-network-attempts`、`no-renderer-errors` | `tests/sbs-refresh.mjs`（`pageerror` 收集 + 夹具服务器只应答一条路由，其它 404） |
+
+BD `test/model-config.test.cjs` 13 条 → `tests/model-settings-config.test.ts` 前 13 条，逐条同名同断言。
+
+旧 `tests/sbs-refresh.mjs` 钉的 5 条：前 4 条在新脚本里（未确认时 disabled 且无 `aria-pressed`；被拒绝的 PATCH 不乐观翻转；
+503/字段缺失 → 未知且刷新可恢复；只有显式切换才写配置）。第 5 条「更早的 GET 不能撤销随后确认的切换」搬进 vitest：
+本客户端的页面不可能让读写重叠（`busy` 挡住），这条规则现在住在 `ModelConfig` 里，由
+`tests/model-settings-config.test.ts`「saving rejects concurrent requests and discards older configuration reads」断言。
+
+---
+
+## 6. API Key 的路径（本仓库唯一一条经 IPC 的明文凭据）
+
+渲染端输入框（`type=password`，**永不回填**）→ `beings:model-config-save` 的 `apiKey` →
+`validateModelPatch` 转成 `api_key` → `ModelConfig.request` 的 PATCH body → Being。**到此为止。**
+
+- 不落盘：`saveExtra` 从未被本子系统调用；`tests/model-settings-ipc.test.ts` 断言 settings.json 不含密钥。
+- 不进推送：`ModelConfigDto` 只有 `hasApiKey`；同一测试断言全部 push 的 JSON 不含密钥。
+- 不进日志与文案：`onError` 只收到 scope 与 error，本路径的错误文案全是 `MESSAGES` 里的作者常量或
+  `${name}格式无效。`（密钥值靠"不写进去"而不是"写进去再删"）；同一测试断言 errors 与包络 message 都不含密钥。
+- 内存里不多停一拍：渲染端 `save()` 的 `finally` 里 `delete payload.apiKey`（BD 同款），换 Being 时连草稿一起清空。
