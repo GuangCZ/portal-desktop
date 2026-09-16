@@ -42,3 +42,27 @@
 - 六个一行式冲突点已全部就位；`extensions.ts` 已有 7 个 installer，`preload/channels/index.ts` 有 7 个 key，
   `slots.tsx` 的 `SHEET_SLOTS` **仍为空数组**（Town 是 `page.tsx` 内置的 `<Town>`），`FEATURE_MODELS` 有 6 项。
 - `tests/architecture.test.ts` 按目录模式写，新目录自动纳入；`main/common/` 只能 import node 内建与同目录。
+
+### `docs/migration/i1-town.md`（导出面 / IPC / 未做事项）+ `subsystems/town.ts`
+
+- `TownSubsystem { key:'town'; client; session; background; pairing; cachedReads; identityKey(); invalidateMembers() }`。
+- I1 **明确没有接 `ChannelBeing`**（文件头注释：「渠道属于后续单元」），`townApp` 快照里的 `channel` 区保持原样。
+- 24 条 `beings:town-*` 已注册（`town/ipc-desktop.ts`），其中 `beings:town`（公开目录）与 `beings:town-open`（公开页外链，
+  走 `ctx.electron.shell.openExternal`）**非包络**，其余全部包络 `{__townError:true, code, message}`。
+  **本单元的 `beings:town-catalog` / `beings:town-page` / `beings:town-draft` 与它们不重名，可安全新增。**
+- `TownSession.getChannelStatus({signal})` → `{channels: TownChannelStatus[]}`，正是 `ChannelBeing.readStatus` 要的形状。
+- I1 的 `town-controller.ts` / `portal-config.ts` / `portal-release.ts` 与其 32 条 `town-channel-town-controller` 测试**已删**，
+  `channel/types.ts` 末尾留了说明段。所以方案 §3.7「重新启用 1 条 it.skip」**已不存在**。
+- I1 的基线数字：结束时 1026 通过 / 34 跳过（当前 worktree 实测 1197/34，是并行组 A 五个单元合完之后的）。
+
+### `desktop/main/town/channel/{channel-being,town-catalog,types}.ts`（u3 移植件）
+
+- `ChannelBeing` 构造：`{getContext, getSession?, readStatus?, fetchImpl?, onChange?, onRequest?, createClient?}`；
+  方法 `state() / reset() / beginChannelConnection(v) / getChannelStatus(v) / inspectChannelStatus(v) / updateFeishuCredentials(...)`。
+  请求体严格两键 `{channel, connectionRevision}`（原型 + 键数 + 值描述符全查），channel ∈ {feishu,wechat}。
+  `updateFeishuCredentials` **本地必抛** `INVALID_REQUEST`「应用密钥须在渠道服务的专用配置入口提交，请按 Being 返回的连接说明操作。」
+  `getContext()` 要 `{configured, connected, exiting, connectionId, identityRevision, beingName, connection:{url,token,secret}}`。
+- `town-catalog.ts`：`getTownCatalog()`（9 个 feature）、`townPageUrl(id)`（只有 home/grove/ember 三个公开页）、
+  `prepareLoomDraft`（**死路径，要被 `draft.ts` 取代**）、`prepareTownFeature`（DRAFTS 6 条）、
+  `prepareTownAssistance`（ASSISTANCE 6 条）、`prepareFiresideDraft`（拼「围炉消息草稿」前缀）。
+  `requireCurrentContext` 的三条文案是 Loom 版；原生版按 §3.7 用 BD 的三条拒绝文案。
