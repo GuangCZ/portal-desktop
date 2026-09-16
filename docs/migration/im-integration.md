@@ -116,7 +116,7 @@
 ### 1.8 docs/migration/i6-shell-state.md
 
 - 4.1：`beings:snapshot` 不加 `sidebar`，改用自己的 `beings:sidebar-state` 读通道 + `beings:sidebar` 推送。
-- 4.3 / 9.5：**没有 `beings:select-saved-project`**，理由是「本壳层没有文件浏览页，唯一能切换的 `settings.workspace` 是 Portal 工作目录」；
+- 4.3 / 9.5：**没有方案 §3.6 里的 `beings:sidebar-project-select`**，理由是「本壳层没有文件浏览页，唯一能切换的 `settings.workspace` 是 Portal 工作目录」；
   9.5 明确说「I2/I3 的 `DesktopTools({getWorkspace})` / `DesktopConsole({getWorkspace})` 若要按项目切换工作目录，就需要补回这条通道，
   实现落在 `main/shell/ipc.ts`，`updateSidebar` 不用动」→ **本单元第 13 条**。
 - 4.7：重申 `main.ts` 从来没调用过 `extensions.connectionCleared()` → **本单元第 11 条**。
@@ -592,15 +592,15 @@ Error: 浏览器已经关闭。
 
 | 通道 | 方向 | payload | 守卫 | 来源 |
 | --- | --- | --- | --- | --- |
-| `beings:select-saved-project` | invoke → `SidebarState` | `project: string`（≤4096，非字符串/超长/不在已保存项目里都拒） | `ctx.exclusive`（BD `src/main.cjs:141` 把它与 `sidebarAction` 一起列进串行表） | BD `selectSavedProject`（`src/main.cjs:574`）/ `being:sidebarProjectSelect` |
+| `beings:select-saved-project` | invoke → `SidebarState` | `project: string`（≤4096，非字符串/超长/不在已保存项目里都拒） | `ctx.exclusive`（BD `src/main.cjs:141` 把它与 `sidebarAction` 一起列进串行表） | BD `being:selectSavedProject`（`src/preload.cjs:14` → `src/main.cjs:574`）按 `being:<camelCase>` → `beings:<kebab-case>` 机械转写；**与方案 §3.6 提议的 `beings:sidebar-project-select` 不同**，见 §9.6 |
 
 **行为改变、名字没动的 3 条**：
 
 | 通道 | 之前 | 现在 |
 | --- | --- | --- |
 | `beings:town-open` | `ctx.electron.shell.openExternal(url)`（I1 的偏差） | `ctx.registry.get('tools')?.links.open(url)` → 工具浏览器标签页；**拿不到工具桥**才退回 `openExternal`。允许名单一字未动；`open()` 自身失败照 BD 抛出，不退回系统浏览器 |
-| `beings:tool-browser-viewport` | 退出期被恒拒 | 进 `QUIT_ALLOWED`；浏览器已 `destroy()` 时**安静返回 idle**（参数仍先校验；没有浏览器仍然拒绝） |
-| `beings:tools-browser-view` | 退出期被恒拒，渲染层用 `VIEWPORT_RETRIES=3` 封顶 | 进 `QUIT_ALLOWED`，封顶删除（恢复 0.8.26 的无条件重试）；浏览器已 `destroy()` 时返回 `IDLE_TOOLS_STATE.browser` |
+| `beings:tool-browser-viewport` | 退出期被恒拒 | 进 `QUIT_ALLOWED`；浏览器已 `destroy()` 时**安静返回 idle**（`visible`/`bounds` 的**类型**在 destroyed 分支之前就校验完，§9.4）；没有浏览器仍然拒绝；以 `VIEWPORT_SOURCES.toolBrowserPanel` 为来源调 `setViewport`（§9.1） |
+| `beings:tools-browser-view` | 退出期被恒拒，渲染层用 `VIEWPORT_RETRIES=3` 封顶 | 进 `QUIT_ALLOWED`，封顶删除（恢复 0.8.26 的无条件重试）；浏览器已 `destroy()` 时返回 `IDLE_TOOLS_STATE.browser`；以 `VIEWPORT_SOURCES.toolsPane` 为来源调 `setViewport`（§9.1） |
 
 `QUIT_ALLOWED` 现在是 `['beings:browser-bounds','beings:tools-browser-view','beings:tool-browser-viewport','beings:diagnostics']`。
 **没有删除、没有改名任何通道。**
@@ -640,14 +640,18 @@ Error: 浏览器已经关闭。
 
 ## 8. 未做事项 / 存疑（openIssues）
 
-1. **`contextBridge` 剥掉 Error 的 `code`，Town 与对话两族通道的错误码都到不了渲染层**（§4.4）。
+1. **`contextBridge` 剥掉 Error 的自定义属性，Town 与对话两族通道的 `code` 与 `candidates` 都到不了渲染层**（§4.4、§9.2）。
    实测于 Electron 44.2.0，两文件独立夹具复现；`preload/channels/{bridge,town}.ts` 把包络还原成 Error 的位置在 contextBridge 的**错误一侧**。
    **从 0.8.26 继承**（`src/preload.cjs` 60-76 行，`renderer/town-app.js:308`/`:1027` 的分支同样走不到）。
    修法要改每一个调用点收到的东西，跨 I1/I5/I7/I6b 四个单元，不是本单元能做的。
-   直接后果：`tests/town-sdk.mjs` 的 4 条断言红（9 过 4 挂），`npm run test:all` 因此不是全绿。
-2. **打开一次篝火发两次 feed 读**（§4.5）。首次绘制时 1 条，250 ms 后第 2 条，`since` 都是 `null`；
-   目录立刻成功时同样两条，与目录无关。`tests/town-ui.mjs` 停在 `the pending directory did not stop the feed read`。
-   顺带：公共目录 `/api` 一次干净打开被请求 4 次（失败时 9–12 次），没有 in-flight 去重。
+   直接后果两处：`tests/town-sdk.mjs` 的 4 条断言红（13 过 4 红）；
+   **私信收件人有歧义时，Town 给的候选到不了用户**——`TownModel.send()` 读 `(error).candidates`（`renderer/town/models/town.ts:1147`），
+   实测页面收到的 Error 自有属性只有 `["stack","message"]`，所以 `#town-send-candidates` 永远是空的（`tests/town-ui.mjs` 一条红）。
+2. ~~**打开一次篝火发两次 feed 读**~~ —— **第二轮复测推翻了第一轮的观测**。用「目录真的挂起、随后释放」的夹具重跑，
+   `the pending directory did not stop the feed read`、`a directory arrival costs no second message read`、
+   `repeated openings never start more than one read per opening` **三条都通过**（一次打开 = 1 条读）。
+   第一轮量到的「250 ms 后第 2 条」是在 `/api` 回 503 的夹具下量的，属于目录失败路径，不是无条件的重复读。
+   仍然成立的一半：公共目录 `/api` 没有 in-flight 去重（同一次打开会有多个并发 `getMembers`）。
 3. **刚 ad-hoc 重签之后的第一次启动会被系统钥匙串对话框挡住**（§4.2），
    `tools-e2e` / `browser-e2e` / `terminal-e2e` 都没设 `PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN=1`，
    所以打包后第一次跑必然 `electron.launch: Timeout 180000ms exceeded`，第二次起正常。
@@ -663,14 +667,188 @@ Error: 浏览器已经关闭。
 7. **`beings:snapshot` 在退出瞬间会被守卫拒一次**，终端上留下一行
    `Error occurred in handler for 'beings:snapshot'`。守卫是对的（它不是几何通道，不该放行），
    但渲染层在拆卸时不该再问快照。属于渲染层拆卸顺序，未改。
-8. **`tests/town-ui.mjs` 只跑到第 5 条 check**，后面的累积时间线、私信候选人、`NOT_SENT` 候选等
-   （约 10 条）**仍未被执行过**，挡在第 2 条 openIssue 后面。
+8. ~~**`tests/town-ui.mjs` 只跑到第 5 条 check**~~ —— 已解决（§9.2）：两个 Town 脚本现在都跑到底，
+   `town-ui` 13 过 2 红、`town-sdk` 13 过 4 红，红的每一条都带实测证据，脚本退出码非零。
+
+10. **篝火读取阻塞在成员目录上**（§9.2，复审 finding 2）。`main/town/session/session.ts:408` 的
+    `Promise.all([request2('/api/bonfire/hear',…), this.getMembers({signal})…])`：`.catch` 接得住「拒绝」，
+    接不住「慢」，目录慢多久 feed 就空多久（上限是 `session/client.ts:256` 的 `AbortSignal.timeout(20000)`）。
+    `getMembers`（同文件 348-358）只有成功后的 TTL 缓存，没有 in-flight 去重。
+    修法：把 `getMembers` 从 `Promise.all` 里摘出来，先用缓存/空目录渲染，目录到了再补 mention 标签
+    （`tests/town-ui.mjs` 的 `late directory arrival rerenders mention labels` 断言的正是这条路径已经存在）。
+    **本单元没改**：它在 Town 应用层，不在本单元的独占目录里，与 openIssue 1 的处理方式一致。
+    `tests/town-ui.mjs` 的 `messages render while the member directory is still pending` 红着指向它。
+
+11. **`beings:select-saved-project` 与方案 §3.6 提议的 `beings:sidebar-project-select` 不同名**（§9.6）。
+    取的是「统一约定」的机械转写。若合并者要方案的名字，改回是两处字符串加三个测试。
 9. `tests/sbs-refresh.mjs`（I6b）、`tests/electron-smoke.mjs`（I5）、`tests/portal-runtime-e2e.mjs`（I7）
    本单元**没有跑**：它们要重写，重写者是并行组 B 的其它单元。
 
-## 9. `npm run test:all` 的现状
+## 8b. `npm run test:all` 的现状
 
 流水线是 fail-fast 的（每一步 `await`，抛出即中止）。三个新步骤排在 `package` 之后、`browser-e2e` 之后，
-位置正确；但**第 85 行的 `town-sdk` 会先失败**（openIssue 1），所以整条流水线现在停在那一步，
-`report.status` 是 `failed`。本单元验证三个新步骤的方式是**单独跑**（§4.3 第 1–3 行，全绿）。
+位置正确；但 `town-sdk` 仍然会先失败（openIssue 1 的四条），所以整条流水线停在那一步，
+`report.status` 是 `failed`。本单元验证三个新步骤的方式是**单独跑**（§4.3 第 1–3 行、§9.7，全绿）。
 `summary.md` 的 `skipped` 名单由脚本自己打印的 `SKIPPED:` 标记生成，本单元**只增加步骤，没有让任何一步变成 skip**。
+第二轮之后 `town-sdk` / `town-ui` 失败的是**终点**而不是**中途**：两个脚本都会先把全部规则跑完再抛，
+所以一次运行就能看到全部红条及其证据。
+
+---
+
+## 9. 复审结论的逐条处理（2026-09-16，第二轮）
+
+复审六条：两条 high、一条 medium、三条 low。**六条全部处理**，没有一条被判成「复审看错了」。
+下面每一条都写清楚改了什么、证据是实测还是读码、以及为什么选这个改法。
+
+### 9.1 high｜一个浏览器、两个面板，两条视口通道互相摘页面（`subsystems/tools.ts` / `tools/browser/browser.ts`）——已修
+
+复审的复现完全成立，且**在本单元自己的产物上复测过**
+（探针 `…/scratchpad/im-review-viewport-probe.mjs`，修前第 3 步 `toolBrowserPanelStillShowsIt:false`）。
+成因是第 1 条（单实例收敛）只收敛了「谁持有浏览器」，没有收敛「谁摆放它」：
+`ToolsBrowserBar` 的 `useLayoutEffect(layout)` 每次渲染都测量，它的 `<section>` 在 console 模式下只是 `hidden` 而不是卸载
+（`browser-bar.tsx:86`），而 `ToolsModel.browserView` 的 `visible` 计算式在 console 模式下恒为 false
+（`models/tools.ts:278-283`）——于是「工具面板开在控制台页」就等于对着同一个 `DesktopBrowser` 喊「隐藏」。
+
+三个候选里选了 (b) 的一般化：**视口按来源记账**，因为
+(a) 要删掉 I2 刚移植好的整块窗格（是产品决定，不该由整合单元替 I2 拍板），
+(c) 只让一条通道的 `visible:false` 失效是不对称的补丁——反方向（工具浏览器面板关闭时摘掉工具面板的页面）一样会犯。
+
+`DesktopBrowser` 的改动（全部在本单元独占的 `main/tools/**`）：
+
+| 位置 | 改动 |
+| --- | --- |
+| `browser.ts` | 新增 `viewports: Map<source, {visible, bounds}>`；`setViewport(options, source = DEFAULT_VIEWPORT_SOURCE)` 只写自己那一条；新增 `_resolveViewport()` 把所有来源折叠成一个矩形：**有任何一个来源要显示就显示**，取**最后说话的那个可见来源**的 bounds；谁都不要时保留刚写入的 bounds（这正是单来源时 0.8.26 的行为）。`destroy()` 清空 `viewports`。 |
+| `browser.ts` | 导出 `VIEWPORT_SOURCES = {toolsPane, toolBrowserPanel}`（两个内部键，不上线、不面向用户，存在的意义是两条通道不会写成同一个字符串），以及 `DEFAULT_VIEWPORT_SOURCE = 'panel'`（不指名来源的调用方＝单来源世界＝本仓库大多数测试）。 |
+| `tools/ipc.ts` / `tools/browser/ipc.ts` | 各自带上自己的来源。 |
+| `tools/types.ts` | `DesktopBrowserLike.setViewport` 多一个可选 `source?: string`。 |
+
+**单来源的行为逐字不变**：`visible` 就是它的 `visible`，`bounds` 就是它的 `bounds`，不带 bounds 地隐藏保留上一次的矩形，
+只有 `visible` 翻转才 `_emit()`。`tests/tools-browser-browser.test.ts` 的 18 条一条没改、全绿。
+
+新增联装用例 `tests/tools-integration-browser-ownership.test.ts`「lets each panel speak only for its own rectangle」：
+两条通道交替下发五步，断言**原生视图的挂载数与 bounds**（不只是布尔量）。
+反向验证：把 `tools/ipc.ts` 的来源改成和面板同一个，这条用例立刻红。
+
+**打包产物实测（修后）**，探针 `…/scratchpad/im-viewport-native-probe.mjs` 直接读
+`BrowserWindow.getAllWindows()[0].contentView.children`：
+
+| 步骤 | attached | bounds |
+| --- | --- | --- |
+| 1 工具浏览器面板显示 | 1 | `{100,120,400,300}` |
+| 2 工具面板开在控制台页（`visible:false`） | **1** | **`{100,120,400,300}`（没被摘掉）** |
+| 3 工具面板切到浏览器窗格 | 1 | `{12,24,500,400}` |
+| 4 工具浏览器面板关闭 | **1** | `{12,24,500,400}`（也没被摘掉） |
+| 5 两边都不要 | **0** | — |
+
+**两个面板同时要显示时怎么办**：矩形只有一个，所以规则是「最后说话的赢」，另一个面板的洞里是它自己的空状态。
+这是外壳自己造出来的局面（0.8.26 只有一个浏览器面板），没有上游可以逐行对照，所以写成一条明说的规则而不是默认行为。
+
+### 9.2 high｜`tests/town-ui.mjs` 的夹具被改成了另一个场景——已改回，并且脚本第一次跑到底
+
+复审是对的，而且**本单元第一轮的归因也是错的**：记录 §4.5 写「连根本不读目录的 `townDesktop.bonfire()` 直读都一起挂」，
+但 `beings:town-bonfire` 走的就是 `session.getBonfireMessages`（`town/ipc-desktop.ts:194`），它本来就读目录
+（`session.ts:408` 的 `Promise.all([request2('/api/bonfire/hear',…), this.getMembers({signal})…])`）。
+所以 `held-direct-bonfire HUNG>8s` 是这条缺陷的**正确观测**，被当成夹具自伤处理掉了。
+
+改法：
+
+1. 夹具改回**真的挂起**——一个**共享的** deferred（`globalThis.town.membersHeld`），并发的 `/api` 等同一个 promise，
+   一次 `releaseMembers()` 全部兑现。（第一轮说「resolveMembers 每次被覆盖」是对的，那一半修在这里，不是靠换场景。）
+2. 引入 `pending(name, condition, why)`：**红的规则照红、带证据、但不中断后面的 check**，脚本最后统一抛错退出非零。
+   这不是放宽——脚本仍然失败；它买到的是「第一条缺陷后面的十条规则终于被执行了一次」。
+3. 「目录还没到也要出消息」这条的等待改成有上限（6s），红得快、红得明确。
+
+跑完之后又暴露了两处**脚本自己的**错（都属本单元可改范围，已修，理由写在脚本里）：
+
+- **刷新标记从来没被造出来过**。`refresh.ts:435` 是 `const arrived = before !== null && sorted.some(seq => seq > before)`
+  ——「这次刷新真的带来了新东西」才画「上次刷新到这里」，带不来就保留上一个标记（起始 null）。
+  夹具每次都回同样的 seq 7/8，所以那条 check 断言的场景**不存在**。加了一个 `fresh` 开关：刷新之前 Town 多一条 seq 9。
+- **`since` 分页语义写反了**。实测记录是「`since` = 序号大于它的**最早** N 条，没有 before」，
+  夹具却对任何 `since` 只回 seq 1——那等于宣告「seq>0 里只有这一条」，
+  于是 `refresh.ts:418` 的窗口收敛把 7/8/9 全删掉，「加载更早」之后消息反而变少。客户端是对的，夹具是错的。
+
+**打包产物上的结果：13 条通过、2 条红**（脚本退出码非零）：
+
+| 红的 check | 指向 |
+| --- | --- |
+| `messages render while the member directory is still pending` | 篝火读取阻塞在成员目录上（openIssue 10） |
+| `an ambiguous recipient offers the choices Town returned` | `contextBridge` 剥掉 Error 自定义属性（openIssue 1）的**第二个后果** |
+
+后一条是这一轮新查出来的：`TownModel.send()` 的 `catch` 读 `(error).candidates`（`models/town.ts:1147`），
+而实测（打包产物）页面收到的 Error 自有属性只有 `["stack","message"]`——
+`message` 是「收件人有歧义；本次私信未发送，请选择 Town ID。」，`code` 与 `candidates` 都是 `null`。
+所以 `#town-send-candidates` 永远是空的，用户看得到拒绝、看不到 Town 给的候选。
+原来那条 check 被**拆成两半**：「被拒绝、且没有重发」是硬 check（通过），「候选出现了」是 `pending`（红）。
+
+**「篝火读取阻塞在成员目录上」没有在本单元修**：修法是把 `getMembers` 从 `Promise.all` 里摘出来
+（先用缓存/空目录渲染，目录到了再补 mention 标签——脚本里 `late directory arrival rerenders mention labels`
+断言的正是这条路径已经存在）。它在 `main/town/session/`，是 Town 应用层，不在本单元的独占目录里，
+且与 openIssue 1、2 的处理方式一致：附证据进 openIssues，不顺手重构。
+
+顺带用同一个 `pending` 机制让 `tests/town-sdk.mjs` 也第一次跑到底：**13 条通过、4 条红**，
+四条红的都是同一个 openIssue 1；四条断言本身一个字没改，只把「同时还断言了别的东西」的那半拆成硬 check
+（调用真的被拒了、Town 没被问、什么都没被发出去）。
+
+### 9.3 medium｜惰性构造失败会从 `changed()` 的 `setImmediate` 里抛出去——已修
+
+复审是对的：`grep -rn "uncaughtException|unhandledRejection" desktop/main/` 全树 0 条，
+`changed()`（`desktop-tools.ts:168-172`）没有 try/catch，而 `get browser()` 里 `new Browser(...)` 确实会抛
+（`browser.ts:254-272` 的 `session.fromPartition` / 三个权限处理器 / `webRequest.onBeforeRequest` 都在构造体里），
+`subsystems/tool-browser.ts:69-75` 自己就承认这一点。
+
+改法（`get browser()` 里兜住，而不是只兜 `setImmediate`）：
+
+- `DesktopToolsOptions` 新增 `onError?(scope, error)`，`subsystems/tools.ts` 传自己的 `report`。
+- `get browser()` 把 `createBrowser()` 包进 try/catch；失败时**记一次** `tools-browser-construct`，
+  并把 `ownBrowser` 换成 `deadBrowser()`——一个 `destroyed: true`、`snapshot()` 回空的门面，
+  其余成员抛「内置浏览器暂时无法使用，请重启客户端后重试。」（与 tool-browser 面板显示的同一句）。
+  选门面而不是只吞异常，是因为这样工具桥的其余部分（控制台、终端作用域、relay）照常工作，
+  而且两条视口通道读的就是 `destroyed`，自然变成「安静作答」。
+- 报告**只发一次**：失败结果被缓存，不会每次访问重跑必定失败的构造。
+
+新增用例「survives a browser constructor that throws, and says so once」：
+`session.fromPartition` 是函数（所以两个子系统的门面检查都不触发）但一调用就抛，
+断言 `beings:tools` 答空浏览器、`tools-browser-construct` 只记一次、`changed()` 的 `setImmediate` 跑完并推出了
+`beings:tools-state`（推送到达＝异常没有泄漏）、`browser.new` 被拒、视口通道安静作答。
+反向验证：把 try/catch 去掉，这条用例立刻红。
+
+### 9.4 low｜销毁后跳过了类型校验（`tools/browser/ipc.ts`）——已修
+
+复审是对的。改法是**复用 `setViewport` 自己的前两行**而不是另写一套：
+`normalizeBounds` 从 `browser.ts` 导出，处理器里先
+`if (typeof options.visible !== 'boolean') throw new TypeError('浏览器显示选项无效。')`，
+再 `if (options.bounds !== undefined || options.visible) normalizeBounds(options.bounds)`——
+连「`visible:true` 不带 bounds 也无效」这个分支都一致，所以**两个面的文案不会漂**（各自保留自己原来的措辞，
+面板通道是「显示选项 / 显示区域（格式）无效」，工具面板通道是 I2 的「浏览器显示参数无效」）。
+`tests/app-ipc-quit-allowed.test.ts` 最后一条从 2 个断言加到 5 个，`{visible:'no'}` 现在两条通道都用上了。
+
+### 9.5 low｜Electron 门面被拒不再进日志——已修
+
+`subsystems/tools.ts` 与 `subsystems/tool-browser.ts` **两处都补了** `report(...)`
+（scope 分别是 `tools-install` 与 `tool-browser-construct`，消息「Electron 浏览器门面不可用，…未启动。」）。
+原来断言 `errors` 为空的两条既有用例改成断言 scope 列表——断言变强，不是变弱。
+
+### 9.6 low｜通道命名——已改名
+
+复审是对的，而且记录里那句 `being:sidebarProjectSelect` 是**编造的**：BeingDesktop 的通道是
+`being:selectSavedProject`（`src/preload.cjs:14` 的 `for(const name of ['sidebarAction','selectSavedProject'])`，
+主进程 `src/main.cjs:1140`）。按「统一约定」机械转写应当是 `beings:select-saved-project`，已改名（连同 preload、两个测试、
+`tests/sidebar-e2e.mjs` 与本记录）。
+
+**这同时是与方案的一处偏差**：方案 §3.6 提议的名字是 `beings:sidebar-project-select`（I6 记录 §3.6 引的就是它），
+但方案 §3「统一约定」写的是机械转写，两处自相矛盾；I6 当时没有实现这条通道，所以不存在「保持既有名字」的理由。
+**取机械转写**，并在此记明：若合并者更想要 `beings:sidebar-*` 家族的观感，改回是一行的事（`main/shell/ipc.ts`
+与 `preload/channels/shell-state.ts` 各一处字符串 + 三个测试）。BD 的 `being:sidebarAction` → `beings:sidebar-action`
+不受影响；`beings:sidebar-project-add` 在 BD 里没有对应通道，不受这条规则约束。
+
+### 9.7 这一轮的门槛
+
+| 门槛 | 复审前（`7479065`） | 复审后 | 差 |
+| --- | --- | --- | --- |
+| `npm run typecheck` | 绿 | **绿** | — |
+| `npx vitest run` | 115 文件 / 1223 通过 / 34 跳过 | **115 文件 / 1225 通过 / 34 跳过** | **+2 通过**（视口联装 1 + 构造失败 1），跳过数不变 |
+| 打包 E2E | — | `tools` / `terminal` / `sidebar` / `browser` / `menu-keyboard` / `update-progress` / `town-names` / `seed-garden` **全 PASS**；`town-sdk` 13 过 4 红、`town-ui` 13 过 2 红（都带实测证据，退出码非零） | — |
+| 面板走查（打包产物） | `SUBSYSTEM scopes: []` | **`SUBSYSTEM scopes: []`**（8 步全 OK，绑定 / 终端 / 工具浏览器 / 编排 / Town / 关于隐私 / 置顶 / 重启后仍置顶） | — |
+
+没有删除或弱化任何既有测试；被改动的既有断言（门面被拒的两条、销毁后校验的一条、`tool-browser-integration` 的错误文案一条）
+都是**加断言**或**改成与真实实现一致的更强断言**。
