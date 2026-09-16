@@ -57,7 +57,11 @@ async function fixture({ desktopId = DESKTOP, address = ADDRESS }: { desktopId?:
   const errors: { scope: string; error: unknown }[] = [];
   let destroyed = false, quitting = false;
   const mainFrame = { url: SHELL };
-  const webContents = { mainFrame, isDestroyed: () => destroyed, send: (channel: string, payload: unknown) => { pushes.push({ channel, payload }); } };
+  // The conversation layer's pushes. Other subsystems installed through the same
+  // hook push their own state on their own channels (Town's are `beings:town-*`);
+  // collecting those here would put another unit's traffic inside this file's
+  // assertions about what the chat layer sends and when.
+  const webContents = { mainFrame, isDestroyed: () => destroyed, send: (channel: string, payload: unknown) => { if (channel.startsWith("beings:chat")) pushes.push({ channel, payload }); } };
   const window = { isDestroyed: () => destroyed, webContents };
   const store = { connection: null as Connection | null, connectionAddress: "" };
   const secretStorage = { isEncryptionAvailable: () => true, encryptString: (value: string) => Buffer.from(value), decryptString: (value: Buffer) => value.toString() };
@@ -77,6 +81,11 @@ async function fixture({ desktopId = DESKTOP, address = ADDRESS }: { desktopId?:
     handle, exclusive: operation => operation(),
     window: () => window, store, secretStorage, userData: directory, desktopId,
     clientVersion: "0.9.0", fetchImpl, onError: (scope, error) => { errors.push({ scope, error }); },
+    // Offline, so the subsystems that poll on their own — Town's timeline is the
+    // first — stay idle and this fixture's `calls` stays the conversation
+    // layer's. They are exercised by their own tests; here they would only add
+    // requests to somebody else's assertion.
+    electron: { net: { fetch: fetchImpl, request: null, isOnline: () => false } },
   });
   // The application only ever notifies after `verifyBeingConnection` resolved,
   // which is exactly when the address it verified is the one saved in the store.
@@ -108,7 +117,11 @@ async function fixture({ desktopId = DESKTOP, address = ADDRESS }: { desktopId?:
 test("the bridge registers the documented channel set and refuses to work before a Being is bound", async () => {
   const f = await fixture();
   try {
-    expect([...f.handlers.keys()]).toEqual(CHANNELS);
+    // The conversation layer's channels exactly: no more, no fewer, none
+    // renamed. Other subsystems register through the same hook (Town's are
+    // `beings:town-*`), so the set is filtered rather than compared whole —
+    // what this pins is that the nine below are all the chat layer adds.
+    expect([...f.handlers.keys()].filter(channel => channel.startsWith("beings:chat"))).toEqual(CHANNELS);
     // Listing and the composer catalogue answer while disconnected: an empty
     // sidebar is the truth, and a refusal there would look like a failure.
     expect(await f.call("beings:chat-sessions")).toEqual({ open: false, version: 0, identityKey: "", active: "", cursor: 0, seeded: false, degraded: false, sessions: [], recovery: { phase: "idle" } });

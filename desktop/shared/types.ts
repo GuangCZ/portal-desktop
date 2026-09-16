@@ -1,4 +1,4 @@
-import type { ChatAPI } from './desktop-types';
+import type { ChatAPI, TownDesktopAPI } from './desktop-types';
 export interface UpdateState {
   phase: 'idle' | 'checking' | 'available' | 'current' | 'unavailable';
   currentVersion: string; latestVersion?: string; message: string; releaseUrl: string;
@@ -109,6 +109,8 @@ export interface DesktopAPI {
   // contract fails typecheck there.
   /** Being Desktop's native conversations (desktop-types.ts). */
   chat: ChatAPI;
+  /** Town's direct reads, timeline and pairing (town-desktop-types.ts). */
+  townDesktop: TownDesktopAPI;
   // ────────────────────────────────────────────────────────────────────────────
 }
 declare global { interface Window { beings: DesktopAPI } }

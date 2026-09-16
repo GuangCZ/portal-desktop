@@ -421,6 +421,17 @@ export interface TownDesktopAPI {
   autoPair(): Promise<TownDesktopClientState>;
   retryPairStorage(): Promise<TownDesktopClientState>;
   forget(): Promise<TownDesktopClientState>;
+  /** The `townApp` snapshot changed — pairing advanced, an area's readiness
+   * moved, the background reader's status changed.
+   *
+   * ADDITION over the integration plan §3.1 table, which lists two pushes.
+   * BeingDesktop needs no third because every `onChange` there feeds one
+   * `being:state` snapshot carrying `townApp` inside it (src/main.cjs
+   * `broadcast`). This shell has no such omnibus push — `beings:portal-state`,
+   * `beings:browser-state` and `beings:chat-state` are each their own channel —
+   * so Town gets one too. Without it the pairing panel could only learn that a
+   * one-click pairing had advanced by polling. */
+  onState(callback: (value: TownDesktopAppState) => void): () => void;
   /** A new timeline for the feed on screen, or the payload-free inbox hint. */
   onMessages(callback: (value: TownDesktopPush) => void): () => void;
   /** The member directory was invalidated — by a `profile_changed` event or by
