@@ -1,6 +1,7 @@
 // Ported from BeingDesktop 0.8.26 test/orchestration-policy.test.cjs on 2026-09-16.
 // Seven cases, names preserved. `desktopPortalName` belongs to the Desktop identity unit; the
-// fixture reproduces it verbatim (src/desktop-identity.cjs) rather than importing it.
+// fixture reproduces it (with its `validDesktopId` guard) verbatim from src/desktop-identity.cjs
+// rather than importing it.
 // Contract: docs/orchestration.md "Desktop identity and execution isolation".
 
 import { randomUUID } from "node:crypto";
@@ -12,7 +13,13 @@ import type {
   OrchestrationPolicyOptions,
 } from "../desktop/main/orchestration/types";
 
-const desktopPortalName = (id: string): string => "being-desktop-tools-" + id.toLowerCase();
+// src/desktop-identity.cjs `UUID` / `validDesktopId` / `desktopPortalName`, copied line for line.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const validDesktopId = (value: string): boolean => typeof value === "string" && UUID.test(value);
+const desktopPortalName = (id: string): string => {
+  if (!validDesktopId(id)) throw new Error("Desktop 身份无效。");
+  return "being-desktop-tools-" + id.toLowerCase();
+};
 
 const NOT_ENFORCED = { code: "ORCHESTRATION_NOT_ENFORCED" };
 

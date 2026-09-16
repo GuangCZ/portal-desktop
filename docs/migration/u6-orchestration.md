@@ -795,3 +795,35 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
   `windowsHide/shell/detached` 选项以及 stdin 上的命令文本（`psValue` 编码 + 管道形式）。
 
 现在 `launchAgent({platform:'win32', ...})` 不注入任何东西也能跑通，与 `src/agent-process.cjs` 行为一致。
+
+### low：`final` / `success` 被收紧成 `=== true`
+
+复审判断成立（虽然当下四个适配器都返回布尔字面量，等价，但这是把 normalizeEvent 的不变量硬编码进了调用方）。
+已恢复源码写法：`orchestration.ts` 里 `final = event.success;` / `success = event.success;`，
+两个变量的声明改成 `let final: boolean | undefined = false` / `let success: boolean | undefined = false`
+（两者都只在布尔上下文使用：`result.code === 0 && final && ...`、`!success`、`executionError ||= !event.success`）。
+`NormalizedEvent.success` 保持 `success?: boolean`，与 `src/worker-events.cjs` 的结构一致。
+
+### low：`tests/orchestration-policy.test.ts` 的 `desktopPortalName` 不是逐行副本
+
+复审判断成立：本地 helper 少了 `src/desktop-identity.cjs` 的 `validDesktopId` 守卫，但文件头写的是"verbatim"。
+已把 `UUID` / `validDesktopId` / `desktopPortalName` 三段一起逐行照抄进测试（含 `Desktop 身份无效。`）。
+夹具只用 `randomUUID()` 调它，7 条用例行为不变。
+
+### low：`tests/orchestration-native-results.test.ts` 少了最后一条断言
+
+复审判断成立，但该断言（`f.sessions.workersChanged()` 让 `snapshot().version` 递增）属于 ChatSessions，
+不在本单元。已在测试里该处加注释，原样抄下源断言与它的归属，供 chat-core 单元落地 ChatSessions 时恢复；
+同时计入 openIssues。本单元不做代码改动。
+
+### 未采纳的扩展
+
+复审的备选修法提到"把 `windowsRunner` 和 `launch`/`run` 覆盖串进 `OrchestrationOptions` 与 `detectAgents`"。
+没有采纳：`src/agent-process.cjs` 本身就是直接引用模块常量，串一条 BeingDesktop 没有的参数链属于新增语义。
+`launchAgent` 的 `windowsRunner` 保留为可选参数，集成阶段若要改指向 DesktopTerminal 的正式常量，
+只需在 `vendored.ts` 换一行 re-export，调用点一个都不用动。
+
+### 复审文本截断说明
+
+收到的复审结论在第 4 条（`tests/orchestration-policy.test.ts` 的 `desktopPortalName`）的 evidence 中途被截断
+（`"evid` 处结束）。以上四条是能看到的全部发现，均已处理；若第 4 条之后还有发现，本轮没有看到。

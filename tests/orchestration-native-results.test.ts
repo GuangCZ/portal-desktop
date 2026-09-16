@@ -56,6 +56,9 @@ describe("native worker results", () => {
     const result = nativeWorkerResults(f.manager.workers, id)[0];
     expect(result.preview).toBe(true); expect(result.status).toBe("passed");
     expect(JSON.stringify(result).includes("PRIVATE")).toBe(false); expect(JSON.stringify(result).includes("artifactPath")).toBe(false);
+    // Deferred to the chat-core unit (ChatSessions): the source case ends with
+    // `const version=f.sessions.snapshot().version;f.sessions.workersChanged();assert.ok(f.sessions.snapshot().version>version);`
+    // — snapshot versioning is ChatSessions' contract, not `nativeWorkerResults`'. Restore it there.
     f.manager.workers = [];
   });
 
