@@ -637,3 +637,33 @@ Error: 浏览器已经关闭。
 `forge.config.ts`、`vite.*.config.ts`、`tsconfig.json`、`vitest.config.ts`、`use-conversation-bridge.ts`
 ——**一个字都没动**。`subsystems/chat.ts`、`main/chat`、`renderer/conversation`、`renderer/settings`、
 `renderer/channel`、`main/features` 的导航接线（I5 / I6b / I7 的地盘）同样没碰。
+
+## 8. 未做事项 / 存疑（openIssues）
+
+1. **`contextBridge` 剥掉 Error 的 `code`，Town 与对话两族通道的错误码都到不了渲染层**（§4.4）。
+   实测于 Electron 44.2.0，两文件独立夹具复现；`preload/channels/{bridge,town}.ts` 把包络还原成 Error 的位置在 contextBridge 的**错误一侧**。
+   **从 0.8.26 继承**（`src/preload.cjs` 60-76 行，`renderer/town-app.js:308`/`:1027` 的分支同样走不到）。
+   修法要改每一个调用点收到的东西，跨 I1/I5/I7/I6b 四个单元，不是本单元能做的。
+   直接后果：`tests/town-sdk.mjs` 的 4 条断言红（9 过 4 挂），`npm run test:all` 因此不是全绿。
+2. **打开一次篝火发两次 feed 读**（§4.5）。首次绘制时 1 条，250 ms 后第 2 条，`since` 都是 `null`；
+   目录立刻成功时同样两条，与目录无关。`tests/town-ui.mjs` 停在 `the pending directory did not stop the feed read`。
+   顺带：公共目录 `/api` 一次干净打开被请求 4 次（失败时 9–12 次），没有 in-flight 去重。
+3. **刚 ad-hoc 重签之后的第一次启动会被系统钥匙串对话框挡住**（§4.2），
+   `tools-e2e` / `browser-e2e` / `terminal-e2e` 都没设 `PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN=1`，
+   所以打包后第一次跑必然 `electron.launch: Timeout 180000ms exceeded`，第二次起正常。
+   要不要给这三个脚本也开假钥匙串，是 I2/I3/I5 的产品判断（开了就等于不再覆盖真钥匙串），本单元没有替它们决定。
+4. **窗口标题仍是 `Portal Desktop`**：`desktop/renderer/index.html:7` 的 `<title>` 没跟着改名，
+   而 `main.ts:42` 的 `CLIENT_NAME` 是 `Being Desktop`；文档标题会覆盖 `BrowserWindow` 的 `title`，
+   所以标题栏和 App 切换器里显示的是旧名字（实测 `w.getTitle()` → `"Portal Desktop"`）。
+   `desktop/renderer/index.html` 不在本单元可改清单里。
+5. **没有连真实 Being 发过消息**：本机引擎是 stub，方案 §6.3 的「连接夹具 Being 发消息、退出无错」只做到了
+   「绑定夹具 Being + 面板全走一遍 + 干净退出无错」，**对话发送没测**（那是 I5 的 `electron-smoke` 覆盖的事）。
+6. **`desktop/main/app/protocol.ts` 的 403 守卫没有任何单元测试**（§2.9）。删 `protocolFile` 没有让它变差
+   （那条测的是另一个函数），但现在全树唯一一条「路径穿越」用例没有了。它 import electron，本仓库没给它建过夹具。
+7. **`beings:snapshot` 在退出瞬间会被守卫拒一次**，终端上留下一行
+   `Error occurred in handler for 'beings:snapshot'`。守卫是对的（它不是几何通道，不该放行），
+   但渲染层在拆卸时不该再问快照。属于渲染层拆卸顺序，未改。
+8. **`tests/town-ui.mjs` 只跑到第 5 条 check**，后面的累积时间线、私信候选人、`NOT_SENT` 候选等
+   （约 10 条）**仍未被执行过**，挡在第 2 条 openIssue 后面。
+9. `tests/sbs-refresh.mjs`（I6b）、`tests/electron-smoke.mjs`（I5）、`tests/portal-runtime-e2e.mjs`（I7）
+   本单元**没有跑**：它们要重写，重写者是并行组 B 的其它单元。
