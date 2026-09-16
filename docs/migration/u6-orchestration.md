@@ -700,7 +700,7 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 | tests/orchestration-agent-process.test.ts | test/agent-process.test.cjs | 4 / 4 | 通过 |
 | tests/orchestration-manager.test.ts | test/orchestration.test.cjs | 24 / 24（2 skip） | 通过 |
 | tests/orchestration-worker-callbacks.test.ts | test/worker-callbacks.test.cjs | 18 / 18（1 skip） | 通过 |
-| tests/orchestration-native-results.test.ts | test/native-orchestration.test.cjs | — | 未开始 |
+| tests/orchestration-native-results.test.ts | test/native-orchestration.test.cjs | 11 / 11（10 skip） | 通过 |
 
 测试文件按 BeingDesktop 的测试文件一对一映射（不按模块拆），这样用例数可以直接对账。
 `tests/orchestration-manager.test.ts` 里 skip 的两条（原文件第 2、16 条）属于 desktop-tool-link / desktop-tools 单元：
@@ -709,6 +709,16 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 `tests/orchestration-worker-callbacks.test.ts` 里 skip 的一条（原文件第 10 条）同样属于 desktop-tool-link 单元：
 `receive is the only callback tool without a historical session token; review still requires scope`。
 该文件把 `parseConnection` / `sessionPartition`（src/security.cjs）逐行复制成测试内的本地 helper 并注入两个 sender。
+`tests/orchestration-native-results.test.ts`：原文件 8 个 `test(` 块、其中一个 for 循环展开 4 条，共 11 条运行用例。
+只有 `native result projection is scoped, persistent in Worker history, and exposes only display fields` 触及本单元的
+`nativeWorkerResults`，已真实移植（夹具 worker 原样照抄，用真实 Orchestration 的 workers 账本，
+`nativeWorkerResults(manager.workers, id)` 就是原夹具 `getWorkerResults` 的定义）；该条里
+`f.sessions.workersChanged()` 让 snapshot version 递增的断言属于 ChatSessions，未移植。
+其余 10 条需要 ChatSessions / BeingChat / desktop-message-context / orchestration-message / renderer chat-references，
+全部 `it.skip` 并保留原用例名，计入 openIssues。
+
+`src/worker-events.cjs`、`src/agent-kits.cjs` 在 BeingDesktop 没有独立测试文件，它们的用例分布在
+`test/orchestration.test.cjs` 里（事件映射 3 条、检测 1 条），已随该文件一并移植。
 
 移植测试时遇到的 TS 收敛（不改行为）：
 - `manager.context(id)` 返回 `OrchestrationContext`，测试里用 `as WorkerToolArgs` / `as Args` 断言后再展开，
