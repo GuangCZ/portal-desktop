@@ -26,6 +26,25 @@ import type { DesktopAPI } from "../desktop/shared/types";
 const Nothing = () => null;
 const app = {} as AppModel;
 
+/** The five registries as the landed units left them, taken at import time —
+ * before any `afterEach` has run. The two roll-call cases put them back before
+ * asserting, so what they assert is the production registry rather than whatever
+ * the case that happened to run first left behind. */
+const SHIPPED = {
+  panels: [...PANEL_SLOTS],
+  sidebar: [...SIDEBAR_SLOTS],
+  topbar: [...TOPBAR_SLOTS],
+  sheets: [...SHEET_SLOTS],
+  models: [...FEATURE_MODELS],
+};
+const shipped = () => {
+  PANEL_SLOTS.splice(0, PANEL_SLOTS.length, ...SHIPPED.panels);
+  SIDEBAR_SLOTS.splice(0, SIDEBAR_SLOTS.length, ...SHIPPED.sidebar);
+  TOPBAR_SLOTS.splice(0, TOPBAR_SLOTS.length, ...SHIPPED.topbar);
+  SHEET_SLOTS.splice(0, SHEET_SLOTS.length, ...SHIPPED.sheets);
+  FEATURE_MODELS.splice(0, FEATURE_MODELS.length, ...SHIPPED.models);
+};
+
 afterEach(() => {
   PANEL_SLOTS.length = 0;
   SIDEBAR_SLOTS.length = 0;
@@ -46,10 +65,11 @@ describe("the renderer slot registry", () => {
   // it names what is registered, in which region, rather than asserting nothing is
   // (which it did until the first unit landed). A unit that appends without saying
   // so here fails, which is the point.
-  // It has to be the first case in the file: `afterEach` empties the real arrays
-  // so the cases below can push fakes into them, and after that the registry is
-  // gone for the rest of the run.
+  // `afterEach` empties the real arrays so the cases below can push fakes into
+  // them, so this one restores what was imported first and does not care whether
+  // it runs first.
   it("registers exactly the surfaces the landed units declare", () => {
+    shipped();
     expect(PANEL_SLOTS.map(slot => slot.key)).toEqual([]);
     expect(SIDEBAR_SLOTS.map(slot => `${slot.placement}:${slot.key}`)).toEqual(["foot:shell-pages"]);
     expect(TOPBAR_SLOTS.map(slot => slot.key)).toEqual([]);
@@ -131,11 +151,15 @@ const register = <K extends keyof AppFeatureModels>(key: K, model: AppFeatureMod
 };
 
 describe("the renderer feature-model registry", () => {
-  // The shell invents nothing of its own: with nothing registered there is
-  // nothing on `features`. The roll call of what IS registered is the first case
-  // in this file, before `afterEach` empties the registry.
+  // Exactly the registered models, and nothing the shell invented: the production
+  // registry builds the keys it names, and an empty one builds nothing at all.
+  // Both halves are asserted here rather than relying on this case running before
+  // `afterEach` has emptied the registry — an emptied array being empty is not the
+  // claim.
   it("builds exactly the models that are registered, and no others", () => {
-    expect(FEATURE_MODELS).toEqual([]);
+    shipped();
+    expect(Object.keys(new AppModel(desktop()).features)).toEqual(SHIPPED.models.map(feature => feature.key));
+    FEATURE_MODELS.length = 0;
     expect(new AppModel(desktop()).features).toEqual({});
   });
 

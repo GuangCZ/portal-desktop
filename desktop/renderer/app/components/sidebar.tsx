@@ -22,6 +22,22 @@ import { age, basename } from "../../conversation/models/organizer";
 import type { ConversationModel } from "../../conversation/models/conversation";
 import type { ChatSessionSummary } from "../../../shared/desktop-types";
 import { sidebarSections } from "../slots";
+import { NO_SHELL_STATE } from "../../settings/models/shell-state";
+
+/** A folded project folder is remembered per Being, exactly as 0.8.26 remembers
+ * it: `localStorage` under `being-sidebar-v1:${scope}:folder:${path}`
+ * (renderer/sidebar.js `foldKey` / `savePreference`), which is what makes folding
+ * one outlive a reload as well as a ledger update. Same rule, same stored text
+ * (`true` / `false`), under the `beings:` prefix this shell already uses for
+ * `beings:reading-size`. A window whose storage is unavailable — blocked or
+ * cleared site data — opens everything, which is 0.8.26's fallback too. */
+const foldKey = (scope: string, project: string) => `beings:sidebar-v1:${scope || "local"}:folder:${project}`;
+const readFold = (key: string) => {
+  try { return localStorage.getItem(key) === "true"; } catch { return false; }
+};
+const saveFold = (key: string, folded: boolean) => {
+  try { localStorage.setItem(key, String(folded)); } catch { /* Optional preference. */ }
+};
 
 export function Sidebar({ model }: { model: AppModel }) {
   const app = useModel(model);
@@ -31,7 +47,10 @@ export function Sidebar({ model }: { model: AppModel }) {
   const [editing, setEditing] = useState("");
   const [forgetting, setForgetting] = useState<ChatSessionSummary | null>(null);
   const [search, setSearch] = useState(false);
-  const shell = useModel(app.features.shellState);
+  // `AppModel` catches a feature model that fails to build and carries on without
+  // the key, so the sidebar must not be the thing that turns one broken model into
+  // an empty window (app/models/app.ts).
+  const shell = useModel(app.features.shellState ?? NO_SHELL_STATE);
   const connected = conversation.connected;
   const groups = organizer.groups(conversation.sessions);
   useEffect(() => {
@@ -99,8 +118,12 @@ export function Sidebar({ model }: { model: AppModel }) {
         )}
         {groups.projects.map(project => (
           <ProjectGroup
-            key={project.path}
+            // The scope belongs in the key: the fold is read from storage once per
+            // mount and is the current Being's, so switching Being has to re-read
+            // it rather than carry the previous Being's folds over.
+            key={`${organizer.scope}:${project.path}`}
             project={project}
+            scope={organizer.scope}
             connected={connected}
             busy={shell.busy}
             conversation={conversation}
@@ -120,6 +143,11 @@ export function Sidebar({ model }: { model: AppModel }) {
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
           添加项目文件夹
         </button>
+        {!organizer.persistent && (
+          <p className="sidebar-note" role="status">
+            这个窗口没有连上侧栏账本，置顶、归档与项目只在本次打开期间有效。
+          </p>
+        )}
         {shell.error && <p className="sidebar-note" role="status">{shell.error}</p>}
         <section className="sidebar-section" aria-label="会话">
           <h2 className="sidebar-section-title">会话</h2>
@@ -172,18 +200,22 @@ export function Sidebar({ model }: { model: AppModel }) {
   );
 }
 
-function ProjectGroup({ project, connected, busy, conversation, app, children }: {
+function ProjectGroup({ project, scope, connected, busy, conversation, app, children }: {
   project: { path: string; name: string; sessions: ChatSessionSummary[] };
+  scope: string;
   connected: boolean;
   busy: boolean;
   conversation: ConversationModel;
   app: AppModel;
   children: ReactNode;
 }) {
-  // Folding is per window and survives a ledger update, because it is React state
-  // rather than anything the main process sends: 0.8.26 keeps it in localStorage
-  // for the same reason (renderer/sidebar.js `foldKey`).
-  const [open, setOpen] = useState(true);
+  // Folding is the window's, not the ledger's. It survives a ledger update because
+  // nothing the main process sends carries it, and it survives a reload because it
+  // is written to storage under the Being's own key — the two rules 0.8.26 pins as
+  // `fold-survives-state-update` and `fold-survives-reload` (test/sidebar-ui.cjs).
+  const key = foldKey(scope, project.path);
+  const [folded, setFolded] = useState(() => readFold(key));
+  const open = !folded;
   const [menu, setMenu] = useState(false);
   const id = useId();
   const row = useRef<HTMLDivElement>(null);
@@ -204,7 +236,7 @@ function ProjectGroup({ project, connected, busy, conversation, app, children }:
           aria-expanded={open}
           aria-controls={id}
           title={project.path}
-          onClick={() => setOpen(value => !value)}
+          onClick={() => { const next = !folded; setFolded(next); saveFold(key, next); }}
         >
           <svg className={`sidebar-chevron${open ? " is-open" : ""}`} viewBox="0 0 12 12" aria-hidden="true"><path d="m4.5 3 3 3-3 3" /></svg>
           {project.name}

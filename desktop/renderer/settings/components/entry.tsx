@@ -12,13 +12,16 @@
 import { useModel } from "../../shared/hooks/use-model";
 import { Dialog } from "../../shared/components/dialog";
 import type { AppModel } from "../../app/models/app";
+import { NO_SHELL_STATE } from "../models/shell-state";
 import { AboutPage } from "./about";
 import { PrivacyPage } from "./privacy";
 import "../styles.css";
 
 export function ShellPagesSection({ app }: { app: AppModel }) {
-  const model = app.features.shellState;
-  const shell = useModel(model);
+  // A model that failed to build is not on `AppModel` at all — the shell catches
+  // that and carries on (app/models/app.ts) — so these two pages fall back to an
+  // inert one rather than being the thing that empties the window.
+  const shell = useModel(app.features.shellState ?? NO_SHELL_STATE);
   const page = shell.page;
   return (
     <div className="shell-links">

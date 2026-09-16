@@ -129,6 +129,15 @@ export class ShellStateModel extends Store {
   }
 }
 
+/** What a component falls back to when this model is not on `AppModel` at all.
+ * `AppModel` catches a factory that throws and carries on without the key
+ * (app/models/app.ts: "A broken feature model must not stop the conversation
+ * opening"), so a component that read `app.features.shellState` blind would turn
+ * one broken model into a window that renders nothing — undoing the isolation that
+ * catch exists for. This one holds no bridge and no shell: it reads as an empty
+ * ledger, `addProject` answers false, and the two static pages still open. */
+export const NO_SHELL_STATE = new ShellStateModel(undefined as unknown as DesktopAPI, null);
+
 declare module "../../app/models/registry" {
   interface AppFeatureModels {
     shellState: ShellStateModel;
