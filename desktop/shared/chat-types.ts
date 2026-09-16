@@ -124,8 +124,9 @@ export interface ChatStopResult { stopped: boolean; reason: string; scene: strin
 
 export interface ChatReloadResult { ok: boolean; added: number; error: string }
 
-/** What the composer offers for `@`-mentions. Kits and Town members arrive in a
- * later stage; the shape is fixed now so the renderer contract does not move. */
+/** What the composer offers behind `/` and `@` (BeingDesktop
+ * src/loom-composer.cjs `normalizeComposerData`). A Kit is addressed by `handle`,
+ * a member by `id` — a display name is not an address. */
 export interface ChatComposerEntry {
   id: string;
   name: string;
@@ -133,8 +134,14 @@ export interface ChatComposerEntry {
   description: string;
   kind: 'kit' | 'member';
   installed: boolean;
+  /** A `data:` URL for bundled artwork, or '' — the menu then draws the name's
+   * first letter. Always '' in this shell; see main/chat/composer-data.ts. */
   icon: string;
-  builtin: boolean;
+  /** Which of the Being's own abilities this entry is: 'search', 'browse', or ''
+   * for everything else. A string rather than a flag because the two abilities
+   * expand into different instructions (BeingDesktop renderer/composer-helpers.js
+   * `buildKitPrompt`). */
+  builtin: string;
 }
 
 export interface ChatComposerData {
@@ -142,8 +149,54 @@ export interface ChatComposerData {
   members: ChatComposerEntry[];
   kitsError: string;
   membersError: string;
+  /** The chat layer's connection revision, echoed back by a public mention so a
+   * message composed against the previous Being is refused rather than published
+   * under the new identity. */
   connectionRevision: number;
+  /** The member directory cache's own revision and expiry, so the renderer knows
+   * when its copy went stale without asking again (BeingDesktop
+   * `townSession.memberCacheState()`). Zero when Town is not installed. */
+  revision: number;
+  expiresAt: number;
 }
+
+/** One finished Worker's result card, as `ChatView.workerResults` carries it
+ * (BeingDesktop src/native-worker-results.cjs). Display fields only: the Worker's
+ * prompt, its session token and its artifact path are never projected. */
+export interface ChatWorkerResult {
+  workerId: string;
+  sessionId: string;
+  title: string;
+  at: string;
+  /** A preview the Desktop browser can open. */
+  preview: boolean;
+  /** 'passed' | 'failed' | 'needs_verification' | 'ready'; anything else reads as
+   * 「待补充验证」. */
+  status: string;
+  summary: string;
+  evidence: string;
+}
+
+/** A quotation a card was opened about. */
+export interface ChatDetailReference { text: string; source: 'you' | 'Being' }
+
+/** One explanation card: an ordinary conversation projection plus the quotation
+ * it belongs to. Its scene namespace is a fresh random Desktop id, so nothing
+ * here can ever be imported into a real conversation and nothing reaches disk
+ * (main/chat/details.ts). */
+export interface ChatDetailCard extends ChatView {
+  parentSessionId: string;
+  reference: ChatDetailReference;
+  sending: boolean;
+  recovery: ChatRecoveryState;
+}
+
+/** The card stream. `reset` means every card is gone (the Being changed);
+ * `state` means re-read, optionally for one card only. */
+export type ChatDetailEvent =
+  | ChatEventPayload
+  | { type: 'reset' }
+  | { type: 'state'; sessionId?: string };
 
 /** One event of the native conversation stream (docs/interfaces.md §1.3
  * `being:chat-event`). `sent` is this client's own echo; `meta` reports the stream
@@ -186,7 +239,20 @@ export interface ChatAPI {
   changeSession(sessionId: string | null): Promise<string>;
   renameSession(sessionId: string, title: string): Promise<boolean>;
   forgetSession(sessionId: string): Promise<boolean>;
-  composerData(): Promise<ChatComposerData>;
+  /** `force` re-reads the member directory rather than answering from its cache. */
+  composerData(input?: { force?: boolean }): Promise<ChatComposerData>;
+  /** Open the preview a finished Worker produced, in the Desktop's own browser.
+   * The descriptor it resolves with is the orchestration unit's; the renderer
+   * shows the card, not the descriptor. */
+  openWorkerResult(input: { sessionId: string; workerId: string }): Promise<unknown>;
+  /** The explanation cards. `open`, `view`, `send` and `stop` reject with an Error
+   * carrying `code`;「Town 包络」as in BeingDesktop src/main.cjs line 126. */
+  detailOpen(input: { parentSessionId: string; reference: ChatDetailReference }): Promise<ChatDetailCard>;
+  detailView(sessionId: string): Promise<ChatDetailCard>;
+  detailSend(input: { sessionId: string; text: string }): Promise<ChatSendResult>;
+  detailStop(sessionId: string): Promise<ChatStopResult>;
+  detailClose(sessionId: string): Promise<boolean>;
   onEvent(callback: (event: ChatEventPayload) => void): () => void;
   onState(callback: (state: ChatState) => void): () => void;
+  onDetailEvent(callback: (event: ChatDetailEvent) => void): () => void;
 }

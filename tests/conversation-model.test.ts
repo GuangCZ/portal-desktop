@@ -59,7 +59,17 @@ function fixture() {
     changeSession: async (id) => { calls.push({ method: "changeSession", input: id }); return id || "new-session"; },
     renameSession: async (id, title) => { calls.push({ method: "renameSession", input: { id, title } }); return true; },
     forgetSession: async (id) => { calls.push({ method: "forgetSession", input: id }); return true; },
-    composerData: async () => ({ kits: [], members: [], kitsError: "", membersError: "", connectionRevision: 0 }),
+    composerData: async () => ({ kits: [], members: [], kitsError: "", membersError: "", connectionRevision: 0, revision: 0, expiresAt: 0 }),
+    // The card and preview channels (I5, 2026-09-16). This file is about the
+    // conversation model, which does not call them; they are recorded so an
+    // accidental call shows up as one rather than as a crash.
+    openWorkerResult: async (input) => { calls.push({ method: "openWorkerResult", input }); },
+    detailOpen: async (input) => { calls.push({ method: "detailOpen", input }); throw new Error("解释卡片已关闭。"); },
+    detailView: async (id) => { calls.push({ method: "detailView", input: id }); throw new Error("解释卡片已关闭。"); },
+    detailSend: async (input) => { calls.push({ method: "detailSend", input }); return { ok: true, streamed: true, spliced: false, recovering: "" }; },
+    detailStop: async (id) => { calls.push({ method: "detailStop", input: id }); return { stopped: true, reason: "", scene: "", ownerTitle: "" }; },
+    detailClose: async (id) => { calls.push({ method: "detailClose", input: id }); return true; },
+    onDetailEvent: () => () => { released++; },
     onEvent: callback => { eventListeners.push(callback); return () => { released++; eventListeners.splice(eventListeners.indexOf(callback), 1); }; },
     onState: callback => { stateListeners.push(callback); return () => { released++; stateListeners.splice(stateListeners.indexOf(callback), 1); }; },
   };

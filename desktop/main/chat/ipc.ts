@@ -44,6 +44,10 @@ export interface ChatIpcOptions {
    * has no scene namespace, and saying 请先连接 Being would send the user to fix
    * the one thing that is already fine. Empty means nothing is wrong. */
   blocked?: () => string;
+  /** The composer's two directories (`chat/composer-data.ts`). Left out, the
+   * channel answers the empty shape it has answered since P1 — which is what a
+   * unit test of this module alone, with no Kit directory and no Town, gets. */
+  composerData?: (input?: unknown) => Promise<ChatComposerData>;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -68,7 +72,7 @@ function sessionId(value: unknown): string {
   return value;
 }
 
-export function registerChatIpc({ handle, exclusive, sessions, blocked }: ChatIpcOptions) {
+export function registerChatIpc({ handle, exclusive, sessions, blocked, composerData }: ChatIpcOptions) {
   // Every channel refuses before touching the network when no Being is bound, so
   // the renderer gets one recognizable code rather than a different failure per
   // channel (BeingDesktop's NOT_CONNECTED, src/chat-sessions.cjs line 128).
@@ -145,11 +149,15 @@ export function registerChatIpc({ handle, exclusive, sessions, blocked }: ChatIp
 
   enveloped('beings:chat-forget-session', (id: unknown): boolean => require().forget(sessionId(id)));
 
-  // The kit catalogue and the Town member directory are separate subsystems that
-  // arrive in a later stage. Returning the empty shape now keeps the renderer
-  // contract fixed, and an empty list is the honest answer: nothing is loaded.
-  handle('beings:chat-composer-data', (): ChatComposerData =>
-    ({ kits: [], members: [], kitsError: '', membersError: '', connectionRevision: 0 }));
+  // The Kit catalogue and the Town member directory live in other subsystems, so
+  // this channel is given its answer rather than computing one (I5,
+  // chat/composer-data.ts). Without that injection it still answers the empty
+  // shape: an empty list is the honest reply when nothing is loaded, and the
+  // renderer contract stays fixed either way. The `{force?}` argument is
+  // validated where it is used — `memberOptions` refuses an unknown key.
+  handle('beings:chat-composer-data', async (input: unknown): Promise<ChatComposerData> =>
+    composerData ? composerData(input)
+      : { kits: [], members: [], kitsError: '', membersError: '', connectionRevision: 0, revision: 0, expiresAt: 0 });
 }
 
 /** The two pushes, given the window to send on. Kept beside the handlers so the

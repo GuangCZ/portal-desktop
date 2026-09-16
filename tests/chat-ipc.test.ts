@@ -10,6 +10,7 @@ import { expect, test } from "vitest";
 import { createTrustedHandle } from "../desktop/main/app/ipc";
 import { sceneId } from "../desktop/main/chat/being-chat";
 import { beingIdentityKey } from "../desktop/main/chat/connection";
+import { unwrapMessage } from "../desktop/main/chat/frame";
 import { installSubsystems } from "../desktop/main/extensions";
 import { installChatSubsystem } from "../desktop/main/subsystems/chat";
 import { chatErrorEnvelope, chatErrorFromEnvelope, isChatErrorEnvelope } from "../desktop/shared/chat-errors";
@@ -23,6 +24,10 @@ const CONNECTION: Connection = { endpoint: "https://echo.beings.town/cz_being", 
 const CHANNELS = [
   "beings:chat-sessions", "beings:chat-view", "beings:chat-send", "beings:chat-stop", "beings:chat-reload",
   "beings:chat-change-session", "beings:chat-rename-session", "beings:chat-forget-session", "beings:chat-composer-data",
+  // The explanation cards and the Worker preview (I5, 2026-09-16): registered by
+  // the same subsystem, after the nine above.
+  "beings:chat-detail-open", "beings:chat-detail-view", "beings:chat-detail-send",
+  "beings:chat-detail-stop", "beings:chat-detail-close", "beings:chat-worker-result",
   // Only the conversation layer's channels: the fixture below installs the chat
   // subsystem alone, so the sidebar ledger's three (I6) are asserted in
   // tests/shell-state-ipc.test.ts, not here (merge of I3/I2/I4/I6, 2026-09-16).
@@ -31,7 +36,12 @@ const CHANNELS = [
 // instead of throwing (src/main.cjs line 125 `townMethods`; docs/interfaces.md
 // §1.2「Town 包络」). Only these can tell the renderer *why* a call failed: the
 // wrapper around every channel replaces a thrown Error with its message alone.
-const ENVELOPED = new Set(["beings:chat-view", "beings:chat-send", "beings:chat-stop", "beings:chat-reload", "beings:chat-forget-session"]);
+const ENVELOPED = new Set([
+  "beings:chat-view", "beings:chat-send", "beings:chat-stop", "beings:chat-reload", "beings:chat-forget-session",
+  // The five card channels are in the same `townMethods` set (src/main.cjs line 126).
+  "beings:chat-detail-open", "beings:chat-detail-view", "beings:chat-detail-send",
+  "beings:chat-detail-stop", "beings:chat-detail-close",
+]);
 const SHELL = "beings://desktop/";
 const json = (value: unknown, status = 200) => () =>
   new Response(value === null ? null : JSON.stringify(value), { status, headers: value === null ? {} : { "Content-Type": "application/json" } });
@@ -120,7 +130,11 @@ test("the bridge registers the documented channel set and refuses to work before
     // Listing and the composer catalogue answer while disconnected: an empty
     // sidebar is the truth, and a refusal there would look like a failure.
     expect(await f.call("beings:chat-sessions")).toEqual({ open: false, version: 0, identityKey: "", active: "", cursor: 0, seeded: false, degraded: false, sessions: [], recovery: { phase: "idle" } });
-    expect(await f.call("beings:chat-composer-data")).toEqual({ kits: [], members: [], kitsError: "", membersError: "", connectionRevision: 0 });
+    // CHANGED by I5 (2026-09-16): the composer catalogue is no longer a stub that
+    // answers an empty shape to everyone. BeingDesktop refuses it outright while
+    // nothing is bound (src/main.cjs line 1337), and its own composer never asks
+    // while disconnected, so the refusal is what the renderer contract is now.
+    await expect(f.call("beings:chat-composer-data")).rejects.toThrow("请先连接 Being。");
     const id = "22222222-2222-4222-8222-222222222222";
     for (const [channel, args] of [
       ["beings:chat-view", [id]], ["beings:chat-send", [{ sessionId: id, text: "早" }]],
@@ -134,6 +148,22 @@ test("the bridge registers the documented channel set and refuses to work before
       if (ENVELOPED.has(channel)) await expect(f.call(channel, ...args)).rejects.toMatchObject({ code: "NOT_CONNECTED", message: "请先连接 Being。" });
       else await expect(f.call(channel, ...args)).rejects.toThrow("请先连接 Being。");
     }
+    // The card channels refuse for their own reason, which is BeingDesktop's: the
+    // card layer holds no Being binding of its own, so with nothing bound the
+    // source conversation simply does not exist and no card can be open (I5).
+    await expect(f.call("beings:chat-detail-open", { parentSessionId: id, reference: { text: "一段引用", source: "Being" } }))
+      .rejects.toMatchObject({ code: "INVALID_REQUEST", message: "来源会话不存在。" });
+    for (const [channel, args] of [
+      ["beings:chat-detail-view", [id]], ["beings:chat-detail-send", [{ sessionId: id, text: "追问" }]],
+      ["beings:chat-detail-stop", [id]],
+    ] as [string, unknown[]][])
+      await expect(f.call(channel, ...args)).rejects.toMatchObject({ code: "INVALID_REQUEST", message: "解释卡片已关闭。" });
+    // Closing is the exception, and deliberately so: the renderer removes the
+    // card either way, so a card the main process has never heard of closes
+    // successfully rather than stranding a reader (src/chat-details.cjs `close`).
+    expect(await f.call("beings:chat-detail-close", id)).toBe(true);
+    // The Worker preview is bare, as `chatOpenWorkerResult` is in 0.8.26.
+    await expect(f.call("beings:chat-worker-result", { sessionId: id, workerId: "w-1" })).rejects.toThrow("请先连接 Being。");
     expect(f.calls).toEqual([]);
   } finally { await f.cleanup(); }
 });
@@ -172,8 +202,12 @@ test("a verified connection reads a baseline, probes for a breath already runnin
     // A closed whitelist, not a filter: the conversation layer pushes state, and
     // the sidebar ledger answers a new binding with its own (I6). Anything else
     // appearing here would be a channel nobody declared.
-    expect(f.pushes.every(push => ["beings:chat-state", "beings:sidebar"].includes(push.channel))).toBe(true);
-    expect(f.pushes.at(-1)!.payload).toMatchObject({ open: true, identityKey: "bound" });
+    // `beings:chat-detail-event` joined the whitelist with I5: binding a Being
+    // drops every explanation card, because their source conversations belong to
+    // the Being being replaced (BeingDesktop src/main.cjs line 549).
+    expect(f.pushes.every(push => ["beings:chat-state", "beings:chat-detail-event", "beings:sidebar"].includes(push.channel))).toBe(true);
+    expect(f.pushes.filter(push => push.channel === "beings:chat-detail-event").map(push => push.payload)).toEqual([{ type: "reset" }]);
+    expect(f.pushes.filter(push => push.channel === "beings:chat-state").at(-1)!.payload).toMatchObject({ open: true, identityKey: "bound" });
     // Re-verifying the same Being keeps the timeline instead of rebuilding it.
     const before = f.calls.length;
     await f.connect();
@@ -246,7 +280,13 @@ test("a message sent through the bridge streams its reply to the window in the d
     expect(await f.call("beings:chat-send", { sessionId: id, text: "在吗" })).toMatchObject({ ok: true, streamed: true, spliced: false });
     await settle();
     const post = f.calls.find(call => call.path === "/api/chat/stream")!;
-    expect(post.body).toMatchObject({ message: "在吗", scene_id: scene, scene_meta: { scene_label: "新会话" } });
+    // CHANGED by I5 (2026-09-16): the wire text now carries the request context
+    // frame, which is the whole point of `prepareMessage`. What the Being is sent
+    // is the frame plus the human's words; what `unwrapMessage` gives back is the
+    // words alone, and that is what the transcript and the cache keep.
+    expect(post.body.message.startsWith("[Being Desktop request context v1; length=")).toBe(true);
+    expect(unwrapMessage(post.body.message)).toBe("在吗");
+    expect(post.body).toMatchObject({ scene_id: scene, scene_meta: { scene_label: "新会话" } });
     const events = f.pushes.filter(push => push.channel === "beings:chat-event").map(push => push.payload);
     expect(events.map(event => event.type)).toEqual(["sent", "meta", "delta", "reply"]);
     expect(events[0]).toEqual({ sessionId: id, type: "sent", text: "在吗", images: 0 });
