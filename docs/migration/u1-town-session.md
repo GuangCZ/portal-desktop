@@ -467,3 +467,43 @@ portal-desktop **没有**的能力（本单元补齐）：
 - `_qrImage(url, expected)`：`_context(expected)`；fetch `{method:'GET', headers:{Accept:'image/png,image/jpeg,image/webp'}, credentials:'omit', redirect:'error', cache:'no-store'}`；`mime = content-type 分号前、trim、小写`；`!ok || mime ∉ 三种 || Number(content-length) > MAX_QR_BYTES` → `''`；流式累计 `> MAX_QR_BYTES` → `''`；`imageData(Buffer.concat(chunks), mime)`。catch → `_context(expected)` 后 `''`（**纪元失效仍会抛**）。
 - `updateFeishuCredentials(value)`：`plainRequest(value, ['appId','appSecret','connectionRevision'])`（三个都必填）；`appId` 必须 `/^cli_[A-Za-z0-9_-]{1,120}$/`、`appSecret` 长度 1–4096 且不含 `/[\x00-\x20\x7f]/`、`connectionRevision` 是 sequence，否则 `INVALID_REQUEST` `'请输入有效的飞书 App ID 和 App Secret。'`。
   `_mutate('channel', expected, async () => { response = await _request('/api/channels/credentials', {expected, body: {channel:'feishu', app_id: appId, app_secret: appSecret}, mutation: true}); if (response.ok !== true) throw RESULT_UNKNOWN '飞书配置结果尚未确认，请先刷新渠道状态。'; return {ok:true, channel:'feishu', status:'pending', detail:'凭据已提交，请在飞书完成机器人设置并刷新连接状态。'} })`。
+
+### 依赖摘要：town-result-source.cjs（7 行） 与 validateTownToolResult（已读）
+
+**`src/town-result-source.cjs`**（不在「不在范围」清单里，但被 `messagesDto` 依赖，随本单元一起移植）：
+```js
+const relayed = new WeakSet();                                   // 只由本机 reader 打标，远端 JSON 永远打不上
+markBeingRelay(value) { relayed.add(value); return value; }
+relaySource(value) { return relayed.has(value) ? {source: 'being_relay'} : {}; }
+```
+→ 移植为 `desktop/main/town/session/result-source.ts`，导出 `{markBeingRelay, relaySource}`。
+
+**`validateTownToolResult`** = `being-town-reader.cjs` 的 `validTown(value, route, beingId, query)`（第 78–96 行）。
+它只依赖：`record`（**严格原型**：`Object.getPrototypeOf(value) === Object.prototype`）、`sequence`、`failure(code)`（`ERRORS[code]` 文案）、`MAX_BYTES = 1024*1024`、以及 library-contract 的 `{libraryRoute, scrollListDto, beingsDto, scrollDto, detailId}`。**不依赖中继本身**，可以在本单元内原样移植。
+
+```
+validTown(value, route, beingId, query):
+  1. record(value) && hasOwn 'being' && value.being !== beingId  -> IDENTITY_MISMATCH
+  2. record(value) && (value.truncated === true
+       || Array.isArray(value.messages) && value.messages.some(m =>
+            record(m) && (m.truncated === true
+              || typeof m.message === 'string' && sequence(m.full_length) && m.full_length > [...m.message].length)))
+     -> INCOMPLETE_RESULT
+  3. libraryRoute(route) 时：'/api/scrolls' -> scrollListDto(value, query)
+                            '/api/beings'  -> beingsDto(value)
+                            其他            -> scrollDto(value, detailId(route), query)
+     并置 libraryValid = true
+  4. valid = libraryValid || (
+       '/api/bonfire/hear'     -> record && ok === true && Array.isArray(messages) && sequence(global_latest_seq)
+       '/api/bonfire/mentions' -> record && being === beingId && Array.isArray(mentions)
+       '/api/fireside/list'    -> record && Array.isArray(owned) && Array.isArray(joined)
+       '/api/fireside/members' -> Array.isArray(value)
+       '/api/messages'         -> record && Array.isArray(messages)
+       其他（/api/fireside/hear）-> record && being === beingId && Array.isArray(messages) && sequence(latest_seq))
+  5. !valid || (record && (ok === false || hasOwn 'error')) || Buffer.byteLength(JSON.stringify(value)) > MAX_BYTES
+     -> INVALID_RESPONSE
+  6. return value
+```
+相关 `ERRORS` 文案：`IDENTITY_MISMATCH: 'Town 返回的身份与当前 Being 不一致。'`、`INVALID_RESPONSE: 'Being 未返回可核对的 Town 工具结果，已保留上次同步内容。'`、`INCOMPLETE_RESULT`（文案在 being-town-reader 的 ERRORS 表后半段，本单元只需要 code）。
+
+移植决定：把 `validTown` 原样移植为 `desktop/main/town/session/result-contract.ts` 的 `validateTownToolResult`，同时在 `TownClient` 构造参数里开放 `validateResult` 注入点（默认指向这份移植），供后续集成阶段接回 BeingDesktop 的中继实现。
