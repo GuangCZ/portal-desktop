@@ -163,3 +163,24 @@ BeingDesktop **没有** SBS 写入路径（`validateModelPatch` 白名单里没�
 传输异常/超大响应不泄露凭据、陈旧表单不发请求、切 Being 后的答复一律丢弃、
 并发 `BUSY` 与旧读丢弃、`updateRuntimeConfig` 只动 config 半边、
 地址未变则不发 `base_url`（保住私有查询参数）、卡住的保存不会锁住新 Being。
+
+### 1.10 本壳层的模板与约束（读过的真实代码）
+
+- `subsystems/chat.ts`：`revision` 只在**身份变化**时 ++（重新验证同一个 Being 不打断在途请求），
+  `connectionVerified` 里先写 `address` 再启动。本单元的 `connectionId` 照此办理（BD 的 `generation` 每次
+  `verifyConnection` 都 ++，是**偏差**，写进 §4）。
+- `subsystems/shell-state.ts` + `shell/ipc.ts`：IPC 注册与推送的形状模板（`registerXIpc({handle, exclusive, …})`
+  + `xPush(ctx.push)`）；输入白名单逐字段校验、未知字段直接拒绝。
+- `shared/chat-errors.ts`：`CHAT_ERROR_CODES` 目前 9 条，**没有** `NEEDS_KEY` / `ROLLED_BACK`，
+  未知码会被降级成 `TOWN_ERROR` + 通用文案（会吃掉「此服务需要 API Key…」这类必须原样到达用户的文案）。见 §4.3。
+- `desktop/main/common/loom-connection.ts` 的 `endpoint()` 白名单**已含** `/api/llm/config`（核实）；
+  `publicModelUrl` 也在同一文件，本单元直接用，不再复制。
+- `tests/chat-ipc.test.ts` 的 `CHANNELS` 闭集**只装 chat 子系统**（I3/I2/I4/I6 合并时已改成这样），
+  本单元**不需要**往那里追加通道——I6 记录里那条「必须追加」已经过时。
+- `tests/renderer-slots.test.ts` 同理：已从点名清单改成「格式良好 + 键唯一」的性质断言，本单元**不需要**改它。
+- `tests/architecture.test.ts` 八条：renderer 不得出现 `fetch`/`WebSocket` 等标识符；
+  `models/`/`services/` 不得 import components/hooks/react；`main/subsystems/` 不得 import electron。
+- `DesktopAPI` 的追加位在注释块内，已有 `chat/terminal/toolBrowser/tools/orchestration/shellState/townDesktop` 七项。
+- `renderer/settings/`：`ShellPagesSection`（`SIDEBAR_SLOTS` 的 foot 槽）里已经有「关于 · 隐私」两个按钮 + 一个
+  `Dialog#shell-page-dialog`，`ShellStateModel.page: ShellPage` 控制打开哪一页。
+  本单元加第三个入口「模型」，把 `ShellPage` 扩成 `"" | "about" | "privacy" | "models"`。
