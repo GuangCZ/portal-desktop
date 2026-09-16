@@ -1,8 +1,12 @@
 // Ported from BeingDesktop 0.8.26 test/feature-task-history.test.cjs on 2026-09-16 (node:test -> vitest).
 // Fixtures are copied verbatim; only the assertion style and the temporary directory changed
 // (the source wrote under the repository's .local; here it uses os.tmpdir()).
-// `normalizeTownSyncRecords` is injected, so this file carries a faithful copy of
-// BeingDesktop src/loom-town-sync.cjs lines 9-29 plus src/town-library-contract.cjs `libraryRoute`.
+// `normalizeTownSyncRecords` is injected. It used to be a faithful COPY of
+// BeingDesktop src/loom-town-sync.cjs lines 9-29 here, because the port of that
+// function belonged to a later unit; the I4 integration unit landed it
+// (desktop/main/features/town-sync.ts) on 2026-09-16 and this file now imports
+// it. The copy had to go: with it in place these cases checked the copy, and the
+// real implementation could drift without a single test turning red.
 
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -10,38 +14,8 @@ import os from "node:os";
 import path from "node:path";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import { FeatureTaskHistory } from "../desktop/main/features/feature-task-history";
-import type { SafeStorageApi, TownSyncRecord } from "../desktop/main/features/types";
-
-const RESERVED_SCROLL_IDS = new Set(["help", "search", "graph", "match"]);
-const SCROLL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
-function detailId(route: string): string | null {
-  if (typeof route !== "string" || !route.startsWith("/api/scrolls/")) return null;
-  const id = route.slice("/api/scrolls/".length);
-  return SCROLL_ID.test(id) && !RESERVED_SCROLL_IDS.has(id) ? id : null;
-}
-function libraryRoute(route: string): boolean { return route === "/api/beings" || route === "/api/scrolls" || detailId(route) !== null; }
-
-function normalizeTownSyncRecords(value: unknown): TownSyncRecord[] {
-  if (!Array.isArray(value)) return [];
-  const result = new Map<string, TownSyncRecord>(), conflicts = new Set<string>();
-  const routes = new Set(["/api/bonfire/hear", "/api/bonfire/mentions", "/api/bonfire/speak", "/api/fireside/speak", "/api/fireside/list", "/api/fireside/members", "/api/fireside/hear"]);
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  for (let index = Math.max(0, value.length - 256); index < value.length; index++) {
-    const item: unknown = Object.getOwnPropertyDescriptor(value, index)?.value;
-    if (!item || Object.getPrototypeOf(item) !== Object.prototype) continue;
-    const fields = Object.getOwnPropertyDescriptors(item), keys = ["requestId", "route", "beingId", "prompt"];
-    if (Reflect.ownKeys(fields).length !== keys.length || keys.some(key => !fields[key] || !Object.hasOwn(fields[key], "value") || typeof fields[key].value !== "string")) continue;
-    const next = Object.fromEntries(keys.map(key => [key, fields[key].value])) as unknown as TownSyncRecord;
-    if (!uuid.test(next.requestId) || !routes.has(next.route) && !libraryRoute(next.route) && !/^\/desktop\/channel\/(feishu|wechat)\/(begin|status)$/.test(next.route) || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(next.beingId)
-      || next.prompt.length > 160000 || !next.prompt.startsWith(`[Being Desktop Town sync:${next.requestId}]`)) continue;
-    next.prompt = next.prompt.replace(/\s+/g, " ").trim();
-    if (conflicts.has(next.requestId)) continue;
-    const previous = result.get(next.requestId);
-    if (previous && JSON.stringify(previous) !== JSON.stringify(next)) { result.delete(next.requestId); conflicts.add(next.requestId); }
-    else result.set(next.requestId, next);
-  }
-  return [...result.values()];
-}
+import { normalizeTownSyncRecords } from "../desktop/main/features/town-sync";
+import type { SafeStorageApi } from "../desktop/main/features/types";
 
 function encryptedStorage(): SafeStorageApi {
   const key = randomBytes(32);
