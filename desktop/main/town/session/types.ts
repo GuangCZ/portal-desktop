@@ -221,6 +221,10 @@ export interface TownDirectMessage {
   id: string;
   senderId: string;
   senderName: string;
+  /** The addressee Town reported for this message. Carried only when the payload
+   * has one; see `directMessagesDto` for why this unit added it (2026-09-16). */
+  recipientId?: string;
+  recipientName?: string;
   content: string;
   createdAt: string;
   via?: string;

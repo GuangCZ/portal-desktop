@@ -131,8 +131,14 @@ const desktop = () => ({
   updateState: async () => ({ phase: "idle" }),
   onPortal: () => () => {},
   onUpdate: () => () => {},
-  onTownLive: () => () => {},
-  townLive: async () => { throw new Error("no Town in this fixture"); },
+  // 2026-09-16: the Town half of `AppModel.start()` is the paired client's three
+  // subscriptions plus its opening `appState()` read, where `onTownLive` used to be.
+  townDesktop: {
+    onState: () => () => {},
+    onMessages: () => () => {},
+    onMembersInvalidated: () => () => {},
+    appState: async () => { throw new Error("no Town in this fixture"); },
+  },
 }) as unknown as DesktopAPI;
 
 /** Registers a prebuilt model, the way a unit's own factory would. The keys come

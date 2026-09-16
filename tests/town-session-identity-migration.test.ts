@@ -152,6 +152,8 @@ describe("Town identity migration", () => {
       expect(members.members[0].being_id).toBe(otherId); expect(JSON.stringify(members).includes("hidden")).toBe(false);
       const inbox = await f.session.getDirectMessages();
       expect(inbox.messages[0].senderId).toBe(otherId); expect(inbox.messages[0].senderName).toBe("Bob");
+      // The addressee migrates with the author: `recipient_town_id` reaches the DTO.
+      expect(inbox.messages[0].recipientId).toBe(townId);
       expect((await f.session.getMembers()).members[0].id).toBe(otherId);
       expect((await f.session.listBeings()).beings[0].id).toBe(otherId);
     } finally { f.client.reset(); }

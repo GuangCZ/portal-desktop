@@ -1,320 +1,169 @@
-// SKIPPED — see the skip block below: this script drives the retired
-// `beings://chat` iframe (removed 2026-09-16, MIGRATION.md "P1 完成状态").
+// The Town SDK contract, as the packaged client speaks it.
+//
+// REWRITTEN 2026-09-16 (integration unit I1). The previous script drove the
+// retired `beings://chat` iframe and had been reporting a skip since that
+// document was removed. Its subject survives unchanged: what goes on the wire
+// when this client pairs, reads and speaks, asserted against the packaged
+// application rather than against a module in isolation.
+//
+// The difference from tests/town-ui.mjs is the direction of the assertion. That
+// script asks what the page does; this one asks what Town receives — the confirm
+// body, the Authorization header, the absence of a token in any URL, the three
+// speak bodies, and which error code reaches the renderer when a read is refused.
+// Unit coverage of the same rules against the module is in
+// tests/town-session-client.test.ts; this is the packaged path, including the
+// preload envelope that carries a `code` across IPC.
+//
 // SDK contract fixtures only: no real Town pairing, messages or credentials.
-import { launchDesktop } from './support/electron-lifecycle.mjs';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { desktopExecutable, waitForChatReady } from './support/desktop.mjs';
+import { launchDesktop } from './support/electron-lifecycle.mjs';
+import { desktopExecutable } from './support/desktop.mjs';
 
-// SKIPPED since 2026-09-16. This script drives the conversation through
-// `page.frameLocator('#chat-frame')` — the sandboxed `beings://chat` document
-// that the native React conversation replaced (MIGRATION.md, "P1 完成状态").
-// The iframe, its request proxy and its generated assets are gone, so every
-// locator below addresses nothing. Rewriting it against the native
-// conversation's own DOM is P2 work; until then it reports a skip rather than
-// a failure, so `npm run test:all` stays readable.
-console.log('SKIPPED: tests/town-sdk.mjs drives the retired beings://chat iframe. Rewrite against the native conversation (MIGRATION.md, P1).');
-process.exit(0);
-
-
-const dir = await mkdtemp(path.join(os.tmpdir(), 'town-sdk-284bef4-'));
-let app, page, failure;
+let executablePath;
 try {
-  app = await launchDesktop({ executablePath: await desktopExecutable(), env: { ...process.env, PORTAL_DESKTOP_USER_DATA: dir } });
-  page = await app.firstWindow();
+  executablePath = await desktopExecutable();
+} catch (error) {
+  // A step that ran nothing is not a step that passed (scripts/test-all.mjs).
+  console.log(`SKIPPED: ${error.message}`);
+  process.exit(0);
+}
+
+const TOKEN = 'e'.repeat(64);
+const dir = await mkdtemp(path.join(os.tmpdir(), 'town-sdk-'));
+const checks = [];
+const check = (name, condition) => {
+  assert.equal(condition, true, name);
+  checks.push(name);
+  process.stdout.write(`${name}: passed\n`);
+};
+
+let app;
+try {
+  app = await launchDesktop({
+    executablePath,
+    env: { ...process.env, PORTAL_DESKTOP_USER_DATA: dir, PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN: '1' },
+  });
+  const page = await app.firstWindow();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.getByRole('button', { name: '连接我的 Being' }).waitFor();
-  await app.evaluate(({ protocol }) => {
-    const token = 'sdk-fixture-client-token';
-    globalThis.sdkWrites = [];
-    globalThis.sdkPairConfirms = [];
-    const base = { town_id: 't_WillowFull', speaker_name: '服务端展示名', at: '2026-09-11T10:00:00Z' };
-    const messages = [
-      { ...base, seq: 1, message: 'Being 本体消息', via: 'being' },
-      { ...base, seq: 2, message: '伙伴代发消息', via: 'client:my-phone' },
-      { ...base, seq: 3, message: '旧消息缺少来源', via: null },
-      { ...base, seq: 4, message: '来源按纯文本展示', via: 'client:<img src=x onerror=alert(1)>' },
-    ];
+
+  await app.evaluate(({ protocol }, token) => {
+    globalThis.sdk = { calls: [], writes: [], confirms: 0, paired: true };
+    const message = (seq, content, via) => ({ seq, town_id: 't_River', speaker_name: '河流', message: content, at: '2026-09-11T10:00:00Z', via });
     protocol.handle('https', async request => {
       const url = new URL(request.url);
       if (url.origin !== 'https://beings.town') return Response.json({ error: 'fixture only' }, { status: 404 });
+      const headers = Object.fromEntries(request.headers);
+      globalThis.sdk.calls.push({
+        path: url.pathname, search: url.search, method: request.method,
+        authorization: headers.authorization || '', referer: headers.referer || '', cookie: headers.cookie || '',
+      });
       if (url.pathname === '/api/client/pair/confirm') {
+        globalThis.sdk.confirms++;
         const body = await request.json();
-        globalThis.sdkPairConfirms.push(body);
-        if (body.being_id !== 'willow' || body.code !== 'AB3XY9' || request.headers.has('authorization')) return Response.json({ error: 'bad fixture pairing' }, { status: 400 });
-        return Response.json({ ok: true, token, town_id: 't_WillowFull', display: '柳树' });
+        globalThis.sdk.confirmBody = body;
+        return Response.json({ ok: true, token, town_id: 't_Willow', display: '柳树' });
       }
       if (url.pathname === '/api/client/stream') {
-        if (url.searchParams.get('token') !== token) return new Response('', { status: 401 });
-        return new Response(new ReadableStream({ start(controller) {
-          globalThis.sdkStream = controller;
-          controller.enqueue(new TextEncoder().encode('event: hello\ndata: {"town_id":"t_WillowFull","token_kind":"client","anonymous":false}\n\n'));
-        } }), { headers: { 'Content-Type': 'text/event-stream' } });
+        if (headers.authorization !== `Bearer ${token}`) return new Response('', { status: 401 });
+        return new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('event: hello\ndata: {"town_id":"t_Willow","token_kind":"client","anonymous":false}\n\n'));
+          },
+        }), { headers: { 'Content-Type': 'text/event-stream' } });
       }
-      if (url.pathname === '/api') return Response.json({ version: 'fixture', community: [], services: { bonfire: { what: '篝火说明' }, messages: { what: '私信说明' }, fireside: { what: '围炉说明' } } });
-      if (url.pathname !== '/api/bonfire/hear' && request.headers.get('authorization') !== `Bearer ${token}`) return Response.json({ error: 'unauthorized' }, { status: 401 });
+      if (url.pathname === '/api') return Response.json({ community: [{ town_id: 't_River', display_name: '河流', description: '' }] });
+      if (!globalThis.sdk.paired || headers.authorization !== `Bearer ${token}`) return Response.json({ error: 'unauthorized' }, { status: 401 });
       if (request.method === 'POST') {
-        globalThis.sdkWrites.push({ path: url.pathname, body: await request.json() });
-        return Response.json({ ok: true, via: 'client:desktop', seq: 5, message_id: 'sent-1' });
+        globalThis.sdk.writes.push({ path: url.pathname, body: await request.json() });
+        return Response.json({ ok: true, seq: 12, id: 'sent-1', via: 'client:desktop' });
       }
-      if (url.pathname === '/api/bonfire/hear') return Response.json({ ok: true, town_id: 't_WillowFull', messages });
+      if (url.pathname === '/api/bonfire/hear') {
+        return Response.json({ ok: true, town_id: 't_Willow', global_latest_seq: 4, messages: [
+          message(1, 'Being 本体消息', 'being'),
+          message(2, '伙伴代发消息', 'client:my-phone'),
+          message(3, '旧消息缺少来源', null),
+          message(4, '来源按纯文本展示', 'client:<img src=x onerror=alert(1)>'),
+        ] });
+      }
       if (url.pathname === '/api/fireside/list') return Response.json({ owned: [{ id: 10, name: '测试围炉' }], joined: [] });
-      if (url.pathname === '/api/fireside/hear') return Response.json({ ok: true, messages: [messages[1]] });
-      if (url.pathname === '/api/messages') return Response.json({ messages: [{ id: 'dm-1', sender_town_id: 't_RiverFull', sender_display: 'Seam Walker', recipient_town_id: 't_WillowFull', content: '来自伙伴的私信', created_at: base.at, via: 'client:tablet' }] });
+      if (url.pathname === '/api/fireside/hear') return Response.json({ ok: true, messages: [message(2, '围炉消息', 'being')] });
+      if (url.pathname === '/api/messages') return Response.json({ messages: [] });
       return Response.json({ error: 'fixture only' }, { status: 404 });
     });
-  });
+  }, TOKEN);
   await app.evaluate(({ protocol }) => {
-    globalThis.sdkPairChats = [];
-    globalThis.sdkPairMode = 'waiting';
     protocol.handle('http', async request => {
       const url = new URL(request.url);
-      const path = url.pathname;
-      if (path.endsWith('/api/chat/stream') && request.method === 'POST') {
-        const body = await request.json();
-        globalThis.sdkPairChats.push({ body, token: url.searchParams.get('token') });
-        if (globalThis.sdkPairMode === 'unauthorized' || url.searchParams.get('token') !== 'local-ui-fixture') return Response.json({ error: 'authentication required' }, { status: 403 });
-        return new Response(new ReadableStream({ start(controller) {
-          if (globalThis.sdkPairMode === 'waiting') return;
-          controller.enqueue(new TextEncoder().encode('event: text\ndata: {"text":"正在获取配对码。"}\n\nevent: message_stop\ndata: {}\n\n'));
-          controller.enqueue(new TextEncoder().encode('event: tool_result\ndata: {"text":"BAD123"}\n\nevent: text\ndata: {"text":"AB3"}\n\n'));
-          controller.enqueue(new TextEncoder().encode('event: content_block_delta\ndata: {"delta":{"type":"text_delta","text":"XY9"}}\n\nevent: message_stop\ndata: {}\n\n'));
-          controller.close();
-        } }), { headers: { 'Content-Type': 'text/event-stream' } });
-      }
-      if (path.endsWith('/api/stream/active')) return new Response(null, { status: 204 });
+      if (url.host !== '127.0.0.1:1') return Response.json({ error: 'fixture only' }, { status: 404 });
+      if (url.pathname.endsWith('/api/stream/active')) return new Response(null, { status: 204 });
       return Response.json({ being_name: 'willow', messages: [], status: 'ok' });
     });
   });
-  await page.evaluate(async dir => {
+  await page.evaluate(async workspace => {
     const { settings } = await window.beings.snapshot();
-    await window.beings.save({ ...settings, connectionLink: 'http://127.0.0.1:1/willow/?token=local-ui-fixture', workspace: dir, backgroundEnabled: false, autoStart: false });
+    await window.beings.save({ ...settings, connectionLink: 'http://127.0.0.1:1/willow/?token=local-ui-fixture', workspace, backgroundEnabled: false, autoStart: false });
   }, dir);
-  await waitForChatReady(page);
-  const home = async () => {
-    if (await page.locator('#place-sheet').evaluate(el => el.open)) await page.locator('#back-to-chat').click();
-    await page.locator('#options-trigger').click();
-    await page.locator('[data-view="town"]').click();
-    await page.locator('.service-card').first().waitFor();
-  };
-  const open = async title => {
-    await home();
-    await page.locator('.service-card').filter({ has: page.getByRole('heading', { name: title, exact: true }) }).getByRole('button', { name: '打开', exact: true }).click();
-  };
-  // Compact menu: nested navigation, interrupted motion, keyboard and merged settings.
-  await page.locator('#options-trigger').click();
-  assert.equal(await page.locator('#options-home > button').count(), 7);
-  await page.locator('#options-help').click();
-  assert.equal(await page.locator('#conversation-options').getAttribute('open'), '');
-  await page.keyboard.press('Escape');
-  await page.locator('#options-home').waitFor();
-  await page.waitForFunction(() => document.activeElement?.id === 'options-help');
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('#conversation-options').open);
-  assert.equal(await page.locator('#options-trigger').evaluate(el => el === document.activeElement), true);
-  await page.locator('#options-trigger').dispatchEvent('click');
-  await page.locator('#options-trigger').dispatchEvent('click');
-  await page.locator('#options-trigger').dispatchEvent('click');
-  await page.locator('#client-settings-button').click();
-  await page.locator('#client-settings-dialog[open]').waitFor();
-  await page.locator('#settings-tab-appearance').click();
-  assert.equal(await page.locator('#theme-toggle').isVisible(), true);
-  await page.locator('#settings-tab-connections').click();
-  assert.equal(await page.locator('#settings-button').isVisible(), true);
-  await page.screenshot({ path: path.join(os.tmpdir(), 'town-settings-review.png') });
-  await page.locator('#settings-button').click();
-  assert.equal(await page.locator('#client-settings-dialog').evaluate(el => el.open), false);
-  await page.locator('#settings-dialog[open]').waitFor();
-  await page.locator('#close-settings').click();
-  await page.locator('#options-trigger').click();
-  await page.waitForFunction(() => document.querySelector('.options-menu').getAnimations().length === 0);
-  await page.screenshot({ path: path.join(os.tmpdir(), 'town-menu-review.png') });
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('#conversation-options').open);
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.locator('#options-trigger').focus();
-  await page.keyboard.press('ArrowDown');
-  assert.equal(await page.locator('#toggle-chat-search').evaluate(el => el === document.activeElement), true);
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('#conversation-options').open);
-  await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await home();
-  await page.frameLocator('#chat-frame').locator('#input').fill('配对期间保留草稿');
-  await page.locator('#town-auth-button').click();
-  await page.getByRole('button', { name: '自动连接 Town', exact: true }).waitFor();
-  assert.equal(await page.locator('#town-pair-code').isVisible(), false);
-  await page.screenshot({ path: path.join(os.tmpdir(), 'town-auto-pair-review.png') });
-  await page.locator('#town-auth-form button[type="submit"]').click();
-  await page.waitForFunction(() => document.querySelector('#cancel-town-pair') !== null);
-  await app.evaluate(async () => {
-    const deadline = Date.now() + 5000;
-    while (!globalThis.sdkPairChats.length) {
-      if (Date.now() >= deadline) throw new Error('Pairing request did not reach the fixture');
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
-  });
-  await page.locator('#close-town-auth').click();
-  await page.waitForFunction(() => !document.querySelector('#town-auth-dialog').open);
-  assert.equal(await page.evaluate(async () => (await window.beings.townAuth()).configured), false);
-  assert.equal(await app.evaluate(() => globalThis.sdkPairConfirms.length), 0);
-  await page.locator('#town-auth-button').click();
-  await app.evaluate(() => { globalThis.sdkPairMode = 'unauthorized'; });
-  await page.locator('#town-auth-form button[type="submit"]').click();
-  await page.locator('#town-pair-code').waitFor({ state: 'visible' });
-  assert.match(await page.locator('#town-auth-error').textContent(), /手动配对/);
-  await page.screenshot({ path: path.join(os.tmpdir(), 'town-auto-pair-manual-review.png') });
-  assert.equal(await app.evaluate(() => globalThis.sdkPairConfirms.length), 0);
-  await page.locator('#town-pair-mode').click();
-  await app.evaluate(() => { globalThis.sdkPairMode = 'normal'; });
-  await page.locator('#town-auth-form button[type="submit"]').click();
-  await page.waitForFunction(() => !document.querySelector('#town-auth-dialog').open);
-  await page.waitForFunction(async () => (await window.beings.townLive()).phase === 'connected');
-  assert.equal(await page.frameLocator('#chat-frame').locator('#input').inputValue(), '配对期间保留草稿');
-  await page.frameLocator('#chat-frame').locator('#input').fill('');
-  const pairs = await app.evaluate(() => ({ chats: globalThis.sdkPairChats, confirms: globalThis.sdkPairConfirms }));
-  assert.equal(pairs.chats.length, 3);
-  assert.deepEqual(pairs.confirms, [{ being_id: 'willow', code: 'AB3XY9' }]);
-  for (const { body, token } of pairs.chats) {
-    assert.equal(token, 'local-ui-fixture');
-    assert.match(body.session_id, /^town-pair-/);
-    assert.equal(body.scene_id, body.session_id);
-    assert.equal(body.scene_meta.scene_label, 'Town 配对');
-    assert.equal(body.chat_id, undefined);
-  }
-  await open('篝火');
-  await page.locator('.social-message').getByText('伙伴代发消息', { exact: true }).waitFor();
-  const partner = page.locator('.social-message').filter({ hasText: '伙伴代发消息' });
-  assert.equal(await partner.locator('.via-tag').textContent(), '借 my-phone');
-  assert.equal(await partner.locator('.social-author').textContent(), '服务端展示名');
-  for (const body of ['Being 本体消息', '旧消息缺少来源']) assert.equal(await page.locator('.social-message').filter({ hasText: body }).locator('.via-tag').count(), 0);
-  assert.equal(await page.locator('.via-tag img').count(), 0);
-  assert((await page.locator('.via-tag').allTextContents()).includes('借 <img src=x onerror=alert(1)>'));
-  await page.screenshot({ path: path.join(os.tmpdir(), 'town-sdk-via.png') });
-  assert.equal(await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).count(), 4);
-  await partner.getByRole('button', { name: '回复', exact: true }).click();
-  await page.locator('#town-reply-preview').getByText('服务端展示名：伙伴代发消息', { exact: true }).waitFor();
-  await page.locator('#town-send-close').click();
-  assert.equal(await app.evaluate(() => globalThis.sdkWrites.length), 0);
-  await partner.getByRole('button', { name: '回复', exact: true }).click();
-  await page.locator('#town-send-content').fill('SDK 篝火回复');
-  await page.locator('#town-send-submit').click();
-  await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
-  assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites), [{ path: '/api/bonfire/speak', body: { message: 'SDK 篝火回复', reply_to: 2 } }]);
-  await partner.getByRole('button', { name: '一起看', exact: true }).click();
-  await page.locator('#scene-compose').click();
-  const chatInput = page.frameLocator('#chat-frame').locator('#input');
-  await page.waitForFunction(() => document.querySelector('#companion-panel').hidden);
-  assert.equal(await chatInput.inputValue(), '一起看看篝火里的这段（t_WillowFull）：\n\n> 伙伴代发消息');
-  // An existing draft is preserved, and inserting a quote never sends it.
-  await chatInput.fill('保留我的草稿');
-  await open('篝火');
-  await page.locator('.social-message').filter({ hasText: '伙伴代发消息' }).getByRole('button', { name: '一起看', exact: true }).click();
-  await page.locator('#scene-compose').click();
-  await page.getByText('对话输入框已有草稿，请先处理原草稿，再放入引用。', { exact: true }).waitFor();
-  assert.equal(await chatInput.inputValue(), '保留我的草稿');
-  await page.locator('#close-companion').click();
-  await chatInput.fill('');
-  await open('篝火');
-  await page.locator('#town-write').click();
-  assert((await page.locator('#town-send-context').textContent()).includes('以「柳树」的身份代发'));
-  await page.locator('#town-send-content').fill('SDK 测试消息');
-  await page.locator('#town-send-submit').click();
-  await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
-  assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites), [
-    { path: '/api/bonfire/speak', body: { message: 'SDK 篝火回复', reply_to: 2 } },
-    { path: '/api/bonfire/speak', body: { message: 'SDK 测试消息' } },
-  ]);
-  await open('私信');
-  await page.getByText('来自伙伴的私信', { exact: true }).waitFor();
-  assert.equal(await page.locator('.via-tag').textContent(), '借 tablet');
-  await page.locator('.social-message').getByRole('button', { name: '一起看', exact: true }).click();
-  await page.locator('#scene-compose').click();
-  await page.waitForFunction(() => document.querySelector('#companion-panel').hidden);
-  assert.match(await chatInput.inputValue(), /来自伙伴的私信/);
-  assert.equal(await app.evaluate(() => globalThis.sdkWrites.length), 2);
-  await chatInput.fill('');
-  await open('私信');
-  await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).click();
-  assert.equal(await page.locator('#town-recipient').inputValue(), 'Seam Walker');
-  assert.equal(await page.locator('#town-recipient').evaluate(el => el.readOnly), true);
-  assert.match(await page.locator('#town-reply-preview').textContent(), /来自伙伴的私信/);
-  await page.locator('#town-send-close').click();
-  assert.equal(await app.evaluate(() => globalThis.sdkWrites.length), 2);
-  await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).click();
-  await page.locator('#town-send-content').fill('SDK 私信回复');
-  await page.locator('#town-send-submit').click();
-  await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
-  assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites.at(-1)), { path: '/api/messages', body: { recipient: 't_RiverFull', content: 'SDK 私信回复', reply_to: 'dm-1' } });
-  await page.locator('#town-write').click();
-  await page.locator('#town-recipient').fill('t_WillowFull');
-  await page.locator('#town-send-content').fill('不能发给自己');
-  await page.locator('#town-send-submit').click();
-  await page.locator('#town-send-error').getByText(/不能给当前 Being 自己/).waitFor();
-  assert.equal(await app.evaluate(() => globalThis.sdkWrites.length), 3);
-  await page.locator('#town-send-close').click();
-  await open('围炉');
-  await page.locator('.social-message').getByText('伙伴代发消息', { exact: true }).waitFor();
-  assert.equal(await page.locator('.via-tag').textContent(), '借 my-phone');
-  await page.locator('.social-message').getByRole('button', { name: '一起看', exact: true }).click();
-  await page.locator('#scene-compose').click();
-  await page.waitForFunction(() => document.querySelector('#companion-panel').hidden);
-  assert.match(await chatInput.inputValue(), /伙伴代发消息/);
-  await chatInput.fill('');
-  await open('围炉');
-  await page.locator('.social-message').getByRole('button', { name: '回复', exact: true }).click();
-  await page.locator('#town-send-content').fill('SDK 围炉回复');
-  await page.locator('#town-send-submit').click();
-  await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
-  assert.deepEqual(await app.evaluate(() => globalThis.sdkWrites.at(-1)), { path: '/api/fireside/speak', body: { fireside_id: 10, message: 'SDK 围炉回复', reply_to: 2 } });
-  assert.deepEqual(errors, []);
-  // Explicit quotations also work with imported tokens, without pairing again.
-  await page.evaluate(() => window.beings.saveTownToken('sdk-fixture-client-token'));
-  await page.waitForFunction(async () => (await window.beings.townLive()).phase === 'connected');
-  await open('私信');
-  await page.locator('.social-message').getByRole('button', { name: '一起看', exact: true }).click();
-  await page.locator('#scene-compose').click();
-  await page.waitForFunction(() => document.querySelector('#companion-panel').hidden);
-  assert.match(await chatInput.inputValue(), /来自伙伴的私信/);
-  assert.equal(await app.evaluate(() => globalThis.sdkWrites.length), 4);
-  assert.equal(await app.evaluate(() => globalThis.sdkPairConfirms.length), 1);
-  assert.equal(await app.evaluate(() => globalThis.sdkPairChats.length), 3);
-  await chatInput.fill('');
-  // Manual pairing remains available after an automatic connection.
-  await home(); await page.locator('#town-auth-button').click();
-  await page.locator('#town-pair-mode').click();
-  await page.locator('#town-being').fill('willow');
-  await page.locator('#town-pair-code').fill('AB3XY9');
-  await page.locator('#town-auth-form button[type="submit"]').click();
-  await page.waitForFunction(() => !document.querySelector('#town-auth-dialog').open);
-  assert.equal(await app.evaluate(() => globalThis.sdkPairConfirms.length), 2);
-  assert.equal(await app.evaluate(() => globalThis.sdkPairChats.length), 3);
-  console.log('PASS: authenticated automatic pairing, stream cancellation, auth-error fallback, preserved chat drafts and manual pairing; explicit private quotations work with canonical Town IDs and imported credentials without re-pairing or sending.');
-  console.log('PASS: compact menu, interrupted motion, keyboard/reduced motion, grouped settings, clean quote draft and existing-draft preservation; SDK pairing + SSE hello, server display names, via badges in all three feeds, inert via text, explicit author context, fixture-only send, self-DM blocked before network');
-} catch (error) {
-  failure = error;
-  console.error('Town SDK assertion failed:', error);
-  if (page && !page.isClosed()) {
-    try {
-      await mkdir('test-results', { recursive: true });
-      await page.screenshot({ path: 'test-results/town-sdk-failure.png' });
-      const state = await page.evaluate(() => ({
-        active: document.activeElement?.id || document.activeElement?.tagName,
-        menuOpen: document.querySelector('#conversation-options')?.open,
-        expanded: document.querySelector('#options-trigger')?.getAttribute('aria-expanded'),
-        homeHidden: document.querySelector('#options-home')?.hidden,
-        secondaryHidden: document.querySelector('#options-secondary')?.hidden,
-      }));
-      await writeFile('test-results/town-sdk-failure.json', JSON.stringify(state, null, 2));
-    } catch (diagnosticError) { console.error('Town SDK diagnostics failed:', diagnosticError); }
-  }
-  throw error;
+  await page.waitForFunction(async () => (await window.beings.townDesktop.appState()).identity.loomBeingId === 'willow');
+
+  // ── the catalogue reaches the renderer as a code, not a sentence ───────────
+  const unpaired = await page.evaluate(() => window.beings.townDesktop.bonfire().then(() => '', error => error.code));
+  check('an unpaired read rejects with AUTH_REQUIRED rather than a sentence', unpaired === 'AUTH_REQUIRED');
+  const invalid = await page.evaluate(() => window.beings.townDesktop.pair({ code: 'ABC' }).then(() => '', error => error.code));
+  check('a code that cannot be valid never reaches Town', invalid === 'INVALID_REQUEST'
+    && (await app.evaluate(() => globalThis.sdk.confirms)) === 0);
+
+  // ── pairing ────────────────────────────────────────────────────────────────
+  const state = await page.evaluate(() => window.beings.townDesktop.pair({ code: 'ab3xy9' }));
+  check('the confirm body names the bound identity and the upper-cased code',
+    (await app.evaluate(() => globalThis.sdk.confirmBody)).code === 'AB3XY9'
+    && (await app.evaluate(() => globalThis.sdk.confirmBody)).being_id === 'willow');
+  check('the confirm exchange carries no credential of its own',
+    (await app.evaluate(() => globalThis.sdk.calls.find(call => call.path === '/api/client/pair/confirm').authorization)) === '');
+  check('the paired state that crosses IPC has no token in it',
+    state.paired === true && state.townId === 't_Willow' && !JSON.stringify(state).includes(TOKEN));
+
+  // ── reads ──────────────────────────────────────────────────────────────────
+  const bonfire = await page.evaluate(() => window.beings.townDesktop.bonfire({ limit: 10 }));
+  check('a direct read returns the validated DTO, not the upstream body',
+    bonfire.messages.length === 4 && bonfire.messages[0].content === 'Being 本体消息'
+    && bonfire.messages[0].beingName === '河流' && bonfire.messages[0].townId === 't_River');
+  check('client provenance survives and is carried as plain text',
+    bonfire.messages[1].via === 'client:my-phone' && bonfire.messages[3].via.includes('<img') && !('__html' in bonfire.messages[3]));
+  const reads = await app.evaluate(() => globalThis.sdk.calls.filter(call => call.path.endsWith('/hear') || call.path === '/api/messages'));
+  check('every authenticated read uses the client bearer, never a URL token or a cookie',
+    reads.length > 0 && reads.every(call => call.authorization === `Bearer ${TOKEN}` && !call.search.includes('token') && call.cookie === '' && call.referer === ''));
+
+  // ── writes ─────────────────────────────────────────────────────────────────
+  const revision = (await page.evaluate(() => window.beings.townDesktop.appState())).identity.connectionRevision;
+  await page.evaluate(connectionRevision => window.beings.townDesktop.speak({ kind: 'bonfire', content: '篝火', connectionRevision }), revision);
+  await page.evaluate(connectionRevision => window.beings.townDesktop.speak({ kind: 'fireside', firesideId: '10', content: '围炉', connectionRevision }), revision);
+  await page.evaluate(connectionRevision => window.beings.townDesktop.speak({ kind: 'dm', recipient: 't_River', content: '私信', connectionRevision }), revision);
+  const writes = await app.evaluate(() => globalThis.sdk.writes);
+  check('the three speak bodies are the documented ones', JSON.stringify(writes) === JSON.stringify([
+    { path: '/api/bonfire/speak', body: { message: '篝火' } },
+    { path: '/api/fireside/speak', body: { fireside_id: 10, message: '围炉' } },
+    { path: '/api/messages', body: { recipient: 't_River', content: '私信' } },
+  ]));
+  const stale = await page.evaluate(connectionRevision => window.beings.townDesktop
+    .speak({ kind: 'bonfire', content: '旧连接', connectionRevision }).then(() => '', error => error.code), revision + 1);
+  check('a send composed under a previous connection is refused before it is sent',
+    stale === 'SESSION_CHANGED' && (await app.evaluate(() => globalThis.sdk.writes.length)) === 3);
+
+  // ── forgetting ─────────────────────────────────────────────────────────────
+  const forgotten = await page.evaluate(() => window.beings.townDesktop.forget());
+  check('forgetting leaves the client unpaired without asking Town for anything',
+    forgotten.paired === false && forgotten.status === 'unpaired');
+  const after = await page.evaluate(() => window.beings.townDesktop.inbox().then(() => '', error => error.code));
+  check('and the next read asks for a pairing again', after === 'AUTH_REQUIRED');
+
+  check('the renderer raised no errors', errors.length === 0);
+  console.log(`\n${checks.length} checks passed. Scope: SDK contract fixtures; no real Town pairing, messages or credentials.`);
 } finally {
-  if (app) {
-    try { await app.close(); }
-    catch (error) { if (!failure) throw error; console.error('Town SDK cleanup also failed:', error); }
-  }
+  if (app) await app.close().catch(() => {});
   await rm(dir, { recursive: true, force: true });
 }

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DesktopAPI, PortalState, TownLiveState } from '../shared/types';
+import type { DesktopAPI, PortalState } from '../shared/types';
 import { desktopChannels } from './channels';
 const api: DesktopAPI = {
   platform: process.platform,
@@ -25,19 +25,6 @@ const api: DesktopAPI = {
   },
   appearance: theme => ipcRenderer.invoke('beings:appearance', theme),
   town: query => ipcRenderer.invoke('beings:town', query),
-  townLive: () => ipcRenderer.invoke('beings:town-live'),
-  reconnectTown: () => ipcRenderer.invoke('beings:town-reconnect'),
-  sendTown: input => ipcRenderer.invoke('beings:town-send', input),
-  onTownLive: callback => {
-    const listener = (_event: unknown, state: TownLiveState) => callback(state);
-    ipcRenderer.on('beings:town-live', listener);
-    return () => ipcRenderer.removeListener('beings:town-live', listener);
-  },
-  townAuth: () => ipcRenderer.invoke('beings:town-auth'),
-  pairTown: input => ipcRenderer.invoke('beings:town-pair', input),
-  autoPairTown: input => ipcRenderer.invoke('beings:town-auto-pair', input),
-  cancelTownPair: requestId => ipcRenderer.invoke('beings:town-pair-cancel', requestId),
-  saveTownToken: token => ipcRenderer.invoke('beings:town-token', token),
   localKits: () => ipcRenderer.invoke('beings:kits'),
   deleteKit: name => ipcRenderer.invoke('beings:kit-delete', name),
   importKit: () => ipcRenderer.invoke('beings:kit-import'),

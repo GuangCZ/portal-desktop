@@ -263,6 +263,9 @@ describe("Town client (SDK protocol)", () => {
     expect(messages.map(m => m.id)).toEqual(["m2", "m1"]);
     expect(messages[0].senderName).toBe("Bob");
     expect(messages[1].senderName).toBe("carol");
+    // Who the letter was addressed to travels with it: a letter of mine is
+    // answered to the other end, never to its sender, which would be me.
+    expect(messages[0].recipientId).toBe("alice");
     expect(messages[0].via).toBe("client:phone");
     expect(messages[1].replyTo).toEqual({ id: "m0", beingId: "alice", preview: "更早" });
     expect(f.calls.at(-1)!.url.href).toBe("https://beings.town/api/messages");

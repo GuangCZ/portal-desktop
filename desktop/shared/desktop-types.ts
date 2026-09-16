@@ -19,4 +19,5 @@ export * from './tool-browser-types';
 export * from './tools-types';
 export * from './orchestration-types';
 export * from './shell-state-types';
+export * from './town-desktop-types';
 // ──────────────────────────────────────────────────────────────────────────────

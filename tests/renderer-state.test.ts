@@ -6,14 +6,25 @@ import { SceneStore } from "../desktop/renderer/shared/models/scene";
 import {
   feedMessages,
   filterMessages,
+  inboxMessages,
   newFeedFilters,
 } from "../desktop/renderer/town/models/feed";
+import { liveMessage } from "../desktop/renderer/town/page";
+import type { DesktopAPI, Snapshot, TownResult } from "../desktop/shared/types";
 import type {
-  DesktopAPI,
-  Snapshot,
-  TownLiveState,
-  TownResult,
-} from "../desktop/shared/types";
+  TownDesktopAPI,
+  TownDesktopAppState,
+  TownDesktopClientState,
+  TownDesktopDirectMessage,
+  TownDesktopEnvelope,
+  TownDesktopIdentity,
+  TownDesktopMessage,
+  TownDesktopReadResult,
+  TownDesktopRefreshStatus,
+  TownDesktopScroll,
+  TownDesktopScrollSummary,
+  TownDesktopTimeline,
+} from "../desktop/shared/desktop-types";
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
@@ -35,25 +46,160 @@ const state = (being = "willow"): Snapshot => ({
   },
   portal: { phase: "stopped", message: "stopped", logs: [] },
 });
-const live = (
-  generation = 1,
-  revision = 1,
-  beingId = "willow",
-): TownLiveState => ({
-  phase: "connected",
-  generation,
-  revision,
-  beingId,
-  sync: 1,
-  message: "connected",
-  versions: { bonfire: 0, mail: 0, firesides: 0 },
+// 2026-09-16: `TownLiveState` — phase, generation, revision, per-feed version
+// counters — went with `beings:town-live` (integration unit I1, decision §5.1).
+// The paired client reports the same three facts in three separate shapes, and
+// the fixtures below are those: `appState` is the `townApp` snapshot the page
+// reads its connection from, `envelope` is one accumulated timeline as the
+// background reader pushes it, and the feed markers the version counters used to
+// carry are now the envelopes themselves arriving for a feed that is not on
+// screen.
+const refreshStatus = (
+  overrides: Partial<TownDesktopRefreshStatus> = {},
+): TownDesktopRefreshStatus => ({
+  status: "idle",
+  reason: "",
+  intervalMs: 60000,
+  nextRefreshAt: null,
+  lastAttemptAt: null,
+  lastCheckedAt: null,
+  lastSuccessAt: null,
+  revision: null,
+  stale: false,
+  errorCode: "",
+  failureCount: 0,
+  running: true,
+  ...overrides,
 });
+const identity = (
+  overrides: Partial<TownDesktopIdentity> = {},
+): TownDesktopIdentity => ({
+  beingId: "willow",
+  loomBeingId: "willow",
+  townId: "t_Willow",
+  displayName: "柳树",
+  sendAs: "t_Willow",
+  connectionRevision: 1,
+  identityRevision: 1,
+  ...overrides,
+});
+const clientState = (
+  overrides: Partial<TownDesktopClientState> = {},
+): TownDesktopClientState => ({
+  status: "connected",
+  paired: true,
+  beingId: "willow",
+  loomBeingId: "willow",
+  townId: "t_Willow",
+  displayName: "柳树",
+  errorCode: "",
+  authReason: "",
+  pairingPending: false,
+  pairErrorCode: "",
+  ...overrides,
+});
+const appState = (
+  overrides: Partial<TownDesktopAppState> = {},
+): TownDesktopAppState => ({
+  identity: identity(),
+  access: {},
+  accessDetail: {},
+  bonfire: { status: "ready", detail: "" },
+  fireside: { status: "ready", detail: "" },
+  scroll: { status: "ready", detail: "" },
+  beings: { status: "ready", detail: "" },
+  inbox: { status: "ready", detail: "" },
+  sync: { bonfire: null, fireside: null },
+  client: clientState(),
+  pairing: { status: "idle", busy: false, errorCode: "" },
+  memberDirectory: { revision: 1, expiresAt: 0 },
+  ...overrides,
+});
+const townMessage = (
+  overrides: Partial<TownDesktopMessage> = {},
+): TownDesktopMessage => ({
+  id: "1",
+  beingId: "river",
+  beingName: "河流",
+  content: "hello",
+  createdAt: "2026-09-12T00:00:00Z",
+  revisedAt: "",
+  mentions: [],
+  ...overrides,
+});
+const direct = (
+  overrides: Partial<TownDesktopDirectMessage> = {},
+): TownDesktopDirectMessage => ({
+  id: "letter",
+  senderId: "river",
+  senderName: "河流",
+  content: "你好",
+  createdAt: "2026-09-12T00:00:00Z",
+  ...overrides,
+});
+const envelope = (
+  messages: TownDesktopMessage[] = [],
+  overrides: {
+    kind?: string;
+    firesideId?: string;
+    snapshot?: Partial<TownDesktopTimeline>;
+  } = {},
+): TownDesktopEnvelope => ({
+  kind: overrides.kind || "bonfire",
+  firesideId: overrides.firesideId || "",
+  snapshot: {
+    identity: { connectionRevision: 1 },
+    messages,
+    latestSeq: Number(messages.at(-1)?.id) || null,
+    total: messages.length,
+    hasOlder: false,
+    lastRefresh: null,
+    ...overrides.snapshot,
+  },
+  status: refreshStatus(),
+});
+/** An error as the preload envelope rebuilds it: the catalogue code in
+ * docs/interfaces.md §5 on an ordinary Error, because Electron strips custom
+ * fields off anything else crossing IPC. */
+const townError = (code: string, message: string) =>
+  Object.assign(new Error(message), { code });
 const result = (data: Record<string, unknown>): TownResult => ({
   ok: true,
   data,
   fetchedAt: "2026-09-12T00:00:00Z",
 });
-function api(overrides: Partial<DesktopAPI> = {}) {
+const scrollSummary = (
+  overrides: Partial<TownDesktopScrollSummary> = {},
+): TownDesktopScrollSummary => ({
+  id: "letter",
+  title: "私人卷轴",
+  beingId: "t_Willow",
+  beingName: "柳树",
+  visibility: "private",
+  kind: "note",
+  lifecycle: "seed",
+  tags: ["笔记"],
+  createdAt: "2026-09-12T00:00:00Z",
+  updatedAt: "2026-09-12T01:00:00Z",
+  revision: 3,
+  ...overrides,
+});
+const scrollDetail = (
+  overrides: Partial<TownDesktopScroll> = {},
+): TownDesktopScroll => ({
+  ...scrollSummary(),
+  content: "只有配对后才读得到的正文",
+  totalLength: 15,
+  offset: 0,
+  limit: 10000,
+  nextOffset: 15,
+  hasMore: false,
+  ...overrides,
+});
+function api(
+  overrides: Partial<DesktopAPI> = {},
+  townOverrides: Partial<TownDesktopAPI> = {},
+) {
   const subscriptions = new Set<unknown>();
   const on = (callback: unknown) => {
     subscriptions.add(callback);
@@ -61,23 +207,52 @@ function api(overrides: Partial<DesktopAPI> = {}) {
       subscriptions.delete(callback);
     };
   };
+  const townDesktop = {
+    appState: vi.fn(async () => appState()),
+    refreshApp: vi.fn(async () => appState()),
+    // A cache miss by default: the first open of a feed on a fresh profile has
+    // nothing on disk yet, and that is the path that must still reach the read.
+    timeline: vi.fn(async (): Promise<TownDesktopEnvelope> => {
+      throw townError("STORAGE_ERROR", "尚无本机缓存");
+    }),
+    refreshTimeline: vi.fn(async () => envelope()),
+    loadOlder: vi.fn(async () => envelope()),
+    read: vi.fn(async (): Promise<TownDesktopReadResult> => ({ envelope: envelope() })),
+    firesides: vi.fn(async () => ({ owned: [], joined: [], cached: false })),
+    firesideMembers: vi.fn(async () => ({ members: [] })),
+    speak: vi.fn(async () => ({ ok: true as const, id: "1" })),
+    inbox: vi.fn(async () => ({ messages: [] })),
+    members: vi.fn(async () => ({ members: [], revision: 1, expiresAt: 0 })),
+    scrolls: vi.fn(async () => ({ scrolls: [], total: 0, offset: 0, limit: 50, hasMore: false })),
+    scroll: vi.fn(async () => ({ scroll: scrollDetail() })),
+    cached: vi.fn(async () => ({ cached: false, data: null, lastSuccessAt: null })),
+    pair: vi.fn(async () => clientState()),
+    autoPair: vi.fn(async () => clientState()),
+    retryPairStorage: vi.fn(async () => clientState()),
+    forget: vi.fn(async () => clientState({ status: "unpaired", paired: false })),
+    onState: on,
+    onMessages: on,
+    onMembersInvalidated: on,
+    ...townOverrides,
+  } as unknown as TownDesktopAPI;
   const value = {
     snapshot: vi.fn(async () => state()),
     appearance: vi.fn(async () => "light"),
     updateState: vi.fn(async () => ({ phase: "idle" })),
     onPortal: on,
     onUpdate: on,
-    onTownLive: on,
-    townLive: vi.fn(async () => live()),
-    townAuth: vi.fn(async () => ({ configured: true, beingId: "willow" })),
     town: vi.fn(async () => result({ messages: [] })),
+    townDesktop,
     connectionDefaults: vi.fn(async () => ({ portalName: "original-portal" })),
     ...overrides,
   } as unknown as DesktopAPI;
-  return { value, subscriptions };
+  return { value, subscriptions, townDesktop };
 }
-function town(overrides: Partial<DesktopAPI> = {}) {
-  const fixture = api(overrides);
+function town(
+  overrides: Partial<DesktopAPI> = {},
+  townOverrides: Partial<TownDesktopAPI> = {},
+) {
+  const fixture = api(overrides, townOverrides);
   return {
     ...fixture,
     model: new TownModel(
@@ -157,12 +332,11 @@ describe("React desktop state lifecycle", () => {
   });
   it("refreshes each place navigation and clears pending details when changing features", async () => {
     const pending = deferred<TownResult>();
-    const query = vi.fn<DesktopAPI['town']>(async query => {
-      if (query.kind === 'seed') return pending.promise;
-      if (query.kind === 'seeds') return result({ seeds: [], count: 0 });
-      return result({ messages: [{ content: 'fresh bonfire' }] });
-    });
-    const app = new AppModel(api({ town: query }).value);
+    const query = vi.fn<DesktopAPI['town']>(async query =>
+      query.kind === 'seed' ? pending.promise : result({ seeds: [], count: 0 }));
+    const read = vi.fn(async (): Promise<TownDesktopReadResult> =>
+      ({ envelope: envelope([townMessage({ content: 'fresh bonfire' })]) }));
+    const app = new AppModel(api({ town: query }, { read }).value);
     app.navigate('seeds', 'pending-seed');
     await settle();
     expect(app.town.detailLoading).toBe(true);
@@ -182,8 +356,12 @@ describe("React desktop state lifecycle", () => {
     await settle();
     app.navigate('bonfire');
     await settle();
-    expect(query.mock.calls.filter(([query]) => query.kind === 'bonfire')).toHaveLength(3);
-    expect(app.town.data?.messages).toEqual([{ content: 'fresh bonfire' }]);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(app.town.messages().map(message => message.content)).toEqual(['fresh bonfire']);
+    // And the bonfire never reached the anonymous catalogue channel: the public
+    // reader has no credential, so a private feed asked through it would either
+    // fail or — worse — succeed as somebody else (decision §5.1).
+    expect(query.mock.calls.map(([query]) => query.kind)).toEqual(['seed', 'seeds']);
   });
 
   it("releases IPC subscriptions and ignores startup reads from an earlier mount", async () => {
@@ -197,11 +375,15 @@ describe("React desktop state lifecycle", () => {
     });
     const app = new AppModel(fixture.value),
       stop = app.start();
-    expect(fixture.subscriptions.size).toBe(3);
+    // Five now, three before 2026-09-16: `onPortal` and `onUpdate` as ever, plus
+    // the paired Town client's `onState`, `onMessages` and `onMembersInvalidated`
+    // where the single `onTownLive` used to be. The count is incidental; that
+    // every one of them is released on unmount is the test.
+    expect(fixture.subscriptions.size).toBe(5);
     stop();
     expect(fixture.subscriptions.size).toBe(0);
     const stopAgain = app.start();
-    expect(fixture.subscriptions.size).toBe(3);
+    expect(fixture.subscriptions.size).toBe(5);
     fresh.resolve(state("river"));
     await settle();
     old.resolve(state("willow"));
@@ -258,79 +440,194 @@ describe("React desktop state lifecycle", () => {
   });
 });
 describe("Town request and identity isolation", () => {
-  it('defaults to automatic pairing for the connected chat and falls back to manual on failure', async () => {
-    const autoPairTown = vi.fn(async () => { throw new Error('自动配对超时'); });
-    const { model } = town({ townAuth: async () => ({ configured: false, chatBeing: 'willow' }), autoPairTown });
-    model.view = 'chat';
+  // REWRITTEN 2026-09-16 for the direct Town client (integration unit I1,
+  // decision §5.1). Every case below is the case it was; what changed under it
+  // is the surface. `townAuth`/`pairTown`/`autoPairTown`/`cancelTownPair`/
+  // `sendTown`/`onTownLive` were nine channels around a Being-relayed Town; the
+  // client now pairs itself, speaks for itself and reads for itself, so the same
+  // questions are asked of `window.beings.townDesktop`.
+  it("offers one-click pairing and keeps the six-digit code as the fallback", async () => {
+    const autoPair = vi.fn(async () => {
+      throw new Error("自动配对超时");
+    });
+    const { model } = town(
+      {},
+      {
+        appState: vi.fn(async () =>
+          appState({
+            client: clientState({ status: "unpaired", paired: false, townId: "", displayName: "" }),
+            identity: identity({ townId: "", displayName: "" }),
+          }),
+        ),
+        autoPair,
+      },
+    );
+    model.view = "bonfire";
     await model.auth();
-    expect(model.authManual).toBe(false);
+    expect(model.authOpen).toBe(true);
+    expect(model.authState).toBe("尚未配对。");
     await model.autoPair();
-    expect(autoPairTown).toHaveBeenCalledWith({ requestId: expect.any(String), beingId: 'willow' });
-    expect(model.authManual).toBe(true);
-    expect(model.authBeing).toBe('willow');
-    expect(model.authError).toContain('超时');
+    // No arguments at all. The renderer used to name the Being to pair as, which
+    // was a way to pair the wrong one; the connection the client is bound to is
+    // the only answer the main process will accept.
+    expect(autoPair).toHaveBeenCalledWith();
+    expect(model.authOpen).toBe(true);
+    expect(model.authError).toContain("超时");
     expect(model.authBusy).toBe(false);
+    expect(model.pairCode).toBe("");
   });
-  it('closes after cancellation even if the aborted request rejects before the cancel reply arrives', async () => {
-    let reject!: (error: Error) => void;
-    const autoPairTown = vi.fn(() => new Promise<void>((_, fail) => { reject = fail; }));
-    const cancelTownPair = vi.fn(async () => { reject(new Error('自动配对已取消')); await settle(); return true; });
-    const { model } = town({ townAuth: async () => ({ configured: false, chatBeing: 'willow' }), autoPairTown, cancelTownPair });
-    model.view = 'chat';
-    await model.auth();
-    const pending = model.autoPair();
-    await model.autoPair();
-    expect(autoPairTown).toHaveBeenCalledOnce();
-    await model.closeAuth();
-    await pending;
-    expect(cancelTownPair).toHaveBeenCalledOnce();
-    expect(model.authOpen).toBe(false);
-    expect(model.authBusy).toBe(false);
-    expect(model.authError).toBe('');
-  });
-  it('keeps a completed pairing when cancellation arrives during atomic credential storage', async () => {
-    const pending = deferred<void>();
-    const { model } = town({ townAuth: async () => ({ configured: false, chatBeing: 'willow' }), autoPairTown: () => pending.promise, cancelTownPair: async () => false });
-    model.view = 'chat';
+  it("never runs two pairing requests at once and refuses to close over one", async () => {
+    // `cancelTownPair` went with the old pairing layer: the code is spent in the
+    // main process, and letting the renderer abandon a request could only ever
+    // have thrown away a token Town had already minted. What the cancel path
+    // existed to protect is kept — a dialog that cannot be closed out from under
+    // a request, and a request that is never started twice.
+    const pending = deferred<TownDesktopClientState>();
+    const autoPair = vi.fn(() => pending.promise);
+    const { model } = town(
+      {},
+      {
+        appState: vi
+          .fn()
+          .mockResolvedValueOnce(
+            appState({ client: clientState({ status: "unpaired", paired: false }) }),
+          )
+          .mockResolvedValue(appState()),
+        autoPair,
+      },
+    );
+    model.view = "bonfire";
     await model.auth();
     const run = model.autoPair();
+    await model.autoPair();
+    expect(autoPair).toHaveBeenCalledOnce();
     await model.closeAuth();
     expect(model.authOpen).toBe(true);
     expect(model.authBusy).toBe(true);
-    pending.resolve(); await run;
+    pending.resolve(clientState());
+    await run;
     expect(model.authOpen).toBe(false);
     expect(model.authBusy).toBe(false);
+    expect(model.authError).toBe("");
+  });
+  it("keeps a pairing whose credential could not be stored and never asks for a second code", async () => {
+    const appStates = vi
+      .fn()
+      .mockResolvedValueOnce(
+        appState({ client: clientState({ status: "unpaired", paired: false }) }),
+      )
+      .mockResolvedValueOnce(
+        appState({
+          client: clientState({
+            status: "pair_storage_error",
+            paired: false,
+            pairingPending: true,
+            pairErrorCode: "PAIR_STORAGE_ERROR",
+          }),
+        }),
+      )
+      .mockResolvedValue(appState());
+    const autoPair = vi.fn(async () => clientState({ pairingPending: true }));
+    const retryPairStorage = vi.fn(async () => clientState());
+    const { model } = town({}, { appState: appStates, autoPair, retryPairStorage });
+    model.view = "bonfire";
+    await model.auth();
+    await model.autoPair();
+    expect(model.authOpen).toBe(true);
+    expect(model.authState).toContain("重试保存配对");
+    await model.retryPairStorage();
+    expect(retryPairStorage).toHaveBeenCalledOnce();
+    expect(autoPair).toHaveBeenCalledOnce();
+    expect(model.authOpen).toBe(false);
+    expect(model.authError).toBe("");
+  });
+  it("refuses a pairing code that is not six characters before spending it", async () => {
+    const pair = vi.fn(async () => clientState());
+    const { model } = town({}, { pair });
+    model.view = "bonfire";
+    await model.auth();
+    model.pairCode = "ABC";
+    await model.pair();
+    expect(pair).not.toHaveBeenCalled();
+    expect(model.authError).toContain("6 位配对码");
+    model.pairCode = "k7m2n4";
+    await model.pair();
+    expect(pair).toHaveBeenCalledWith({ code: "K7M2N4" });
   });
   it("ignores a response from the previous page", async () => {
-    const pending = deferred<TownResult>();
-    const { model } = town({
-      town: vi
-        .fn()
-        .mockReturnValueOnce(pending.promise)
-        .mockResolvedValue(result({ scrolls: [{ id: "story" }] })),
-    });
+    const pending = deferred<TownDesktopReadResult>();
+    const { model } = town(
+      { town: vi.fn(async () => result({ scrolls: [{ id: "story" }] })) },
+      { read: () => pending.promise },
+    );
     model.show("bonfire");
+    await settle();
     model.show("embers");
     await settle();
-    pending.resolve(result({ messages: [{ content: "old private content" }] }));
+    pending.resolve({
+      envelope: envelope([townMessage({ content: "old private content" })]),
+    });
     await settle();
     expect(model.view).toBe("embers");
     expect(model.data).toEqual({ scrolls: [{ id: "story" }] });
+    expect(model.timeline).toBeNull();
     expect(model.loading).toBe(false);
   });
+  it("joins the one in-flight read rather than starting a second", async () => {
+    const pending = deferred<TownDesktopReadResult>();
+    const read = vi.fn(() => pending.promise);
+    const { model } = town({}, { read });
+    model.receiveState(appState());
+    model.show("bonfire");
+    await settle();
+    model.show("bonfire");
+    await settle();
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(model.reading).toBe(true);
+    pending.resolve({ envelope: envelope([townMessage({ content: "shared" })]) });
+    await settle();
+    expect(model.reading).toBe(false);
+    expect(model.messages().map((message) => message.content)).toEqual(["shared"]);
+  });
+  it("paints the cached timeline before asking Town for anything", async () => {
+    const order: string[] = [];
+    const { model } = town(
+      {},
+      {
+        timeline: vi.fn(async () => {
+          order.push("cache");
+          return envelope([townMessage({ content: "from disk" })]);
+        }),
+        read: vi.fn(async () => {
+          order.push("read");
+          expect(model.messages().map((message) => message.content)).toEqual(["from disk"]);
+          return { envelope: envelope([townMessage({ content: "from town" })]) };
+        }),
+      },
+    );
+    model.receiveState(appState());
+    model.show("bonfire");
+    await settle();
+    expect(order).toEqual(["cache", "read"]);
+    expect(model.messages().map((message) => message.content)).toEqual(["from town"]);
+  });
   it("discards stale details and private drafts when the identity changes", async () => {
-    const pending = deferred<TownResult>();
-    const { model } = town({ town: () => pending.promise });
-    model.live = live();
+    const pending = deferred<{ scroll: TownDesktopScroll }>();
+    const { model } = town({}, { scroll: () => pending.promise });
+    model.receiveState(appState());
     model.view = "chat";
-    model.sendTarget = { kind: "dm", beingId: "willow", generation: 1 };
     model.content = "private draft";
     model.recipient = "friend";
-    model.mentionNames = new Map([['t_Friend', { name: '私信伙伴', at: 0 }]]);
+    model.mentionNames = new Map([["t_Friend", { name: "私信伙伴", at: 0 }]]);
+    model.sendTarget = { kind: "dm", connectionRevision: 1, beingId: "t_Willow" };
     model.sendOpen = true;
     const read = model.loadDetail({ kind: "scroll", id: "private" });
-    model.receiveLive(live(2, 2, "river"));
-    pending.resolve(result({ title: "private", content: "must not appear" }));
+    model.receiveState(
+      appState({ identity: identity({ townId: "t_River", connectionRevision: 2 }) }),
+    );
+    pending.resolve({
+      scroll: scrollDetail({ id: "private", title: "private", content: "must not appear" }),
+    });
     await read;
     expect(model.detail).toBeUndefined();
     expect(model.content).toBe("");
@@ -338,230 +635,352 @@ describe("Town request and identity isolation", () => {
     expect(model.sendTarget).toBeUndefined();
     expect(model.sendOpen).toBe(false);
     expect(model.mentionNames.size).toBe(0);
+    expect(model.timeline).toBeNull();
+  });
+  it("reads a private scroll body over the paired client and a public one without a credential", async () => {
+    // The catalogue reader carries no token at all (desktop/main/town/catalog.ts),
+    // so 「我的卷轴」 would list rows whose bodies answer 401. The list already
+    // came from the paired client; the body has to follow it.
+    const scroll = vi.fn(async () => ({ scroll: scrollDetail({ id: "letter" }) }));
+    const scrolls = vi.fn(async () => ({
+      scrolls: [scrollSummary({ id: "letter" })],
+      total: 1, offset: 0, limit: 50, hasMore: false,
+    }));
+    const anonymous = vi.fn(async () =>
+      result({ scrolls: [{ id: "note", visibility: "public", title: "\u516c\u5f00\u5377\u8f74" }] }),
+    );
+    const { model } = town({ town: anonymous }, { scroll, scrolls });
+    model.receiveState(appState());
+    model.show("scrolls");
+    model.selectTab("my-scrolls");
+    await settle();
+    // The DTO is projected onto the shape the rows read, so the author and the
+    // date are not blank where the catalogue would have filled them.
+    expect(model.data?.scrolls).toEqual([
+      expect.objectContaining({ id: "letter", display_name: "\u67f3\u6811", being_id: "t_Willow", updated_at: "2026-09-12T01:00:00Z" }),
+    ]);
+    await model.loadDetail({ kind: "scroll", id: "letter" });
+    expect(scroll).toHaveBeenCalledWith({ id: "letter" });
+    expect(model.detail?.fragments[0]).toMatchObject({
+      id: "letter",
+      content: "\u53ea\u6709\u914d\u5bf9\u540e\u624d\u8bfb\u5f97\u5230\u7684\u6b63\u6587",
+      has_more: false,
+    });
+    const credentialed = anonymous.mock.calls.length;
+
+    // A scroll the catalogue itself listed as public stays on the anonymous
+    // route: the validated DTO does not carry `trigger_context`/`outcome`, and
+    // the public reading pane renders them.
+    model.selectTab("scrolls");
+    await settle();
+    await model.loadDetail({ kind: "scroll", id: "note" });
+    expect(anonymous).toHaveBeenCalledWith({ kind: "scroll", id: "note" });
+    expect(anonymous.mock.calls.length).toBeGreaterThan(credentialed);
+    expect(scroll).toHaveBeenCalledTimes(1);
+  });
+  it("offers pairing rather than a retry when a scroll body needs a credential", async () => {
+    const scroll = vi.fn(async () => {
+      throw townError("AUTH_REQUIRED", "\u8bf7\u7528 Being \u63d0\u4f9b\u7684\u516d\u4f4d\u914d\u5bf9\u7801\u8fde\u63a5 Town\u3002");
+    });
+    const { model } = town({}, { scroll });
+    model.receiveState(appState());
+    await model.loadDetail({ kind: "scroll", id: "letter" });
+    expect(model.detailError?.auth).toBe(true);
+    expect(model.detail).toBeUndefined();
   });
   it("sends once and never retries an uncertain result automatically", async () => {
-    const pending = deferred<TownResult>(),
-      sendTown = vi.fn(() => pending.promise);
-    const { model } = town({ sendTown });
-    model.live = live();
+    let fail!: (error: unknown) => void;
+    const speak = vi.fn(
+      () =>
+        new Promise<never>((_, reject) => {
+          fail = reject;
+        }),
+    );
+    const { model } = town({}, { speak });
+    model.receiveState(appState());
     model.view = "bonfire";
     model.compose();
     model.content = "hello";
     const send = model.send();
     await model.send();
-    expect(sendTown).toHaveBeenCalledTimes(1);
-    pending.resolve({
-      ok: false,
-      code: "network",
-      message: "请先核对是否送达",
-    });
+    expect(speak).toHaveBeenCalledTimes(1);
+    fail(townError("RESULT_UNKNOWN", "请先核对是否送达"));
     await send;
     expect(model.sendOpen).toBe(true);
     expect(model.content).toBe("hello");
     expect(model.sendError).toContain("核对");
-    expect(sendTown).toHaveBeenCalledTimes(1);
+    expect(model.sendNotice).toContain("不要直接重发");
+    expect(speak).toHaveBeenCalledTimes(1);
   });
   it("keeps successful mention warnings visible and clears the sent draft so it cannot be resent by another click", async () => {
-    const sendTown = vi.fn(async (): Promise<TownResult> => ({ ok: true, data: { ok: true, seq: 7 }, fetchedAt: '2026-09-14T00:00:00Z', warnings: ['Neo · ambiguous · 候选：t_NeoA；t_NeoB'] }));
-    const { model } = town({ sendTown });
-    model.live = live();
-    model.view = 'bonfire';
+    const speak = vi.fn(async () => ({
+      ok: true as const,
+      id: "7",
+      seq: 7,
+      mention_warnings: [
+        {
+          mention: "Neo",
+          candidates: [
+            { town_id: "t_NeoA", display_name: "Neo A" },
+            { town_id: "t_NeoB", display_name: "Neo B" },
+          ],
+        },
+      ],
+    }));
+    const { model } = town({}, { speak });
+    model.receiveState(appState());
+    model.view = "bonfire";
     model.compose();
-    model.content = '@Neo 你好';
+    model.content = "@Neo 你好";
     await model.send();
     expect(model.sendOpen).toBe(true);
-    expect(model.sendNotice).toContain('消息已发送');
-    expect(model.sendNotice).toContain('t_NeoB');
-    expect(model.sendError).toBe('');
-    expect(model.content).toBe('');
+    expect(model.sendNotice).toContain("消息已发送");
+    expect(model.sendNotice).toContain("@Neo");
+    expect(model.sendNotice).toContain("不要重发原消息");
+    expect(model.sendCandidates.map((candidate) => candidate.town_id)).toEqual([
+      "t_NeoA",
+      "t_NeoB",
+    ]);
+    expect(model.sendError).toBe("");
+    expect(model.content).toBe("");
     expect(model.canSend).toBe(false);
     await model.send();
-    expect(sendTown).toHaveBeenCalledTimes(1);
+    expect(speak).toHaveBeenCalledTimes(1);
     model.compose();
-    expect(model.content).toBe('');
-    expect(model.sendNotice).toBe('');
+    expect(model.content).toBe("");
+    expect(model.sendNotice).toBe("");
+    expect(model.sendCandidates).toEqual([]);
   });
-  it("loads the private All tab by merging inbox and sent messages", async () => {
-    const townApi = vi.fn(async (query: import("../desktop/shared/types").TownQuery) =>
-      result({
-        messages:
-          query.kind === "inbox"
-            ? [{ id: "incoming", sender: "river", recipient: "willow" }]
-            : [{ id: "outgoing", sender: "willow", recipient: "river" }],
-      }),
-    );
-    const { model } = town({ town: townApi });
-    model.live = live();
+  it("loads the private All tab from the one read that carries both directions", async () => {
+    const inbox = vi.fn(async () => ({
+      messages: [
+        direct({ id: "incoming", senderId: "t_River", senderName: "河流" }),
+        direct({ id: "outgoing", senderId: "t_Willow", senderName: "柳树" }),
+      ],
+    }));
+    const { model } = town({}, { inbox });
+    model.receiveState(appState());
     model.show("mail");
     await settle();
     expect(model.tab).toBe("all");
-    expect(model.data?.messages).toHaveLength(2);
-    expect(townApi.mock.calls.map(([query]) => query.kind)).toEqual([
-      "inbox",
-      "sent",
-    ]);
+    // Town answers `/api/messages` with both directions, so the shell's old pair
+    // of `inbox` + `sent` reads is one read and a filter (docs/interfaces.md §1.2).
+    expect(inbox).toHaveBeenCalledTimes(1);
+    expect(model.messages()).toHaveLength(2);
+    model.tab = "inbox";
+    expect(model.messages().map((message) => message.id)).toEqual(["incoming"]);
+    model.tab = "sent";
+    expect(model.messages().map((message) => message.id)).toEqual(["outgoing"]);
   });
   it("keeps the private-message tab selected after sending", async () => {
-    const townApi = vi.fn(async (_query: import("../desktop/shared/types").TownQuery) =>
-      result({ messages: [] }),
-    );
-    const sendTown = vi.fn(async () => result({ ok: true }));
-    const { model } = town({ town: townApi, sendTown });
-    model.live = live();
+    const speak = vi.fn(async () => ({ ok: true as const, id: "dm-1" }));
+    const inbox = vi.fn(async () => ({ messages: [] }));
+    const { model } = town({}, { speak, inbox });
+    model.receiveState(appState());
     model.view = "mail";
     model.tab = "all";
     model.tabs.mail = "all";
     model.compose();
-    model.recipient = "river";
+    model.recipient = "t_River";
     model.content = "reply without changing my view";
     await model.send();
+    expect(speak).toHaveBeenCalledWith({
+      kind: "dm",
+      recipient: "t_River",
+      content: "reply without changing my view",
+      connectionRevision: 1,
+    });
     expect(model.tab).toBe("all");
     expect(model.tabs.mail).toBe("all");
-    expect(townApi.mock.calls.map(([query]) => query.kind)).toEqual([
-      "inbox",
-      "sent",
-    ]);
+    expect(inbox).toHaveBeenCalled();
   });
-  it("rejects a stale sender identity and clears credentials when closing pairing", async () => {
-    const sendTown = vi.fn();
-    const { model } = town({ sendTown });
-    model.live = live();
+  it("rejects a stale sender identity and keeps no credential of its own to clear", async () => {
+    const speak = vi.fn();
+    const { model } = town({}, { speak });
+    model.receiveState(appState());
     model.view = "mail";
     model.compose();
     model.content = "hello";
-    model.live = live(2, 2, "river");
+    model.recipient = "t_River";
+    model.sendTarget = { ...model.sendTarget!, connectionRevision: 0 };
     await model.send();
-    expect(sendTown).not.toHaveBeenCalled();
+    expect(speak).not.toHaveBeenCalled();
     expect(model.sendError).toContain("身份已改变");
+    // The old dialog held a Town token in renderer memory and had to wipe it on
+    // close. The direct client mints its own credential in the main process and
+    // never hands one down, so the only thing left to clear is the typed code.
+    expect("token" in model).toBe(false);
     model.authOpen = true;
-    model.pairCode = "ABC123";
-    model.token = "secret";
-    model.closeAuth();
-    expect(model.token).toBe("");
+    model.pairCode = "K7M2N4";
+    await model.closeAuth();
     expect(model.pairCode).toBe("");
+    expect(model.authOpen).toBe(false);
+    // And the composer goes with the identity, through the real path.
+    model.receiveState(
+      appState({ identity: identity({ townId: "t_River", connectionRevision: 2 }) }),
+    );
+    expect(model.sendTarget).toBeUndefined();
+    expect(model.content).toBe("");
   });
-  it('prefills saved Town identity and display while keeping writes gated until hello confirms it', async () => {
-    const { model } = town({ townAuth: async () => ({ configured: true, pairedBeingId: 't_Paired', display: '配对的柳树', suggestedBeingId: 'another-loom-being' }) });
-    model.view = 'mail';
-    model.live = { ...live(), phase: 'connecting', beingId: undefined, message: '正在确认 Town 身份' };
+  it("shows the saved pairing while keeping writes closed until the connection confirms it", async () => {
+    const appStates = vi
+      .fn()
+      .mockResolvedValueOnce(
+        appState({ client: clientState({ status: "connecting" }) }),
+      )
+      .mockResolvedValue(
+        appState({
+          client: clientState({ status: "unpaired", paired: false, townId: "", displayName: "" }),
+          identity: identity({ townId: "", displayName: "" }),
+        }),
+      );
+    const { model } = town({}, { appState: appStates });
+    model.view = "mail";
     await model.auth();
-    expect(model.authBeing).toBe('t_Paired');
-    expect(model.authState).toContain('配对的柳树');
-    expect(model.authState).toContain('正在确认 Town 身份');
-    expect(model.me).toBe('');
+    expect(model.authState).toBe("已保存 Town 配对，等待身份确认。");
+    expect(model.paired).toBe(true);
+    expect(model.connected).toBe(false);
     model.compose();
     expect(model.sendTarget).toBeUndefined();
-    model.closeAuth();
-    model.api.townAuth = async () => ({ configured: false, suggestedBeingId: 'another-loom-being' });
+    expect(model.sendOpen).toBe(false);
+    await model.closeAuth();
     await model.auth();
-    expect(model.authState).toBe('尚未配对。');
-    expect(model.authBeing).toBe('another-loom-being');
+    expect(model.authState).toBe("尚未配对。");
+    expect(model.paired).toBe(false);
   });
-  it("keeps loaded text while reconciling new activity", async () => {
-    vi.useFakeTimers();
-    const { model } = town({
-      town: vi.fn(async () =>
-        result({ messages: [{ seq: 2, content: "new" }] }),
-      ),
-    });
-    model.live = live();
-    model.me = "willow";
+  it("keeps loaded text while reconciling new activity", () => {
+    const read = vi.fn(async (): Promise<TownDesktopReadResult> => ({ envelope: envelope() }));
+    const { model } = town({}, { read });
+    model.receiveState(appState());
     model.view = "bonfire";
     model.tab = "bonfire";
-    model.data = { messages: [{ seq: 1, content: "reading" }] };
-    model.receiveLive({
-      ...live(1, 2),
-      sync: 2,
-      versions: { bonfire: 1, mail: 0, firesides: 0 },
-    });
-    await vi.advanceTimersByTimeAsync(701);
-    expect(model.data).toEqual({ messages: [{ seq: 1, content: "reading" }] });
-    expect(model.unread("bonfire")).toBe(true);
+    model.receivePush(envelope([townMessage({ id: "1", content: "reading" })]));
+    expect(model.messages().map((message) => message.content)).toEqual(["reading"]);
+    // A timeline for a feed that is not on screen is a marker, not a repaint.
+    model.receivePush(
+      envelope([townMessage({ id: "9", content: "别处的消息" })], {
+        kind: "fireside",
+        firesideId: "12",
+      }),
+    );
+    expect(model.messages().map((message) => message.content)).toEqual(["reading"]);
+    expect(model.unread("fireside")).toBe(true);
+    // The inbox hint carries no payload at all; the page re-reads or marks.
+    model.receivePush({ kind: "dm" });
+    expect(model.unread("dm")).toBe(true);
+    // The timeline accumulates rather than rolling, and says where the previous
+    // refresh stopped so the divider is a position rather than a guess.
+    model.receivePush(
+      envelope(
+        [
+          townMessage({ id: "1", content: "reading" }),
+          townMessage({ id: "2", content: "new" }),
+        ],
+        { snapshot: { lastRefresh: { at: 1, boundarySeq: 1 } } },
+      ),
+    );
+    expect(model.messages().map((message) => message.content)).toEqual(["reading", "new"]);
+    expect(model.timeline?.lastRefresh?.boundarySeq).toBe(1);
+    // A snapshot read under the previous connection never lands in this one.
+    model.receivePush(
+      envelope([townMessage({ id: "9", content: "上一个 Being 的消息" })], {
+        snapshot: { identity: { connectionRevision: 2 } },
+      }),
+    );
+    expect(model.messages().map((message) => message.content)).toEqual(["reading", "new"]);
+    // None of it cost a read: a push is already the content.
+    expect(read).not.toHaveBeenCalled();
   });
-  it("keeps the last Town snapshot readable when the live stream loses auth", () => {
+  it("keeps the last Town snapshot readable when the connection loses its credential", () => {
     const { model } = town();
-    model.view = "embers";
-    model.live = live();
-    model.data = { scrolls: [{ id: "story" }] };
-    model.receiveLive({
-      ...live(),
-      phase: "auth-error",
-      revision: 2,
-      beingId: undefined,
-      message: "凭据失效",
-    });
-    expect(model.data).toEqual({ scrolls: [{ id: "story" }] });
+    model.receiveState(appState());
+    model.view = "bonfire";
+    model.receivePush(envelope([townMessage({ content: "story" })]));
+    model.receiveState(
+      appState({
+        client: clientState({ status: "auth_required", errorCode: "AUTH_REQUIRED" }),
+      }),
+    );
+    expect(model.messages().map((message) => message.content)).toEqual(["story"]);
     expect(model.error).toBeUndefined();
-    expect(model.status).toContain("仍可阅读");
+    expect(liveMessage(model)).toContain("仍可阅读");
   });
 });
 describe("shared reading behavior", () => {
+  // The envelope-spelling archaeology these three cases used to do is gone: the
+  // main process validates every message against the DTO before it crosses IPC
+  // (desktop/main/town/session/session.ts), so an absent field is absent because
+  // Town did not send it. The rules they were actually about — exact identity
+  // matching, stable ordering, and never printing 「未知」 over an id that is
+  // right there — are the rules below, restated against those DTOs.
   it("matches exact identities and preserves stable chronological ordering", () => {
     const messages = feedMessages(
       [
-        {
-          seq: 1,
-          being_id: "river",
+        townMessage({
+          id: "1",
+          beingId: "river",
           content: "@willow_work unrelated",
-          at: "2026-09-12T01:00:00Z",
-        },
-        {
-          seq: 2,
-          being_id: "river",
+          createdAt: "2026-09-12T01:00:00Z",
+        }),
+        townMessage({
+          id: "2",
+          beingId: "river",
           content: "@willow hello",
-          at: "2026-09-12T01:00:00Z",
-        },
-        {
-          seq: 3,
-          being_id: "willow",
+          createdAt: "2026-09-12T01:00:00Z",
+        }),
+        townMessage({
+          id: "3",
+          beingId: "willow",
           content: "mine",
-          at: "2026-09-12T02:00:00Z",
-        },
+          createdAt: "2026-09-12T02:00:00Z",
+        }),
       ],
       { me: "Willow" },
     );
     const filters = { ...newFeedFilters(), relation: "about" };
+    expect(filterMessages(messages, filters, "").map((m) => m.seq)).toEqual([3, 2]);
     expect(
-      filterMessages(messages, filters, "").map((m) => m.entry.seq),
-    ).toEqual([3, 2]);
-    expect(
-      filterMessages(messages, { ...filters, order: "oldest" }, "").map(
-        (m) => m.entry.seq,
-      ),
+      filterMessages(messages, { ...filters, order: "oldest" }, "").map((m) => m.seq),
     ).toEqual([2, 3]);
   });
-  it("reads private message names from Town sender and recipient objects", () => {
-    const [message] = feedMessages(
+  it("prefers the mention list Town resolved over anything read out of the text", () => {
+    // Town resolves mentions server-side. A feed that carried the list is
+    // answered from it; only a feed without one falls back to exact `@id` tokens,
+    // and then never to a prefix or a display name.
+    const [resolved, textOnly] = feedMessages(
       [
-        {
-          id: "letter-1",
-          sender: { being_id: "river", display_name: "河流" },
-          recipient: { being_id: "willow", display_name: "柳树" },
-          content: "你好",
-        },
+        townMessage({ id: "1", content: "没有写出名字", mentions: ["t_Willow"] }),
+        townMessage({ id: "2", content: "@t_Willow_more 不是我" }),
       ],
-      { me: "willow", mail: "all" },
+      { me: "t_Willow" },
     );
-    expect(message).toMatchObject({
+    expect(resolved.mentioned).toBe(true);
+    expect(textOnly.mentioned).toBe(false);
+  });
+  it("reads private message names from the validated direct-message DTO", () => {
+    const [incoming, outgoing] = inboxMessages(
+      [
+        direct({ id: "letter-1", senderId: "river", senderName: "河流", content: "你好" }),
+        direct({ id: "letter-2", senderId: "willow", senderName: "柳树", content: "好" }),
+      ],
+      { me: "willow" },
+    );
+    expect(incoming).toMatchObject({
       author: "河流",
       authorId: "river",
-      recipient: "柳树",
       received: true,
+      mine: false,
     });
-    const [flat] = feedMessages(
-      [{ id: "letter-2", sender_being_id: "river", sender_display_name: "河流", recipient: "willow", content: "好" }],
-      { me: "willow", mail: "all" },
-    );
-    expect(flat.author).toBe("河流");
+    expect(outgoing).toMatchObject({ author: "柳树", authorId: "willow", mine: true, received: false });
   });
-  it("does not fall back to unknown when private payload only has identity ids", () => {
-    const [message] = feedMessages(
-      [{ id: "letter-3", sender_id: "weiguo_being", recipient_town_id: "t_Fqm2l4", content: "好" }],
-      { me: "t_Fqm2l4", mail: "all" },
+  it("does not fall back to unknown when a direct message carries only ids", () => {
+    const [message] = inboxMessages(
+      [direct({ id: "letter-3", senderId: "weiguo_being", senderName: "", content: "好" })],
+      { me: "t_Fqm2l4" },
     );
     expect(message.author).toBe("weiguo_being");
     expect(message.author).not.toBe("未知");
-    expect(message.recipient).toBe("t_Fqm2l4");
+    expect(message.recipientId).toBe("t_Fqm2l4");
     expect(message.received).toBe(true);
   });
   it.each(['river', 't_WillowFull', ''])("drafts explicitly selected private content with source identity %j", (identity) => {

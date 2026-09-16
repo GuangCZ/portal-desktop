@@ -1,4 +1,12 @@
 // Real React components with local fixtures; no Town requests or credentials.
+//
+// REWRITTEN 2026-09-16 with the rest of the Town layer (docs/migration/i1-town.md).
+// The subject did not change — who a message says it is from, who a reply is
+// addressed to, and that neither is ever a raw Town ID on screen — but the inputs
+// did: the page no longer parses Town envelopes, it renders the validated DTOs
+// (`senderId`/`senderName`/`recipientId`) the main process hands it, and names
+// come from the member directory rather than out of the messages.
+//
 // The `/places` route used to mount `ChatPlaces` — the town-shortcut row of the
 // Loom composer — which went with the `beings://chat` document on 2026-09-16.
 // The native composer has no such row yet, so that coverage is gone rather than
@@ -9,6 +17,10 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { chromium } from 'playwright';
 
+// The mention body lives out here so the fixture source below never has to
+// escape a backtick inside its own template literal.
+const body = JSON.stringify('正文 @t_RiverA 和 **@t_RiverB**，未知 @t_Unknown。\n\n代码：`@t_RiverA`\n\n[@t_RiverB](https://example.com/@t_RiverB)');
+
 const { outputFiles } = await build({
   stdin: { resolveDir: process.cwd(), sourcefile: 'town-names-fixture.tsx', loader: 'tsx', contents: `
     import { createRoot } from 'react-dom/client';
@@ -17,36 +29,78 @@ const { outputFiles } = await build({
     import { TownAuth } from './desktop/renderer/town/components/auth';
     import { TownModel } from './desktop/renderer/town/models/town';
     import { SceneStore } from './desktop/renderer/shared/models/scene';
-    import { collectMentionNames } from './desktop/renderer/town/models/mentions';
-    const messages = [
-      { id: 'incoming', sender_display: '河流', sender_name: 'old-river', sender_town_id: 't_RiverA', recipient_town_id: 't_Willow', content: '当前显示名优先', created_at: '2026-09-14T10:00:00Z' },
-      { id: 'outgoing', sender_display: '柳树', sender_town_id: 't_Willow', recipient_display: '河流', recipient_town_id: 't_RiverB', content: '同名收件人使用各自的 Town ID', created_at: '2026-09-14T11:00:00Z' },
-      { id: 'escaped', sender_display: '<img src=x onerror=alert(1)>', sender_town_id: 't_Other', recipient_town_id: 't_Willow', content: '名称按纯文本展示', created_at: '2026-09-14T09:00:00Z' },
-      { id: 'legacy-in', sender_being_id: 'river_internal', sender_display_name: 'Seam Walker', recipient_town_id: 't_Willow', content: '旧格式收件回复', created_at: '2026-09-14T08:00:00Z' },
-      { id: 'legacy-out', sender_town_id: 't_Willow', sender_display: '柳树', recipient_being_id: 'river_internal', recipient_display_name: 'Seam Walker', content: '旧格式发件回复', created_at: '2026-09-14T07:00:00Z' },
-      { id: 'unaddressable', sender_being_id: 'unaddressable_internal', recipient_town_id: 't_Willow', content: '只有内部 ID 不猜收件地址', created_at: '2026-09-14T06:00:00Z' },
+    import { inboxMessages } from './desktop/renderer/town/models/feed';
+    import { mentionNames } from './desktop/renderer/town/models/mentions';
+
+    // The inbox as the main process validated it. Two beings share the display
+    // name 「河流」 and only their Town IDs tell them apart.
+    const inbox = [
+      { id: 'incoming', senderId: 't_RiverA', senderName: '河流', recipientId: 't_Willow', content: '当前显示名优先', createdAt: '2026-09-14T10:00:00Z' },
+      { id: 'outgoing', senderId: 't_Willow', senderName: '柳树', recipientId: 't_RiverB', recipientName: '河流', content: '同名收件人使用各自的 Town ID', createdAt: '2026-09-14T11:00:00Z' },
+      { id: 'escaped', senderId: 't_Other', senderName: '<img src=x onerror=alert(1)>', recipientId: 't_Willow', content: '名称按纯文本展示', createdAt: '2026-09-14T09:00:00Z' },
+      { id: 'legacy-in', senderId: 'river_internal', senderName: 'Seam Walker', recipientId: 't_Willow', content: '旧格式收件回复', createdAt: '2026-09-14T08:00:00Z' },
+      { id: 'unaddressable', senderId: 't_Willow', senderName: '柳树', content: '我发出去的，但 Town 没有说收件人', createdAt: '2026-09-14T07:00:00Z' },
     ];
+    const members = [
+      { id: 't_RiverA', name: '河流 (t_RiverA)', description: '' },
+      { id: 't_RiverB', name: '河流 (t_RiverB)', description: '' },
+      { id: 't_Willow', name: '柳树', description: '' },
+    ];
+    const appState = {
+      identity: { loomBeingId: 'cz_being', townId: 't_Willow', displayName: '柳树', sendAs: 'client:desktop', beingId: 't_Willow', connectionRevision: 1, identityRevision: 1 },
+      access: {}, accessDetail: {},
+      bonfire: { status: 'ready', detail: '' }, fireside: { status: 'ready', detail: '' },
+      scroll: { status: 'ready', detail: '' }, beings: { status: 'ready', detail: '' }, inbox: { status: 'ready', detail: '' },
+      sync: { bonfire: null, fireside: null },
+      client: { status: 'connected', paired: true, townId: 't_Willow', displayName: '柳树', pairingPending: false, storageFailed: false, errorCode: '', detail: '' },
+      pairing: { status: 'idle', busy: false, errorCode: '' },
+      memberDirectory: { revision: 1, expiresAt: 0 },
+    };
     window.fixtureWrites = [];
-    const model = new TownModel({ townAuth: async () => ({ configured: true, pairedBeingId: 't_Willow', display: '柳树 (t_Willow)', suggestedBeingId: 'other-loom-being' }), sendTown: async (input) => {
-      window.fixtureWrites.push(input);
-      return { ok: true, data: {}, fetchedAt: new Date().toISOString() };
-    } }, console.error, () => {}, new SceneStore(), () => {}, () => {});
-    model.view = 'mail'; model.tab = 'all'; model.me = 't_Willow';
+    const noop = async () => {};
+    const townDesktop = {
+      appState: async () => appState,
+      refreshAppState: async () => appState,
+      timeline: async () => ({ kind: 'bonfire', firesideId: '', snapshot: null, status: null }),
+      refreshTimeline: async () => ({ kind: 'bonfire', firesideId: '', snapshot: null, status: null }),
+      loadOlder: async () => ({ kind: 'bonfire', firesideId: '', snapshot: null, status: null }),
+      read: async () => ({}),
+      inbox: async () => ({ messages: inbox }),
+      members: async () => ({ members, revision: 1, expiresAt: 0 }),
+      cached: async () => ({ cached: false, data: null, lastSuccessAt: null }),
+      speak: async (input) => { window.fixtureWrites.push(input); return { ok: true, id: '1', via: 'client:desktop', mention_warnings: [] }; },
+      onState: () => noop, onMessages: () => noop, onMembersInvalidated: () => noop,
+    };
+    const model = new TownModel({ townDesktop }, console.error, () => {}, new SceneStore(), () => {}, () => {});
+    model.receiveState(appState);
+    model.mentionNames = mentionNames(members);
+    model.members = members;
+
+    // Three feeds share one mention renderer, so the body below is rendered once
+    // per view rather than assumed to be the same.
     const mentionView = location.pathname.startsWith('/mentions/') ? location.pathname.split('/').at(-1) : '';
-    const feed = mentionView ? [
-      { id: 'mentions', seq: 1, town_id: 't_RiverA', speaker_name: '河流', sender_town_id: 't_RiverA', sender_display: '河流', recipient_town_id: 't_Willow',
-        content: '正文 @t_RiverA 和 **@t_RiverB**，未知 @t_Unknown。\\n\\n代码：\u0060@t_RiverA\u0060\\n\\n[@t_RiverB](https://example.com/@t_RiverB)' },
-      { id: 'other', seq: 2, town_id: 't_RiverB', speaker_name: '河流', sender_town_id: 't_RiverB', sender_display: '河流', content: '同名的另一个 Being' },
-    ] : messages;
-    if (mentionView) model.view = mentionView;
-    model.mentionNames = collectMentionNames(feed);
-    window.fixtureMessages = feed;
-    model.live = { phase: 'connected', beingId: 't_Willow', display: '柳树', generation: 1, revision: 1, sync: 1, versions: { bonfire: 0, mail: 0, firesides: 0 }, message: 'fixture' };
-    model.load = async () => {};
+    const mentionBody = ${body};
+    if (mentionView) {
+      model.view = mentionView;
+      model.tab = mentionView === 'mail' ? 'all' : mentionView;
+      if (mentionView === 'mail') {
+        model.inbox = inboxMessages([{ id: 'mentions', senderId: 't_RiverA', senderName: '河流', recipientId: 't_Willow', content: mentionBody, createdAt: '2026-09-14T10:00:00Z' }], { me: model.me });
+      } else {
+        model.timeline = { messages: [
+          { id: '1', beingId: 't_RiverA', townId: 't_RiverA', beingName: '河流', content: mentionBody, createdAt: '2026-09-14T10:00:00Z', revisedAt: '', mentions: ['t_RiverA', 't_RiverB'] },
+          { id: '2', beingId: 't_RiverB', townId: 't_RiverB', beingName: '河流', content: '同名的另一个 Being', createdAt: '2026-09-14T11:00:00Z', revisedAt: '', mentions: [] },
+        ], identity: { connectionRevision: 1 }, lastRefresh: null };
+      }
+    } else {
+      model.view = 'mail';
+      model.tab = 'all';
+      model.inbox = inboxMessages(inbox, { me: model.me });
+    }
+    window.fixtureMessages = model.messages();
     createRoot(document.getElementById('root')).render(<>
-      <TownFeed town={model} data={{ messages: feed }} filterKey={model.view + ':all'} />
+      <TownFeed town={model} messages={model.messages()} filterKey={model.view === 'mail' ? model.tab : model.view} />
       <TownComposer model={model} />
-      <button id="fixture-auth" onClick={() => { model.live = { ...model.live, phase: 'connecting', beingId: undefined, display: undefined, message: '正在确认 Town 身份' }; void model.auth(); }}>连接设置</button>
+      <button id="fixture-auth" onClick={() => { void model.auth(); }}>连接设置</button>
       <TownAuth model={model} />
     </>);
   ` },
@@ -70,44 +124,41 @@ try {
   const incoming = page.locator('.social-message').filter({ hasText: '当前显示名优先' });
   await incoming.waitFor();
   assert.equal(await incoming.locator('.social-author').textContent(), '河流');
-  assert.equal(await page.locator('.social-author-id').count(), 0);
-  assert.doesNotMatch(await page.locator('#root').innerText(), /t_RiverA|t_RiverB|t_Willow|t_Other/);
+  // Addresses are what a reply is sent to, never what a reader is shown.
+  assert.doesNotMatch(await page.locator('#root').innerText(), /t_RiverA|t_RiverB|t_Willow|t_Other|river_internal/);
   assert.equal(await page.locator('.social-author img').count(), 0);
   assert.equal(await page.locator('.social-author').filter({ hasText: '<img src=x onerror=alert(1)>' }).count(), 1);
   await mkdir('test-results', { recursive: true });
   await page.screenshot({ path: 'test-results/town-names.png' });
-  for (const [card, id] of [[incoming, 'incoming'], [page.locator('.social-message').filter({ hasText: '同名收件人使用各自的 Town ID' }), 'outgoing']]) {
-    await card.getByRole('button', { name: '回复', exact: true }).click();
-    assert.equal(await page.locator('#town-recipient').inputValue(), '河流');
-    assert.equal(await page.locator('#town-recipient').evaluate(el => el.readOnly), true);
-    await page.locator('#town-send-content').fill('回复 ' + id);
-    await page.locator('#town-send-submit').click();
-    await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
-  }
-  assert.deepEqual(await page.evaluate(() => window.fixtureWrites), [
-    { kind: 'dm', content: '回复 incoming', recipient: 't_RiverA', replyTo: 'incoming' },
-    { kind: 'dm', content: '回复 outgoing', recipient: 't_RiverB', replyTo: 'outgoing' },
-  ]);
-  for (const [caption, id] of [['旧格式收件回复', 'legacy-in'], ['旧格式发件回复', 'legacy-out']]) {
+  // A letter of mine is answered to the other end, not to its sender — which is
+  // me, and which Town refuses outright (docs/migration/i1-town.md §9 R4).
+  for (const [caption, id, address] of [
+    ['当前显示名优先', 'incoming', 't_RiverA'],
+    ['同名收件人使用各自的 Town ID', 'outgoing', 't_RiverB'],
+    ['旧格式收件回复', 'legacy-in', 'river_internal'],
+  ]) {
     const card = page.locator('.social-message').filter({ hasText: caption });
     await card.getByRole('button', { name: '回复', exact: true }).click();
-    assert.equal(await page.locator('#town-recipient').inputValue(), 'Seam Walker');
+    assert.equal(await page.locator('#town-recipient').inputValue(), caption === '旧格式收件回复' ? 'Seam Walker' : '河流');
+    assert.equal(await page.locator('#town-recipient').evaluate(el => el.readOnly), true);
     assert.match(await page.locator('#town-send-context').textContent(), /以「柳树」的身份代发/);
     await page.locator('#town-send-content').fill('回复 ' + id);
     await page.locator('#town-send-submit').click();
     await page.waitForFunction(() => !document.querySelector('#town-send-dialog').open);
-    assert.deepEqual(await page.evaluate(() => window.fixtureWrites.at(-1)), { kind: 'dm', content: '回复 ' + id, recipient: 'Seam Walker', replyTo: id });
+    assert.deepEqual(await page.evaluate(() => window.fixtureWrites.at(-1)),
+      { kind: 'dm', recipient: address, content: '回复 ' + id, connectionRevision: 1, replyTo: id });
   }
-  assert.equal(await page.locator('.social-message').filter({ hasText: '只有内部 ID 不猜收件地址' }).getByRole('button', { name: '回复', exact: true }).count(), 0);
+  // A letter of mine that Town did not address offers no reply at all: there is
+  // nothing to send it to, and the sender is me.
+  assert.equal(await page.locator('.social-message').filter({ hasText: '但 Town 没有说收件人' })
+    .getByRole('button', { name: '回复', exact: true }).count(), 0);
   await incoming.getByRole('button', { name: '回复', exact: true }).click();
   await page.locator('#town-reply-clear').click();
   assert.equal(await page.locator('#town-recipient').evaluate(el => el.readOnly), false);
   await page.locator('#town-send-close').click();
   await page.locator('#fixture-auth').click();
   await page.locator('#town-auth-dialog').waitFor();
-  assert.equal(await page.locator('#town-being').inputValue(), 't_Willow');
-  assert.match(await page.locator('#town-auth-state').textContent(), /已保存配对：柳树/);
-  assert.match(await page.locator('#town-auth-state').textContent(), /正在确认 Town 身份/);
+  assert.match(await page.locator('#town-auth-state').textContent(), /柳树/);
   await page.screenshot({ path: 'test-results/town-paired-display.png' });
   for (const view of ['bonfire', 'firesides', 'mail']) {
     await page.goto(`http://127.0.0.1:${server.address().port}/mentions/${view}`);
@@ -122,7 +173,7 @@ try {
     await page.screenshot({ path: `test-results/town-mentions-${view}.png` });
   }
   assert.deepEqual(errors, []);
-  console.log('PASS: DM names, exact and legacy reply recipients, unaddressable legacy mail, saved pairing display and confirmed sender.');
+  console.log('PASS: DM names, exact reply addresses for received and sent mail, an unaddressable letter, the saved pairing display and mention rendering in all three feeds.');
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));

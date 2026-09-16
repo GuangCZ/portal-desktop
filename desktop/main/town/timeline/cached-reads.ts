@@ -1,6 +1,10 @@
 // Ported line by line from BeingDesktop 0.8.26 src/town-cached-reads.cjs on 2026-09-16.
 // Members are cached for 60 seconds per identity (docs/interfaces.md section 7); public
 // directories share the fixed identity key 'public-town-v1' so they survive a disconnect.
+// `scrollId` was inlined here from src/town-library-contract.cjs while the Town library unit had
+// no port. It has one (../session/library-contract.ts), and the pattern and reserved set were
+// identical, so the copy is gone: one owner for the rule, and nothing left to drift.
+import { scrollId } from '../session/library-contract';
 import type {
   TownCacheResult,
   TownCacheStore,
@@ -8,11 +12,6 @@ import type {
   TownCodedError,
 } from './types';
 
-// Inlined from src/town-library-contract.cjs (scrollId). That module belongs to the Town library
-// unit; replace this copy with an import once it lands, keeping the pattern and reserved set.
-const SCROLL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
-const RESERVED_SCROLL_IDS = new Set(['help', 'search', 'graph', 'match']);
-function scrollId(value: unknown): value is string { return typeof value === 'string' && SCROLL_ID.test(value) && !RESERVED_SCROLL_IDS.has(value); }
 
 const PUBLIC_METHODS = new Set(['listBeings', 'getBeingMembers', 'getGroveCatalog', 'getGroveDetail']);
 const MEMBER_METHODS = new Set(['getBeingMembers', 'listBeings', 'getFiresideMembers']);

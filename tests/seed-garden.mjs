@@ -25,12 +25,62 @@ const { outputFiles } = await build({ stdin: { resolveDir: process.cwd(), loader
   import { TownModel } from './desktop/renderer/town/models/town';
   import { SceneStore } from './desktop/renderer/shared/models/scene';
   const scenes = new SceneStore();
+  const ask = async query => (await fetch('/query', { method: 'POST', body: JSON.stringify(query) })).json();
+  // 2026-09-16: the three feeds left the anonymous catalogue channel.
+  // 篝火/围炉/私信 now come from the paired client (townDesktop), so this
+  // fixture answers that surface instead. The same /query fixtures back both
+  // paths, which keeps the request counters and the deliberate 150 ms bonfire
+  // delay the stale-response case below depends on.
+  const rows = messages => messages.map(message => ({
+    id: String(message.seq), beingId: '', beingName: message.sender, content: message.content,
+    createdAt: message.created_at, revisedAt: '', mentions: [],
+  }));
+  const wrap = (kind, firesideId, messages) => ({
+    kind, firesideId: firesideId || '',
+    snapshot: { messages: rows(messages), identity: { connectionRevision: 1 }, lastRefresh: null },
+    status: { lastSuccessAt: Date.now(), lastAttemptAt: Date.now(), lastCheckedAt: Date.now(), stale: false, errorCode: '', failureCount: 0, revision: null },
+  });
+  const appState = {
+    identity: { loomBeingId: 'cz_being', townId: 't_Willow', displayName: '柳树', sendAs: 'client:desktop', beingId: 't_Willow', connectionRevision: 1, identityRevision: 1 },
+    access: {}, accessDetail: {},
+    bonfire: { status: 'ready', detail: '' }, fireside: { status: 'ready', detail: '' }, scroll: { status: 'ready', detail: '' },
+    beings: { status: 'ready', detail: '' }, inbox: { status: 'ready', detail: '' },
+    sync: { bonfire: null, fireside: null },
+    client: { status: 'connected', paired: true, townId: 't_Willow', displayName: '柳树', pairingPending: false, storageFailed: false, errorCode: '', detail: '' },
+    pairing: { status: 'idle', busy: false, errorCode: '' },
+    memberDirectory: { revision: 1, expiresAt: 0 },
+  };
+  const townDesktop = {
+    appState: async () => appState,
+    refreshApp: async () => appState,
+    // No local cache in this fixture: the first open of a feed on a fresh
+    // profile has nothing on disk, and that is the path that reaches the read.
+    timeline: async () => { throw Object.assign(new Error('尚无本机缓存'), { code: 'STORAGE_ERROR' }); },
+    read: async ({ kind, firesideId, includeRooms }) => {
+      if (kind !== 'fireside') return { envelope: wrap('bonfire', '', (await ask({ kind: 'bonfire' })).data.messages) };
+      const result = {};
+      if (includeRooms) {
+        const list = (await ask({ kind: 'firesides' })).data;
+        result.rooms = { owned: list.owned.map(room => ({ id: Number(room.id), name: room.name })), joined: [], cached: false };
+      }
+      if (firesideId) result.envelope = wrap('fireside', firesideId, (await ask({ kind: 'fireside', id: firesideId })).data.messages);
+      return result;
+    },
+    refreshTimeline: async feed => wrap(feed.kind, feed.firesideId, (await ask({ kind: feed.kind === 'fireside' ? 'fireside' : 'bonfire', id: feed.firesideId })).data.messages),
+    loadOlder: async feed => wrap(feed.kind, feed.firesideId, []),
+    inbox: async () => ({ messages: (await ask({ kind: 'inbox' })).data.messages }),
+    members: async () => ({ members: [], revision: 1, expiresAt: 0 }),
+    firesideMembers: async () => ({ members: [] }),
+    cached: async () => ({ cached: false, data: null, lastSuccessAt: null }),
+    onState: () => () => {}, onMessages: () => () => {}, onMembersInvalidated: () => () => {},
+  };
   const town = new TownModel({
-    town: async query => (await fetch('/query', { method: 'POST', body: JSON.stringify(query) })).json(),
-    townAuth: async () => ({ configured: false }),
+    town: ask,
+    townDesktop,
     copyText: async value => { window.copiedSeedLink = value; },
     openTownLink: async value => { window.openedSeedLink = value; },
   }, () => {}, view => town.show(view), scenes, () => {}, () => {});
+  town.receiveState(appState);
   window.seedTown = town;
   function Fixture() {
     useModel(town);

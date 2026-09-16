@@ -171,44 +171,11 @@ export interface TownRefreshOptions {
 
 export type TownRefreshFactory = (options: TownRefreshOptions) => TownRefreshLike;
 
-/* ------------------------------------------ controller (town-controller.cjs) */
+/* ---------------------------------------------------- controller: deleted */
 
-/** main.cjs boot(): settings plus the live connection identity. */
-export interface TownControllerContext {
-  configured?: boolean;
-  connected?: boolean;
-  exiting?: boolean;
-  beingName?: string;
-  townId?: string;
-  displayName?: string;
-  connectionId?: unknown;
-  identityRevision?: unknown;
-  portalIdentityRevision?: unknown;
-  portalWorkspace?: string;
-  portalExecutable?: string;
-  portalConfig?: string;
-  managedPortal?: {
-    executable?: string;
-    configPath?: string;
-    workspace?: string;
-    permissions?: unknown;
-    groveKitsDir?: string;
-    [key: string]: unknown;
-  } | null;
-  [key: string]: unknown;
-}
-
-export interface PortalInstallProgress { phase: string; receivedBytes?: unknown; totalBytes?: unknown }
-
-/** BeingDesktop src/portal-installer.cjs PortalInstaller (download/verify pipeline). */
-export interface PortalInstaller {
-  release?: { version: string; apiUrl: string; url: string; size: number; sha256: string };
-  inspect(): Promise<any>;
-  install(options: { onProgress: (progress: PortalInstallProgress) => void }): Promise<any>;
-}
-
-/** BeingDesktop src/portal-process.cjs: the live heart-portal process observer. */
-export interface PortalProcess {
-  state: { status: string; owned?: boolean; detail?: string; management?: string; deployment?: { workspace?: string } | null };
-  inspect(): Promise<unknown>;
-}
+// `TownControllerContext`, `PortalInstaller`, `PortalInstallProgress` and
+// `PortalProcess` lived here for desktop/main/town/channel/town-controller.ts,
+// which was deleted with integration unit I1 (decision §5.2). portal-desktop
+// keeps its own Portal ownership model — desktop/main/portal/* — so a second
+// controller that also installed, configured and deployed a Portal was not a
+// duplicate to converge but a second answer to a settled question.

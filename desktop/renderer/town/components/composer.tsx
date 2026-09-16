@@ -58,7 +58,7 @@ export function TownComposer({ model }: { model: TownModel }) {
         <p
           id="town-send-context"
           className="field-help"
-        >{`你将以${town.live?.display ? `「${town.live.display}」` : '已配对 Being '}的身份代发 · ${kind === "dm" ? "仅收件 Being 可见" : kind === "fireside" ? "围炉成员可见" : "公开发布到篝火"}`}</p>
+        >{`你将以${town.townApp?.identity.displayName ? `「${town.townApp.identity.displayName}」` : '已配对 Being '}的身份代发 · ${kind === "dm" ? "仅收件 Being 可见" : kind === "fireside" ? "围炉成员可见" : "公开发布到篝火"}`}</p>
         <label
           id="town-recipient-label"
           htmlFor="town-recipient"
@@ -132,6 +132,24 @@ export function TownComposer({ model }: { model: TownModel }) {
         <p id="town-send-notice" className="field-help" role="status" hidden={!town.sendNotice}>
           {town.sendNotice}
         </p>
+        {/* Two sources, one list: an ambiguous DM recipient refused with
+            NOT_SENT, and the choices Town offered for a mention it could not
+            resolve in a message it DID accept. Picking one addresses the next
+            draft — it never resends what was already published (BeingDesktop
+            renderer/town-mentions.js `insertMention`). */}
+        <ul id="town-send-candidates" className="field-help" hidden={!town.sendCandidates.length}>
+          {town.sendCandidates.map(candidate => (
+            <li key={candidate.town_id}>
+              <button type="button" className="text-button" disabled={town.sendBusy} onClick={() => {
+                if (town.sendTarget?.kind === "dm") town.recipient = candidate.town_id;
+                else town.content = `${town.content}${town.content && !/\s$/.test(town.content) ? " " : ""}@${candidate.town_id} `;
+                town.sendCandidates = [];
+                town.sendError = "";
+                town.changed();
+              }}>{candidate.display_name} · {candidate.town_id}</button>
+            </li>
+          ))}
+        </ul>
         </div>
         <div className="dialog-footer">
           <span
