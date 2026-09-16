@@ -123,3 +123,35 @@
 - 没做 4：`tests/sidebar-e2e.mjs` 没有 npm 脚本入口 → **本单元第 3 条**。
 - 没做 6 / §6：`MIGRATION.md` 表头与 `desktop/renderer/README.md` 目录树留给合回者；i6 给了要粘贴的四行（settings/）→ **本单元第 4、5 条**。
 
+---
+
+## 2. 逐条处理
+
+### 2.1 DesktopBrowser 单实例（i3 记录 D1）——已修
+
+**缺陷复现（实测，不是推断）**：把注入行 `getBrowser: toolBrowser` 从 `subsystems/tools.ts` 删掉再跑新测试，
+`FakeSession.partitions` 是 **2 条** `persist:being-desktop-browser-v1`——两个 `DesktopBrowser` 各自 `session.fromPartition()` 了一次，
+共用同一个分区、各自往同一个窗口的 `contentView` 挂 `WebContentsView`。恢复后 1 条。
+
+改法（照 D1）：
+
+- `DesktopToolsOptions` 新增可选 `getBrowser?: () => DesktopBrowserLike | null`。
+- `DesktopTools.browser` 从字段改成 **getter**：`this.resolveBrowser() ?? (this.ownBrowser ??= this.createBrowser())`。
+  构造期**不调用** resolver（安装顺序无意义，那时注册表还是空的——调用它就正好造出第二个实例）。
+- **没有注入点时行为不变**：构造函数里直接 `this.ownBrowser = this.createBrowser()`，所以「Electron 门面被拒」仍然是**构造失败**，
+  `tests/tools-desktop-tools.test.ts` 的 `tools.browser.destroyed` 那条不受影响。
+- `dispose()` 改成 `this.ownBrowser?.destroy()`：注入进来的浏览器归 tool-browser 子系统，由它自己的 `quitting()` 销毁
+  （`DesktopBrowser.destroy()` 本来就幂等，这里是归属问题不是双销毁问题）。
+- `subsystems/tools.ts` 传 `getBrowser: () => ctx.registry.get('tool-browser')?.browser ?? null`（惰性，每次访问解析）。
+- **Electron 门面检查上移**：0.8.26 在构造函数里建浏览器，所以门面被拒 = 构造失败 = 没有工具桥。
+  注入让构造变惰性，于是把 `typeof View !== 'function' || typeof session?.fromPartition !== 'function'` 的检查搬到子系统里
+  （与 `tool-browser.ts` 第 49 行同一条检查），否则拒绝会从 `changed()` 的 `setImmediate` 里抛出来——那是主进程崩溃。
+- **onChange 两条路**：BD 的 `DesktopTools` 自己建浏览器、`onChange:()=>this.changed()`，浏览器一变工具快照就重算。
+  归属搬走之后这条扇出改成显式的：`subsystems/tool-browser.ts` 的 onChange 里
+  `push.state(snapshot)` 之后 `ctx.registry.get('tools')?.tools?.changed()`（惰性，且在回调里而不是构造期）。
+  单独探针验证：删掉这一行，两条 `fans a browser change out to both state channels` 用例报
+  `expected [ 'beings:tool-browser-state' ] to include 'beings:tools-state'`。
+
+新增 `tests/tools-integration-browser-ownership.test.ts`（6 例）：两种安装顺序 × {单实例 + `tools.browser === toolBrowser.browser` 身份、
+两条推送通道扇出} + 无 tool-browser 时的自建兜底 + 无 Electron 时的拒绝。
+

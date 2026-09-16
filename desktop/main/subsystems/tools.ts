@@ -114,6 +114,15 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
     try { return (peers.get('terminal') as TerminalPeer | null) ?? null; }
     catch { return null; }
   };
+  /** The tool browser's single instance, or null while it is not installed.
+   *
+   * Resolved on every access and NEVER during install: `INSTALLERS` order is
+   * meaningless, so reading it here would answer null and make `DesktopTools`
+   * build the second instance (docs/migration/i3-terminal-browser.md D1). */
+  const toolBrowser = () => {
+    try { return ctx.registry.get('tool-browser')?.browser ?? null; }
+    catch { return null; }
+  };
 
   /** Orchestration as `DesktopTools` reads it, resolved on every access.
    *
@@ -165,7 +174,16 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
     push.reveal('browser');
   };
 
-  try {
+  // 0.8.26 built the browser inside `new DesktopTools(...)`, so a refused Electron
+  // façade was a construction failure and the bridge simply did not exist. The
+  // browser is now injected and therefore built lazily, so that check has to live
+  // here to keep the same surface — otherwise the refusal would surface as a throw
+  // out of the first `snapshot()`, which runs inside `changed()`'s `setImmediate`.
+  const View = ctx.electron.WebContentsView as BrowserViewConstructor | null;
+  const viewSession = ctx.electron.session as BrowserSessionFactory | null;
+  if (typeof View !== 'function' || typeof viewSession?.fromPartition !== 'function') {
+    blocked = '桌面工具暂时不可用，请检查客户端配置目录后重启。';
+  } else try {
     tools = new DesktopTools({
       desktopId: ctx.desktopId,
       // `ElectronBindings` types these three as `unknown` on purpose, so that a
@@ -174,8 +192,8 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
       // cast is what that decision costs. `DesktopBrowser` validates all three at
       // construction and refuses with「浏览器依赖无效。」if they are not what it
       // expects, so a wrong façade fails loudly rather than half-working.
-      WebContentsView: ctx.electron.WebContentsView as BrowserViewConstructor,
-      session: ctx.electron.session as BrowserSessionFactory,
+      WebContentsView: View,
+      session: viewSession,
       getWindow: () => ctx.window() as unknown as BrowserHostWindow | null,
       // THE ONE CONVERSION THAT ONLY A REAL RELAY EXPOSES.
       // `DesktopToolLink.connect` wants BeingDesktop's `LoomConnection` — it
@@ -208,6 +226,9 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
         await peer.reveal(terminalId);
       },
       desktopPortalName,
+      // The tool-browser subsystem owns the instance; `Browser` is only the
+      // fallback for a build where that subsystem is absent or could not start.
+      getBrowser: toolBrowser,
       Browser: DesktopBrowser,
       onChange: (snapshot: DesktopToolsSnapshot) => {
         const peer = orchestrationPeer();
@@ -225,9 +246,9 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
       },
     });
   } catch (error) {
-    // The two ways this throws are a Desktop identity that is not a UUID and an
-    // Electron façade the browser refuses. Both mean there is no tool bridge at
-    // all; say which thing is broken rather than 请先连接 Being.
+    // What is left that can throw is a Desktop identity that is not a UUID (the
+    // Electron façade is checked above). It means there is no tool bridge at all;
+    // say which thing is broken rather than 请先连接 Being.
     blocked = '桌面工具暂时不可用，请检查客户端配置目录后重启。';
     report('tools-install', error);
   }

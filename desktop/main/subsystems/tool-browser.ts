@@ -54,7 +54,17 @@ export function installToolBrowserSubsystem(ctx: SubsystemContext): ToolBrowserS
         WebContentsView: View,
         session,
         getWindow: () => ctx.window() as unknown as BrowserHostWindow | null,
-        onChange: snapshot => push.state(snapshot),
+        onChange: snapshot => {
+          push.state(snapshot);
+          // THE SECOND HALF OF 0.8.26's `onChange: () => this.changed()`.
+          // There, `DesktopTools` built the browser and rebuilt its own snapshot
+          // on every browser change, which is what puts a new tab or a finished
+          // navigation into `beings:tools-state` (src/desktop-tools.cjs line 120
+          // in the port). Ownership moved here, so the fan-out is explicit — and
+          // lazy, because the tool bridge may install after this subsystem.
+          try { ctx.registry.get('tools')?.tools?.changed(); }
+          catch (error) { report('tool-browser-tools-change', error); }
+        },
       });
     } catch (error) {
       // The constructor validates its four dependencies and locks the partition

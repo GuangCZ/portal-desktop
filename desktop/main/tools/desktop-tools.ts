@@ -81,6 +81,20 @@ export interface DesktopToolsOptions {
   showTerminal?: (terminalId: string) => unknown;
   /** src/desktop-identity.cjs, owned by the identity unit; required once desktopId is set. */
   desktopPortalName: DesktopPortalName;
+  /** The already-built tool browser, resolved on EVERY access.
+   *
+   * 0.8.26 has one `DesktopTools` and it builds the browser itself. This shell
+   * gives the browser its own subsystem — it is a visible panel with a partition
+   * and a rectangle, and it exists whether or not a Being is connected
+   * (docs/migration/i3-terminal-browser.md D1) — so the bridge consumes that
+   * instance instead of constructing a second one. Two instances fight over the
+   * same window's `contentView` and share one partition.
+   *
+   * It has to be a function, and it must not be called while constructing: the
+   * order `INSTALLERS` runs in carries no meaning, so the tool browser may not be
+   * in the registry yet. Answering null is normal — this instance then builds its
+   * own, once, exactly as 0.8.26 does. */
+  getBrowser?: () => DesktopBrowserLike | null;
   /** src/desktop-browser.cjs, owned by the browser unit; it has no local default here. */
   Browser: DesktopBrowserConstructor;
   Console?: DesktopConsoleConstructor;
@@ -103,10 +117,24 @@ export class DesktopTools {
   disposed: boolean;
   notifyQueued: boolean;
   requestResult: DesktopToolsRequestResult | null;
-  browser: DesktopBrowserLike;
+  /** The browser THIS instance built, and therefore the only one it may destroy.
+   * Null while an injected browser is answering. */
+  ownBrowser: DesktopBrowserLike | null;
+  /** The injection point, or `() => null` when there is none. */
+  resolveBrowser: () => DesktopBrowserLike | null;
+  /** The 0.8.26 constructor call, deferred so it only runs if nothing is injected. */
+  createBrowser: () => DesktopBrowserLike;
   console: DesktopConsoleLike;
   link: DesktopToolLinkLike;
-  constructor({desktopId,WebContentsView,session,getWindow,getConnection,getWorkspace,onChange,orchestration,getTerminal=()=>null,showTerminal=()=>{},desktopPortalName,Browser,Console=DesktopConsole,ToolLink=DesktopToolLink}: DesktopToolsOptions) {
+  /** The tool browser, injected or self-built. Every use inside this class goes
+   * through here, so ownership is decided once, per access, and never cached at
+   * construction time (see `DesktopToolsOptions.getBrowser`). */
+  get browser(): DesktopBrowserLike {
+    const injected = this.resolveBrowser();
+    if (injected) return injected;
+    return (this.ownBrowser ??= this.createBrowser());
+  }
+  constructor({desktopId,WebContentsView,session,getWindow,getConnection,getWorkspace,onChange,orchestration,getTerminal=()=>null,showTerminal=()=>{},desktopPortalName,getBrowser,Browser,Console=DesktopConsole,ToolLink=DesktopToolLink}: DesktopToolsOptions) {
     this.onChange=onChange;this.getConnection=getConnection;this.getWorkspace=getWorkspace;
     this.orchestration=orchestration;
     this.getTerminal=getTerminal;
@@ -117,7 +145,15 @@ export class DesktopTools {
     // through (desktop/main/subsystems/types.ts explains why they are typed that
     // way). One cast, here, is what the browser's own contract costs; the browser
     // validates all three at runtime and refuses with「浏览器依赖无效。」.
-    this.browser=new Browser({WebContentsView,session,getWindow,onChange:()=>this.changed()} as DesktopBrowserOptions);
+    this.createBrowser=()=>new Browser({WebContentsView,session,getWindow,onChange:()=>this.changed()} as DesktopBrowserOptions);
+    this.resolveBrowser=getBrowser ?? (()=>null);
+    // NO INJECTION POINT MEANS THIS INSTANCE OWNS THE BROWSER, exactly as 0.8.26
+    // does — built here, so a refused Electron façade is a CONSTRUCTION failure
+    // rather than a surprise on the first snapshot. With an injection point the
+    // build is deferred instead: calling the resolver now would read an empty
+    // registry and build the second instance this whole arrangement exists to
+    // prevent.
+    this.ownBrowser=getBrowser?null:this.createBrowser();
     this.console=new Console({getWorkspace,onChange:()=>this.changed()});
     this.link=new ToolLink({shouldReconnect:()=>!this.disposed && orchestration?.mode.enabled===true && !orchestration.configuring,...(desktopId?{portalName:desktopPortalName(desktopId)}:{}),onChange:()=>this.changed(),toolAllowed:name=>orchestration?.mode.enabled?name.startsWith('desktop_worker_'):!name.startsWith('desktop_worker_') && (!name.startsWith('desktop_terminal_') || Boolean(getTerminal()) && ['win32','darwin'].includes(process.platform)),invokeTool:(name,args,context)=>this.request(name,args,context)});
   }
@@ -250,6 +286,10 @@ export class DesktopTools {
     this.changed();
   }
   async dispose(): Promise<void> {
-    this.disconnectLink();await this.console.dispose();this.browser.destroy();this.disposed=true;
+    // Only the browser this instance built is this instance's to destroy: an
+    // injected one belongs to the tool-browser subsystem, which destroys it in
+    // its own `quitting()`. `?.` also keeps a never-touched fallback from being
+    // constructed just so it can be torn down.
+    this.disconnectLink();await this.console.dispose();this.ownBrowser?.destroy();this.disposed=true;
   }
 }
