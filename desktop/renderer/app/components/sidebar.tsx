@@ -66,6 +66,7 @@ export function Sidebar({ model }: { model: AppModel }) {
       <div className="sidebar-head">
         <button
           type="button"
+          id="new-chat-session"
           className="sidebar-action"
           disabled={!connected}
           title={app.api?.platform === "win32" ? "新会话 Ctrl N" : "新会话 ⌘ N"}
@@ -76,6 +77,7 @@ export function Sidebar({ model }: { model: AppModel }) {
         </button>
         <button
           type="button"
+          id="sidebar-search"
           className="sidebar-action"
           title={app.api?.platform === "win32" ? "搜索会话 Ctrl K" : "搜索会话 ⌘ K"}
           onClick={() => setSearch(true)}
@@ -292,7 +294,11 @@ function SessionRow({ session, app, conversation, busy, editing, menuOpen, onMen
       />
     );
   return (
-    <div className="sidebar-task-row" onContextMenu={event => { event.preventDefault(); onMenu(true); }}>
+    <div
+      className="sidebar-task-row"
+      data-task-id={session.id}
+      onContextMenu={event => { event.preventDefault(); onMenu(true); }}
+    >
       <button
         type="button"
         className={`session-shortcut${active ? " active" : ""}`}
@@ -427,7 +433,7 @@ function RenameEditor({ session, rename, onDone }: {
     input.current?.select();
   };
   return (
-    <div className="sidebar-task-row session-editing">
+    <div className="sidebar-task-row session-editing" data-task-id={session.id}>
       <input
         ref={input}
         className="session-name-input"
