@@ -97,8 +97,12 @@ describe("Town session (direct reads, writes and channels)", () => {
     expect(result.messages[0]).toEqual({ id: "4", beingId: "", authorUnknown: true, beingName: "Echo", content: "Hello", createdAt: "2026-09-07T12:00:00+08:00", revisedAt: "", mentions: [] });
     expect(result.latestSeq).toBe(4);
     expect(calls[0].url.searchParams.get("since_id")).toBe("9223372036854775807");
-    expect(calls[1].url.searchParams.get("since")).toBe("3");
-    expect(calls[1].url.searchParams.get("limit")).toBe("20");
+    // Addressed by route rather than by position: the member directory is now
+    // started alongside the feed read (IT, 2026-09-17) and may land in `calls`
+    // on either side of it. Every parameter this case asserted still is.
+    const hear = calls.find(call => call.url.pathname === "/api/bonfire/hear");
+    expect(hear?.url.searchParams.get("since")).toBe("3");
+    expect(hear?.url.searchParams.get("limit")).toBe("20");
   });
 
   // The TownRefresh accumulator is migrated by a separate unit; this case keeps the
@@ -580,6 +584,82 @@ describe("Town session (direct reads, writes and channels)", () => {
     expect(calls.length).toBe(0);
     expect(session.state().scroll.status).toBe("unknown");
     expect(session.state().beings.status).toBe("unknown");
+  });
+
+  // ── the member directory never holds up the messages (IT, 2026-09-17) ──────
+  //
+  // BeingDesktop src/town-session.cjs:335-336 puts `/api/bonfire/hear` and
+  // `getMembers()` in one `Promise.all`. Its `.catch` handles a directory that
+  // REFUSES and cannot handle one that is merely slow, so the feed stayed empty
+  // for as long as the directory took (packaged evidence: tests/town-ui.mjs
+  // 「messages render while the member directory is still pending」).
+  // The rule BeingDesktop keeps is one layer up, in renderer/town-app.js:1607
+  // (`loadBonfire` = two independent loads) and :1581 (`loadBonfireMembers`
+  // paints from the cache first, re-renders when the fresh directory lands).
+  it("a pending member directory does not hold up the bonfire messages", async () => {
+    const held = deferred<Response>();
+    const { session, calls } = harness({ request: url => url.pathname === "/api" ? held.promise : undefined });
+    const page = await session.getBonfireMessages({ limit: 10 });
+    expect(page.messages.map(message => message.id)).toEqual(["4"]);
+    // Started alongside — the request is out — but nothing waited for it.
+    expect(calls.some(call => call.url.pathname === "/api")).toBe(true);
+    held.resolve(json({ community: [] }));
+  });
+
+  it("a directory that is already warm still resolves an author the payload only names", async () => {
+    const { session } = harness({ request: url => url.pathname === "/api/bonfire/hear"
+      ? json({ ok: true, global_latest_seq: 4, messages: [{ seq: 4, being: "echo", message: "Hello", at: "2026-09-07T12:00:00+08:00", revised_at: null }] })
+      : undefined });
+    await session.getMembers();
+    const page = await session.getBonfireMessages({ limit: 10 });
+    expect(page.messages[0]).toMatchObject({ beingId: "echo" });
+    expect(Object.hasOwn(page.messages[0], "authorUnknown")).toBe(false);
+  });
+
+  // MEASURED (IM, 2026-09-16, packaged build): one clean opening of the bonfire
+  // asked https://beings.town/api four times, nine to twelve while it failed,
+  // because the cache above `getMembers` is only written AFTER a success.
+  it("concurrent directory reads share one request, and a failure is not sticky", async () => {
+    const held = deferred<Response>();
+    let opened = 0;
+    const { session } = harness({ request: url => { if (url.pathname !== "/api") return undefined; opened++; return held.promise; } });
+    const first = session.getMembers(), second = session.getMembers(), third = session.getMembers({ force: true });
+    expect(opened).toBe(1);
+    held.resolve(json({ community: [{ being_id: "echo", display_name: "Echo" }] }));
+    for (const result of [await first, await second, await third]) expect(result.members).toEqual([{ id: "echo", name: "Echo", description: "" }]);
+    expect(opened).toBe(1);
+
+    const failing = harness({ request: url => url.pathname === "/api" ? json({ error: "nope" }, 503) : undefined });
+    await expect(failing.session.getMembers()).rejects.toBeTruthy();
+    await expect(failing.session.getMembers()).rejects.toBeTruthy();
+    expect(failing.calls.filter(call => call.url.pathname === "/api").length).toBe(2);
+  });
+
+  it("one caller giving up on the directory leaves the shared read running for the others", async () => {
+    const held = deferred<Response>();
+    let opened = 0;
+    const { session } = harness({ request: url => { if (url.pathname !== "/api") return undefined; opened++; return held.promise; } });
+    const controller = new AbortController();
+    const abandoned = session.getMembers({ signal: controller.signal });
+    const patient = session.getMembers();
+    controller.abort();
+    await expect(abandoned).rejects.toMatchObject({ code: "ABORTED" });
+    held.resolve(json({ community: [{ being_id: "echo", display_name: "Echo" }] }));
+    expect((await patient).members).toEqual([{ id: "echo", name: "Echo", description: "" }]);
+    expect(opened).toBe(1);
+  });
+
+  it("invalidating the directory starts a fresh read rather than joining the doomed one", async () => {
+    const held = deferred<Response>();
+    let opened = 0;
+    const { session } = harness({ request: url => { if (url.pathname !== "/api") return undefined; opened++; return opened === 1 ? held.promise : json({ community: [{ being_id: "echo", display_name: "Echo" }] }); } });
+    const stale = session.getMembers();
+    session.invalidateMembers();
+    const fresh = await session.getMembers();
+    expect(opened).toBe(2);
+    expect(fresh.members).toEqual([{ id: "echo", name: "Echo", description: "" }]);
+    held.resolve(json({ community: [{ being_id: "old", display_name: "Old" }] }));
+    await expect(stale).rejects.toMatchObject({ code: "SESSION_CHANGED" });
   });
 
   it("channel status accepts current ready booleans without mistaking missing data for an unbound channel", async () => {

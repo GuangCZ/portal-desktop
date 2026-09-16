@@ -215,6 +215,8 @@ export class TownSession {
   _requests = new Set<AbortController>();
   _mutations = new Set<string>();
   _members: Map<string, TownMember> | null = null;
+  /** The one public-directory read in flight, if any (see `getMembers`). */
+  _membersRead: Promise<TownMember[]> | null = null;
   _state: TownSessionState;
 
   // `Partial<...> = {}` mirrors town-session.cjs:146 `= {}`: a no-arg construction must reach the
@@ -235,6 +237,7 @@ export class TownSession {
     this._requests.clear();
     this._mutations.clear();
     this._members = null;
+    this._membersRead = null;
     this._membersExpiresAt = 0; this._membersRevision++;
     this._state = emptyState();
   }
@@ -341,21 +344,68 @@ export class TownSession {
   memberDisplayName(townId: string): string { return this.now() < this._membersExpiresAt ? this._members?.get(townId)?.name || '' : ''; }
   invalidateMembers(): { revision: number; expiresAt: number } {
     this._members = null; this._membersExpiresAt = 0; this._membersRevision++;
+    // The read in flight was started under the previous revision and would throw
+    // SESSION_CHANGED when it lands; a caller arriving now must start a fresh one
+    // rather than join a doomed request.
+    this._membersRead = null;
     try { this.onChange(this.state()); } catch { /* Read cache invalidation does not change a send result. */ }
     return this.memberCacheState();
+  }
+
+  /** The member directory as it already stands here, with no request of any kind.
+   * Empty when nothing has been read yet or the 60s window has passed. */
+  cachedMembers(): TownMember[] {
+    return this._members && this.now() < this._membersExpiresAt ? [...this._members.values()] : [];
   }
 
   async getMembers({ signal, force = false }: { signal?: AbortSignal; force?: boolean } = {}): Promise<{ members: TownMember[]; source: string }> {
     checkAborted(signal);
     if (!force && this._members && this.now() < this._membersExpiresAt) return { members: [...this._members.values()], source: 'public' };
-    const epoch = this._epoch, revision = this._membersRevision;
-    // Cache only the stable ID -> current display metadata mapping, never name -> identity.
-    const value = await this._request('/api', { signal });
-    if (epoch !== this._epoch || revision !== this._membersRevision) throw failure('SESSION_CHANGED', '成员目录已失效，请重新读取。');
-    const members = membersDto(value);
-    this._members = new Map(members.map(member => [member.id, member]));
-    this._membersExpiresAt = this.now() + this.membersTtlMs;
-    return { members, source: 'public' };
+    // ONE public-directory read at a time; concurrent callers join the one in
+    // flight instead of each opening their own.
+    //
+    // MEASURED, not inferred (IM, 2026-09-16, packaged build): a single clean
+    // opening of the bonfire asked https://beings.town/api FOUR times, and nine
+    // to twelve times while it was failing, because the cache above is only
+    // written AFTER a success. BeingDesktop keeps the same rule one layer up —
+    // renderer/town-app.js:1957/1972 starts the directory load once and the later
+    // await reuses that very promise (`cachedMembers || loadBonfireMembers()`) —
+    // so joining an in-flight read here is that rule, not a new mechanism.
+    //
+    // The shared request carries NO caller AbortSignal: one caller giving up must
+    // not cancel the directory for everybody else. `reset()` still cancels it,
+    // because `_request` registers its controller in `_requests`.
+    if (!this._membersRead) {
+      const epoch = this._epoch, revision = this._membersRevision;
+      const read = (async () => {
+        // Cache only the stable ID -> current display metadata mapping, never name -> identity.
+        const value = await this._request('/api');
+        if (epoch !== this._epoch || revision !== this._membersRevision) throw failure('SESSION_CHANGED', '成员目录已失效，请重新读取。');
+        const members = membersDto(value);
+        this._members = new Map(members.map(member => [member.id, member]));
+        this._membersExpiresAt = this.now() + this.membersTtlMs;
+        return members;
+      })();
+      this._membersRead = read;
+      // Whoever started it frees the slot, and only while it is still the
+      // registered one: a failure must not be sticky.
+      void read.catch(() => {}).then(() => { if (this._membersRead === read) this._membersRead = null; });
+    }
+    const members = await this._join(this._membersRead, signal);
+    return { members: [...members], source: 'public' };
+  }
+
+  /** Wait on a shared read while still answering this caller's own signal. The
+   * shared read keeps running for the callers that did not give up. */
+  _join<T>(shared: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) return shared;
+    return new Promise<T>((resolve, reject) => {
+      const stop = () => signal.removeEventListener('abort', onAbort);
+      const onAbort = () => { stop(); reject(failure('ABORTED', '读取已取消。')); };
+      if (signal.aborted) { reject(failure('ABORTED', '读取已取消。')); return; }
+      signal.addEventListener('abort', onAbort, { once: true });
+      shared.then(value => { stop(); resolve(value); }, error => { stop(); reject(error); });
+    });
   }
 
   async listScrolls(value: unknown = {}, { signal }: { signal?: AbortSignal } = {}): Promise<TownScrollList> {
@@ -406,13 +456,37 @@ export class TownSession {
     if ((request.since !== undefined && !sequence(request.since)) || (request.limit !== undefined && (!Number.isInteger(request.limit) || request.limit < 1 || request.limit > 200))) throw failure('INVALID_REQUEST', '篝火消息分页参数无效。');
     const expected = this._context();
     return this._read('bonfire', expected, async request2 => {
-      const [response, members] = await Promise.all([
-        request2('/api/bonfire/hear', { query: { limit: request.limit || 10, ...(request.since === undefined ? {} : { since: request.since }) } }),
-        this.getMembers({ signal }).then(result => result.members).catch((error: unknown) => { if (errorCode(error) === 'ABORTED') throw error; return [] as TownMember[]; }),
-      ]);
+      // Names never hold up messages.
+      //
+      // BeingDesktop src/town-session.cjs:335-336 reads the directory inside the
+      // same `Promise.all` as `/api/bonfire/hear`. Its `.catch` covers a directory
+      // that REFUSES; it cannot cover one that is merely slow, so a slow directory
+      // held the feed empty for as long as the request lived — up to the 20s in
+      // session/client.ts. The rule BeingDesktop actually keeps lives one layer
+      // up, in renderer/town-app.js: `loadBonfire` (:1607) runs the feed read and
+      // `loadBonfireMembers` as two INDEPENDENT loads, and `loadBonfireMembers`
+      // (:1581) paints from the local cache first and re-renders when the fresh
+      // directory lands. Both halves are named in test/town-conversation-ui.cjs:
+      // 「cached directory resolves mentions while the fresh directory is pending」
+      // and 「late directory arrival rerenders mention labels without mutating
+      // messages」. So: use the directory this session already has, start the
+      // fresh one alongside, and do not wait for it. The renderer re-renders the
+      // labels on its own when it arrives (beings:town-members).
+      //
+      // What the directory is for here is narrow: `messagesDto` uses it only as
+      // the THIRD fallback for an author id, behind `town_id` and `being_id`, for
+      // payloads that carry neither.
+      const warm = this.cachedMembers();
+      // Started alongside and never awaited. Whatever it has produced by the time
+      // the messages land is what the fallback gets — a directory that answers
+      // quickly still resolves those authors exactly as it did before, and one
+      // that does not simply does not delay anything. Its failure is the
+      // directory's own business and is reported on beings:town-members.
+      if (!warm.length) void this.getMembers().catch(() => { /* Messages do not depend on it. */ });
+      const response = await request2('/api/bonfire/hear', { query: { limit: request.limit || 10, ...(request.since === undefined ? {} : { since: request.since }) } });
       this._context(expected);
       checkAborted(signal);
-      return messagesDto(response, members);
+      return messagesDto(response, warm.length ? warm : this.cachedMembers());
     }, { signal });
   }
 
