@@ -16,7 +16,10 @@
 //   · a bound window says nothing about the ledger not being saved;
 //   · a folded project stays folded across a state update, and across a reload;
 //   · a pin made from the context menu is on disk when it is on screen.
-// Plus the switch this unit exists for: a different Being, a different set.
+// Plus the switch this unit exists for: a different Being, a different set, and
+// (IM, 2026-09-16) the project menu: a new conversation is filed under the
+// project it was started in, and「设为工作目录」moves the working directory —
+// BeingDesktop's `projectMenu` / `selectSavedProject`.
 import { _electron as electron } from 'playwright';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
@@ -65,11 +68,13 @@ const { app, BrowserWindow, ipcMain, net, protocol } = require('electron');
 const { writeFileSync, readFileSync, existsSync } = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
-const { sidebarState, updateSidebar, addSidebarProject } = require('./ledger.js');
+const { sidebarState, updateSidebar, addSidebarProject, assertSavedProject } = require('./ledger.js');
 const file = ${JSON.stringify(ledgerFile)};
 const ids = ${JSON.stringify(ids)};
 const PROJECT = ${JSON.stringify(PROJECT)};
 let scope = ${JSON.stringify(SCOPE_A)};
+// BeingDesktop's disk.workspace, which this client reads as projectWorkspace.
+let workspace = '';
 let window;
 const saved = () => existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
 const write = next => { writeFileSync(file, JSON.stringify(next, null, 2)); };
@@ -127,6 +132,16 @@ handle('beings:sidebar-project-add', project => {
   push('beings:sidebar', next);
   return next;
 });
+// BeingDesktop's selectSavedProject (src/main.cjs:574). The production subsystem
+// writes Settings.projectWorkspace and pushes the tool bridge; this fixture
+// records the directory, which is the part the sidebar itself can be held to.
+handle('beings:sidebar-project-select', project => {
+  if (!assertSavedProject) throw new Error('fixture missing reducer');
+  workspace = assertSavedProject(saved(), scope, '', project);
+  const next = ledger();
+  push('beings:sidebar', next);
+  return next;
+});
 // The test's own controls. They are functions on the main process's global
 // rather than channels, so the renderer cannot reach them and the bridge under
 // test stays exactly the production one (playwright's electronApp.evaluate runs
@@ -134,6 +149,8 @@ handle('beings:sidebar-project-add', project => {
 globalThis.__fixtureAddProject = () => { write(addSidebarProject(saved(), scope, '', PROJECT)); push('beings:sidebar', ledger()); };
 globalThis.__fixtureRepublishChat = () => { push('beings:chat-state', chatState()); };
 globalThis.__fixtureSwitchBeing = () => { scope = ${JSON.stringify(SCOPE_B)}; push('beings:sidebar', ledger()); };
+globalThis.__fixtureWorkspace = () => workspace;
+globalThis.__fixtureFiledUnder = () => sidebarState(saved(), scope, '').tasks[active]?.project || '';
 
 app.whenReady().then(() => {
   if (process.env.SIDEBAR_FIXTURE_PROFILE) app.setPath('userData', process.env.SIDEBAR_FIXTURE_PROFILE);
@@ -200,6 +217,32 @@ try {
   await page.locator('.session-sidebar').waitFor();
   await page.locator('.sidebar-project-toggle').first().waitFor();
   check('fold-survives-reload', await page.locator('.sidebar-project-toggle').first().getAttribute('aria-expanded') === 'false');
+
+  // 4b. The project menu, which is BeingDesktop's `projectMenu`
+  //     (renderer/sidebar.js:168). Two of its three items are behaviours worth
+  //     pinning here rather than in a unit test, because both are a click that
+  //     has to reach the main process and come back:
+  //       ·「+」creates a conversation and files it under THIS project;
+  //       ·「设为工作目录」is 0.8.26's「浏览文件」→ `selectSavedProject`, which
+  //         moves the directory the terminal, the console and the desktop tools
+  //         start from. I6 shipped without the channel; IM restored it.
+  const projectRow = page.locator('.sidebar-project-row').first();
+  if (await projectRow.locator('.sidebar-project-toggle').getAttribute('aria-expanded') === 'false')
+    await projectRow.locator('.sidebar-project-toggle').click();
+  await page.waitForFunction(() => document.querySelector('.sidebar-project-toggle')?.getAttribute('aria-expanded') === 'true');
+  const filedBefore = await application.evaluate(() => globalThis.__fixtureFiledUnder());
+  await projectRow.locator('.project-new-task').click();
+  await page.waitForFunction(project => !document.querySelector('.sidebar-section[aria-label^="项目"] .sidebar-empty') && Boolean(project), PROJECT);
+  const filed = await application.evaluate(() => globalThis.__fixtureFiledUnder());
+  check('project-new-task-binds-project', filed === PROJECT && filedBefore !== PROJECT);
+  check('projects-contain-their-tasks',
+    await page.locator('.sidebar-section[aria-label^="项目"] .sidebar-task-row').count() >= 1);
+
+  check('workspace-unset-before-select', await application.evaluate(() => globalThis.__fixtureWorkspace()) === '');
+  await projectRow.locator('.project-more').click();
+  await page.getByRole('menuitem', { name: '设为工作目录', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.sidebar-menu'));
+  check('project-select-moves-workspace', await application.evaluate(() => globalThis.__fixtureWorkspace()) === PROJECT);
 
   // 5. A different Being is a different set of pins, without a reload.
   await fixture('__fixtureSwitchBeing');

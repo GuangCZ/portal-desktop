@@ -28,7 +28,7 @@ const TOKEN_B = "b".repeat(64);
 const ADDRESS_A = `https://echo.beings.town/cz_being/?token=${TOKEN_A}`;
 const ADDRESS_B = `https://echo.beings.town/other_being/?token=${TOKEN_B}`;
 const SHELL = "beings://desktop/";
-const CHANNELS = ["beings:sidebar-state", "beings:sidebar-action", "beings:sidebar-project-add"];
+const CHANNELS = ["beings:sidebar-state", "beings:sidebar-action", "beings:sidebar-project-add", "beings:sidebar-project-select"];
 const json = (value: unknown, status = 200) =>
   new Response(value === null ? null : JSON.stringify(value), { status, headers: value === null ? {} : { "Content-Type": "application/json" } });
 const settle = async () => { for (let index = 0; index < 25; index++) await new Promise(resolve => setImmediate(resolve)); };
@@ -209,6 +209,55 @@ test("project folders are added once, hold their conversations, and release them
     expect(removed.projects).toEqual([]);
     expect(removed.tasks[id].project).toBe("");
     expect(removed.tasks[id].touchedAt).toBeGreaterThan(0);
+  } finally { await f.cleanup(); }
+});
+
+test("selecting a project moves the working directory the tools and the terminal start from", async () => {
+  // BeingDesktop's `selectSavedProject` (src/main.cjs:574), restored by IM: I6
+  // left the channel out because this shell has no file browser page, and I2/I3
+  // then landed `DesktopTools({getWorkspace})` / `DesktopConsole({getWorkspace})`
+  // / the terminal, all of which read `Settings.projectWorkspace`
+  // (docs/migration/i6-shell-state.md §9.5).
+  const project = process.platform === "win32" ? "C:\\Users\\me\\Work" : "/Users/me/Work";
+  const other = process.platform === "win32" ? "C:\\Users\\me\\Other" : "/Users/me/Other";
+  const f = await fixture();
+  try {
+    await f.connect();
+    expect(f.store.settings.projectWorkspace).toBeFalsy();
+    await f.call("beings:sidebar-project-add", project);
+    await f.call("beings:sidebar-project-add", other);
+
+    const state: ShellSidebarState = await f.call("beings:sidebar-project-select", other);
+    // THE DIRECTORY EVERY WORKSPACE CONSUMER READS.
+    expect(f.store.settings.projectWorkspace).toBe(other);
+    // 0.8.26's `disk.workspace`, the same key a 0.8.x profile uses.
+    expect((await f.saved()).workspace).toBe(other);
+    // The ledger itself did not change, and the renderer still gets a push.
+    expect(state.projects).toEqual([project, other]);
+    expect(f.pushes.filter(push => push.channel === "beings:sidebar").at(-1)!.payload).toEqual(state);
+
+    // It survives a restart, because it went to the profile and not to memory.
+    const reopened = new SettingsStore(f.directory, secretStorage, "/nonexistent/portal");
+    await reopened.load();
+    expect(reopened.settings.projectWorkspace).toBe(other);
+
+    // Switching again moves it again.
+    await f.call("beings:sidebar-project-select", project);
+    expect(f.store.settings.projectWorkspace).toBe(project);
+    expect(f.errors).toEqual([]);
+  } finally { await f.cleanup(); }
+});
+
+test("a folder that is not on the list is refused and nothing is written", async () => {
+  const f = await fixture();
+  try {
+    await f.connect();
+    const before = await f.saved();
+    for (const input of ["/never-added", "relative/path", 12, "", null, { path: "/Users/me/Work" }])
+      await expect(f.call("beings:sidebar-project-select", input)).rejects.toThrow(/项目不存在，请重新选择文件夹。/);
+    expect(await f.saved()).toEqual(before);
+    expect(f.store.settings.projectWorkspace).toBeFalsy();
+    expect(f.errors).toEqual([]);
   } finally { await f.cleanup(); }
 });
 

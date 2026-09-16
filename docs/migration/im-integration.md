@@ -325,3 +325,34 @@ I1 的 worktree 里没有工具桥，退而用了 `ctx.electron.shell.openExtern
 (b) 允许名单在两条路径上都原样（六个坏 route 都抛「不支持的 Town 链接。」，且没有开出任何标签页）；
 (c) 只装 town 子系统时退回 `shell.openExternal`。
 
+### 2.13 项目切换 `beings:sidebar-project-select`（i6 记录 §4.3 / §9.5 与 i3 未做 5）——已补
+
+i6 当时的理由是「本外壳没有文件浏览页，唯一能切换的 `settings.workspace` 是 Portal 工作目录」；
+但 I2/I3 落地之后，`DesktopTools({getWorkspace})`、`DesktopConsole({getWorkspace})` 与终端**都**读 `Settings.projectWorkspace`，
+所以「切换项目」现在有确切的含义了（i6 §9.5 也是这么写的）。
+
+BD `src/main.cjs:574` `selectSavedProject`：校验目录在 `sidebarState(...).projects` 里 → `disk.workspace = selected` + 落盘（失败回滚）
+→ `state.workspace = {path, files}` → `desktopTools?.changed()`。
+
+落地：
+
+| 层 | 改动 |
+| --- | --- |
+| `main/shell/sidebar-state.ts` | 新增 `assertSavedProject(saved, scope, workspace, project)`——只有 BD 的那条校验，不写盘（切工作目录不是账本变更）。 |
+| `main/shell/ipc.ts` | 新增 `beings:sidebar-project-select`（进 `ctx.exclusive`，BD 把它和 `sidebarAction` 一起列进串行表 `src/main.cjs:141`），字符串 + 4096 上限，其余交给 reducer 拒绝。 |
+| `main/subsystems/shell-state.ts` | `selectProject`：校验 → `saveExtra({ workspace })`（**BD 的同一个磁盘键**，`app/settings.ts:68` 就是从这个键读进 `projectWorkspace` 的，所以 0.8.x 档案互通）→ `ctx.store.settings.projectWorkspace = chosen` → 推 `beings:sidebar` → `ctx.registry.get('tools')?.tools?.changed()`（BD 的 `desktopTools?.changed()`）。 |
+| `shared/shell-state-types.ts` / `preload/channels/shell-state.ts` | `selectProject(project)` 各一行。 |
+| `renderer/app/components/sidebar.tsx` | 项目菜单加「设为工作目录」（BD 的「浏览文件」，本外壳没有文件浏览页，所以切换本身就是全部动作）。 |
+
+**为什么要写 `ctx.store.settings.projectWorkspace`**：`saveExtra` 只写文件，不动 `SettingsStore.settings` 那半，
+而所有工作目录消费者读的都是后者；BD 对应的就是 `state.workspace = {...}` 那一行。
+不走 `store.save()`：那是 Portal 的路径，会重新校验连接、可能重启引擎（`main.ts:441`）——从侧栏选个文件夹不该做这两件事。
+`save()` 会原样带过 `projectWorkspace`（`app/settings.ts:147`），`load()` 从上面写的键读回来，三者一致。
+
+测试：`tests/shell-state-ipc.test.ts` 新增 2 条（真 `SettingsStore`：落盘到 BD 的 `workspace` 键、`projectWorkspace` 变了、推送、重启后仍在、
+六种坏输入都拒且不写盘），`CHANNELS` 常量加一条；
+新增 `tests/shell-state-integration-workspace.test.ts`（2 例）：**shell-state + tools + tool-browser 一起装**，
+断言选中之后 `beings:tools` 的 `workspace` 真的变了、`beings:tools-state` 推的也是新的、拒绝时一切不变；
+`tests/sidebar-e2e.mjs` 加 4 条 check（`project-new-task-binds-project`、`projects-contain-their-tasks`、
+`workspace-unset-before-select`、`project-select-moves-workspace`），**本机真跑通过，14 条全绿**。
+

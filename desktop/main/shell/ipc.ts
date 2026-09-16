@@ -32,6 +32,10 @@ export interface ShellStateIpcOptions {
    * lazily: the ledger is rebound on every Being binding. */
   apply: (action: ShellSidebarAction) => Promise<ShellSidebarState>;
   addProject: (project: string) => Promise<ShellSidebarState>;
+  /** Make one already-listed project the working directory, and answer with the
+   * ledger — unchanged, but the caller re-renders from one shape either way.
+   * BeingDesktop's `selectSavedProject` (src/main.cjs:574). */
+  selectProject: (project: string) => Promise<ShellSidebarState>;
 }
 
 const ACTIONS = ['pin', 'archive', 'move', 'touch', 'remove-project'] as const;
@@ -70,7 +74,7 @@ function action(value: unknown): ShellSidebarAction {
   return { type, id: value.id, scope: value.scope };
 }
 
-export function registerShellStateIpc({ handle, exclusive, state, apply, addProject }: ShellStateIpcOptions) {
+export function registerShellStateIpc({ handle, exclusive, state, apply, addProject, selectProject }: ShellStateIpcOptions) {
   handle('beings:sidebar-state', (): ShellSidebarState => state());
 
   handle('beings:sidebar-action', (input: unknown): Promise<ShellSidebarState> =>
@@ -79,6 +83,16 @@ export function registerShellStateIpc({ handle, exclusive, state, apply, addProj
   handle('beings:sidebar-project-add', (project: unknown): Promise<ShellSidebarState> => {
     if (typeof project !== 'string' || project.length > PATH_LIMIT) throw new Error('请选择一个本机文件夹。');
     return exclusive(() => addProject(project));
+  });
+
+  // 0.8.26's `selectSavedProject`, serialized with the rest (src/main.cjs:141).
+  // It writes the profile, so it belongs in the same queue as `sidebar-action`.
+  // The refusal is the reducer's, not this layer's: a path that is not on the
+  // list and a path that is not a path get the same sentence there, and repeating
+  // it here would give one situation two.
+  handle('beings:sidebar-project-select', (project: unknown): Promise<ShellSidebarState> => {
+    if (typeof project !== 'string' || project.length > PATH_LIMIT) throw new Error('项目不存在，请重新选择文件夹。');
+    return exclusive(() => selectProject(project));
   });
 }
 

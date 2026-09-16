@@ -276,6 +276,24 @@ function ProjectGroup({ project, scope, connected, busy, conversation, app, chil
             <button
               type="button"
               role="menuitem"
+              className="project-select"
+              disabled={busy}
+              title="终端、本机命令和 Being 的桌面工具都从这个文件夹开始"
+              onClick={() => {
+                setMenu(false);
+                // 0.8.26's「浏览文件」(renderer/sidebar.js:171), which called
+                // `selectSavedProject` and then opened the workspace page. This
+                // shell has no file browser, so the switch is the whole action:
+                // it moves the working directory the terminal, the console and
+                // the tool bridge start from.
+                void app.run(() => app.api.shellState.selectProject(project.path));
+              }}
+            >
+              设为工作目录
+            </button>
+            <button
+              type="button"
+              role="menuitem"
               disabled={busy}
               onClick={() => {
                 setMenu(false);

@@ -126,6 +126,24 @@ export function addSidebarProject(saved: unknown, scope: string, workspace: stri
   return record(saved, scope, next);
 }
 
+/** BeingDesktop's `selectSavedProject` guard, and only the guard.
+ *
+ * `src/main.cjs:574`: `if(!sidebarState(disk.sidebar,'',state.workspace.path)
+ * .projects.includes(selected)) throw new Error('项目不存在，请重新选择文件夹。')`.
+ * The scope is `''` there because THE PROJECT LIST IS SHARED ACROSS BEINGS — only
+ * the task buckets are per-Being — so a folder added while connected to one Being
+ * can be selected while connected to another. The caller passes its real scope
+ * anyway; `sidebarState` derives the same `projects` either way, and passing the
+ * truth keeps this function usable from one place instead of two.
+ *
+ * Nothing is written: switching the working directory is not a change to the
+ * ledger, which is why this answers void rather than a record. IM, 2026-09-16. */
+export function assertSavedProject(saved: unknown, scope: string, workspace: string, project: unknown): string {
+  if (!validPath(project)) throw new Error('项目不存在，请重新选择文件夹。');
+  if (!sidebarState(saved, scope, workspace).projects.includes(project)) throw new Error('项目不存在，请重新选择文件夹。');
+  return project;
+}
+
 /** The record to write back: every key of the saved object preserved, the
  * project list replaced, and this Being's bucket replaced by the normalized
  * tasks. With no Being connected the buckets are carried through untouched. */
