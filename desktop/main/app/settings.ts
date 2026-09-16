@@ -194,6 +194,20 @@ export class SettingsStore {
     this.disk = disk;
     this.credential = text(disk.credential);
   }
+  /** Every key settings.json holds, including the ones this client does not own.
+   * A subsystem that persists its own section (the sidebar ledger, the
+   * orchestration switch) reads it from here and writes through `saveExtra`,
+   * rather than gaining a field on `Settings` that BeingDesktop 0.8.x would not
+   * recognise. Added for the I0 subsystem seam on 2026-09-16. */
+  get extras(): Readonly<Record<string, unknown>> { return this.disk; }
+  /** Merge a patch into settings.json, preserving every other key — including the
+   * credential ciphertext, which is never re-encrypted here. A member set to
+   * `undefined` removes that key. */
+  async saveExtra(patch: Record<string, unknown>) {
+    const disk: Disk = { ...this.disk, ...patch };
+    for (const [key, value] of Object.entries(patch)) if (value === undefined) delete disk[key];
+    await this.write(disk);
+  }
   resolveConnection(input: Pick<SaveSettings, 'connectionLink'>): Connection {
     const connection = input.connectionLink?.trim() ? parseConnection(input.connectionLink) : this.connection;
     if (!connection) throw new Error('请先输入 Being 链接。');

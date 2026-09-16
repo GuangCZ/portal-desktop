@@ -1,4 +1,4 @@
-import { app, clipboard, dialog, ipcMain, net, nativeTheme, protocol, safeStorage, shell, type BrowserWindow, type Tray } from 'electron';
+import { app, clipboard, dialog, ipcMain, net, nativeTheme, powerMonitor, protocol, safeStorage, session, shell, WebContentsView, type BrowserWindow, type Tray } from 'electron';
 import { clientStartup } from './app/startup';
 import { clientUserData, profileOverride } from './app/profile';
 import type { ClientBrowser } from './browser/browser';
@@ -425,7 +425,20 @@ async function ready() {
     open: url => browser?.open(url),
   });
   registerKitsIpc({ handle, exclusive, window: () => window, store, kitInstaller });
-  extensions = installDesktopExtensions({ handle, exclusive, window: () => window, store, secretStorage, userData: directory, desktopId, clientVersion: app.getVersion(), fetchImpl: net.fetch.bind(net) as typeof fetch, onError: (scope, error) => { errorLog.report(scope, error); } });
+  // The one hook for every Being Desktop subsystem. A new subsystem appends two
+  // lines to desktop/main/extensions.ts and nothing here: this call is the whole
+  // contact surface between the shell and them, which is why no integration unit
+  // after I0 may touch main.ts.
+  extensions = installDesktopExtensions({
+    handle, exclusive, window: () => window, store, secretStorage, userData: directory,
+    desktopId, clientVersion: app.getVersion(), fetchImpl: net.fetch.bind(net) as typeof fetch,
+    electron: {
+      WebContentsView, session, powerMonitor, clipboard, safeStorage: secretStorage,
+      net: { fetch: net.fetch.bind(net) as typeof fetch, request: net.request.bind(net), isOnline: () => net.isOnline() },
+      shell: { openPath: target => shell.openPath(target), openExternal: target => shell.openExternal(target) },
+    },
+    onError: (scope, error) => { errorLog.report(scope, error); },
+  });
   handle('beings:save', (input: SaveSettings) => exclusive(async () => {
     cancelTownPairing?.();
     const previous = { ...store.settings }; const previousConnection = store.connection;

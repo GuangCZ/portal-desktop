@@ -1,39 +1,48 @@
-// The Being Desktop subsystems the portal-desktop shell has no equivalent of.
-// New on 2026-09-16; today that is the native conversation core (`chat/*`,
-// ported from BeingDesktop 0.8.26), and the orchestration and tool bridges land
-// here in later stages.
+// The Being Desktop subsystems the portal-desktop shell has no equivalent of, and
+// the one place main.ts hooks them; 2026-09-16.
 //
-// It exists so `main.ts` grows three lines rather than fifty. Everything these
-// subsystems need arrives as one context, and everything they need to be told
-// about goes back as three lifecycle notifications — mirroring the three points
-// BeingDesktop itself acts on: `restore()` builds the sessions object
-// (src/main.cjs line 634), `startNativeChat()` binds it once the connection is
-// confirmed (line 545, called from the Loom `did-finish-load` handler at line
-// 926), and `shutdown()` unbinds it (line 1590).
+// It exists so `main.ts` grows one line rather than fifty per subsystem.
+// Everything a subsystem needs arrives as one context, and everything it needs to
+// be told about goes back as three lifecycle notifications — mirroring the three
+// points BeingDesktop itself acts on (see subsystems/chat.ts).
 //
-// Nothing here imports electron: the window, the fetcher, the secret storage and
-// the queue are all passed in, which is what lets the whole hook be exercised
-// from a test without a running application.
-import path from 'node:path';
+// Nothing here imports electron: the window, the electron façade, the fetcher and
+// the queue are all passed in, which is what lets the whole hook be exercised from
+// a test without a running application.
+//
+// ── THE APPEND-ONLY LIST ──────────────────────────────────────────────────────
+// `INSTALLERS` below is one of the six shared lines the integration units share.
+// Landing a subsystem is exactly two appended lines — one `import`, one array
+// entry with a trailing comma — and nothing else in this file. Order carries no
+// meaning: cross-subsystem references are lazy by contract (subsystems/types.ts),
+// so whichever installs first still resolves the other. Do not reorder, do not
+// group, do not edit another unit's line.
 import type { SecretStorage } from './app/settings';
-import { ChatCache } from './chat/cache';
-import { beingIdentityKey, type Connection } from './chat/connection';
-import { chatPush, registerChatIpc } from './chat/ipc';
-import { ChatSessions } from './chat/sessions';
+import type { Connection } from './chat/connection';
+import type { ChatSessions } from './chat/sessions';
+import type { Settings } from '../shared/types';
+import type {
+  DesktopSubsystem, ElectronBindings, ExtensionWindow, SubsystemContext,
+  SubsystemInstaller, SubsystemMap, SubsystemRegistry, SubsystemSettings,
+} from './subsystems/types';
+import { installChatSubsystem } from './subsystems/chat';
 
-/** Structural, so a `BrowserWindow` satisfies it and a test's stub does too. */
-export interface ExtensionWindow {
-  isDestroyed(): boolean;
-  webContents: { isDestroyed(): boolean; send(channel: string, payload: unknown): void };
-}
+const INSTALLERS: SubsystemInstaller[] = [
+  installChatSubsystem,
+];
+// ──────────────────────────────────────────────────────────────────────────────
 
-/** The part of `SettingsStore` these subsystems read. `connectionAddress` is the
- * address exactly as saved, including the `api=` and `relay_secret=` parameters
- * `Connection` does not model — both feed the cache identity, so the parsed
- * connection alone is not enough. */
+export type { ExtensionWindow };
+
+/** The part of `SettingsStore` a subsystem reads. The last three are optional so a
+ * focused test can hand over the two fields the conversation layer needs without
+ * building a whole profile; production always passes the real store. */
 export interface ExtensionSettings {
   connection: Connection | null;
   connectionAddress: string;
+  settings?: Settings;
+  extras?: Readonly<Record<string, unknown>>;
+  saveExtra?(patch: Record<string, unknown>): Promise<void>;
 }
 
 export interface DesktopExtensionsContext {
@@ -41,7 +50,7 @@ export interface DesktopExtensionsContext {
    * channel added here inherits the same origin check and quitting guard. */
   handle: (channel: string, callback: (...args: any[]) => unknown) => void;
   /** The application's mutation queue. Handlers that change saved state use it;
-   * `connectionVerified` deliberately does not — see below. */
+   * `connectionVerified` deliberately does not. */
   exclusive: <T>(operation: () => Promise<T>) => Promise<T>;
   window: () => ExtensionWindow | null;
   store: ExtensionSettings;
@@ -50,113 +59,123 @@ export interface DesktopExtensionsContext {
   desktopId: string;
   clientVersion?: string;
   fetchImpl?: typeof fetch;
+  /** The electron façade. Optional so a test may omit what it does not exercise;
+   * the members it leaves out refuse rather than pretend to work. */
+  electron?: Partial<ElectronBindings>;
   /** main.ts's error log. Failures here are reported, never thrown: a broken
-   * conversation cache must not stop the client opening. */
+   * subsystem must not stop the client opening. */
   onError?: (scope: string, error: unknown) => void;
 }
 
 export interface DesktopExtensions {
-  /** The Being at `store.connectionAddress` answered `/api/status`. Binds the
-   * conversation layer to it — reading `/api/history` for a baseline and probing
-   * for a breath already in progress — unless it is already bound to that same
-   * identity, in which case the open timeline is kept as it is.
-   *
-   * Returns immediately. It is called from inside main.ts's `verifyConnection`,
-   * which itself runs inside `exclusive`, so this must neither await the queue
-   * (that would deadlock on the operation calling it) nor hold up startup while
-   * a history window loads. BeingDesktop's `startNativeChat` is fire-and-forget
-   * for the same reason (src/main.cjs line 550). */
+  /** The Being at `store.connectionAddress` answered `/api/status`. Every
+   * subsystem is told, in installation order, and a failure in one is reported
+   * rather than allowed to abort the rest. Returns immediately. */
   connectionVerified(connection: Connection | null): void;
-  /** No Being is configured any more. Ends the conversations and flushes what is
-   * still being written, so the next binding starts from a complete file. */
+  /** No Being is configured any more. */
   connectionCleared(): Promise<void>;
+  /** Reverse installation order, so a subsystem is torn down before whatever it
+   * was built on top of. One failure does not stop the others. */
   quitting(): Promise<void>;
-  /** The live conversation layer, or null when it could not be built. For later
-   * subsystems (Town pairing mints a scene through it) and for tests. */
+  /** The live conversation layer, or null when it could not be built. */
   readonly chat: ChatSessions | null;
-  /** Settles when the binding started by the last `connectionVerified` has
-   * finished. Only tests need it; the application is driven by `onState`. */
+  /** Settles when the work started by the last `connectionVerified` has finished
+   * in every subsystem. Only tests need it. */
   readonly ready: Promise<unknown>;
 }
 
+const NOT_AVAILABLE = '此功能在当前运行环境不可用。';
+
 export function installDesktopExtensions(ctx: DesktopExtensionsContext): DesktopExtensions {
+  return installSubsystems(ctx, INSTALLERS);
+}
+
+/** The registry machinery, with the installer list as a parameter.
+ *
+ * Production has exactly one caller — the line above, passing `INSTALLERS`. It is
+ * a parameter so tests/subsystem-registry.test.ts can install fakes and assert the
+ * three properties five parallel worktrees depend on (order independence, install
+ * isolation, reverse shutdown) against the code that actually runs, rather than
+ * against a re-creation of it. `INSTALLERS` itself stays module-private so no unit
+ * is tempted to mutate the list at runtime instead of appending a line to it. */
+export function installSubsystems(ctx: DesktopExtensionsContext, installers: readonly SubsystemInstaller[]): DesktopExtensions {
   const report = (scope: string, error: unknown) => { try { ctx.onError?.(scope, error); } catch { /* Reporting a failure must not raise one. */ } };
-  const push = chatPush(() => {
-    const target = ctx.window();
-    return target && !target.isDestroyed() && !target.webContents.isDestroyed() ? target.webContents : null;
-  });
-  // One file per Being identity, beside BeingDesktop 0.8.x's own (docs/interfaces.md §7).
-  const cache = new ChatCache({ directory: path.join(ctx.userData, 'chat-cache'), safeStorage: ctx.secretStorage });
-
-  // The verified connection, as a context the chat client re-parses per request.
-  // `revision` changes only when the identity does, so a send in flight is
-  // abandoned when the user switches Beings but survives re-verifying the same
-  // one (reconnect, manual Portal start).
-  let address = '';
-  let identityKey = '';
-  let revision = 0;
-  let closed = false;
-  let ready: Promise<unknown> = Promise.resolve();
-  let blocked = '';
-
-  let sessions: ChatSessions | null = null;
-  try {
-    sessions = new ChatSessions({
-      desktopId: ctx.desktopId,
-      clientVersion: ctx.clientVersion ?? '',
-      cache,
-      getContext: () => ({ connected: !closed && Boolean(address), connection: address, revision }),
-      ...(ctx.fetchImpl ? { fetchImpl: ctx.fetchImpl } : {}),
-      onEvent: event => push.event(event),
-      onState: snapshot => push.state(snapshot),
-    });
-  } catch (error) {
-    // The only way this throws is a Desktop identity that is not a UUID, which
-    // means `desktop-id.json` could not be read or written. Scene names are built
-    // from it, so there is nothing to fall back to — say which thing is broken.
-    blocked = 'Desktop 身份不可用，原生对话暂时无法使用。请检查客户端配置目录后重启。';
-    report('chat-identity', error);
-  }
-
-  registerChatIpc({ handle: ctx.handle, exclusive: ctx.exclusive, sessions: () => sessions, blocked: () => blocked });
-
-  const settle = async () => {
-    sessions?.end();
-    // Rows already queued: ChatStore hands every change to the cache
-    // synchronously, so by now flush() is waiting for writes, not racing them.
-    try { await cache.flush(); } catch (error) { report('chat-cache-flush', error); }
+  const fetchImpl = ctx.fetchImpl ?? ctx.electron?.net?.fetch ?? fetch;
+  const store: SubsystemSettings = {
+    get connection() { return ctx.store.connection; },
+    get connectionAddress() { return ctx.store.connectionAddress; },
+    get settings() { return ctx.store.settings ?? ({} as Settings); },
+    get extras() { return ctx.store.extras ?? {}; },
+    saveExtra: patch => ctx.store.saveExtra
+      ? ctx.store.saveExtra(patch)
+      : Promise.reject(new Error('设置暂时无法写入，请重启客户端后重试。')),
+  };
+  const electron: ElectronBindings = {
+    WebContentsView: ctx.electron?.WebContentsView ?? null,
+    session: ctx.electron?.session ?? null,
+    net: ctx.electron?.net ?? { fetch: fetchImpl, request: null, isOnline: () => true },
+    clipboard: ctx.electron?.clipboard ?? { readText: async () => '', writeText: async () => { throw new Error(NOT_AVAILABLE); } },
+    // electron's own convention: `openPath` answers with a message on failure.
+    shell: ctx.electron?.shell ?? { openPath: async () => NOT_AVAILABLE, openExternal: async () => { throw new Error(NOT_AVAILABLE); } },
+    ...(ctx.electron?.powerMonitor ? { powerMonitor: ctx.electron.powerMonitor } : {}),
+    safeStorage: ctx.electron?.safeStorage ?? ctx.secretStorage,
   };
 
+  const built = new Map<string, DesktopSubsystem>();
+  const registry: SubsystemRegistry = {
+    get: <K extends keyof SubsystemMap>(key: K) => (built.get(key as string) as SubsystemMap[K] | undefined) ?? null,
+    require: <K extends keyof SubsystemMap>(key: K) => {
+      const value = built.get(key as string);
+      if (!value) throw new Error(`子系统 ${String(key)} 未安装。`);
+      return value as SubsystemMap[K];
+    },
+  };
+  const subsystemContext: SubsystemContext = {
+    handle: ctx.handle,
+    exclusive: ctx.exclusive,
+    window: ctx.window,
+    store,
+    electron,
+    userData: ctx.userData,
+    desktopId: ctx.desktopId,
+    clientVersion: ctx.clientVersion ?? '',
+    fetchImpl,
+    onError: report,
+    registry,
+    push: (channel, payload) => {
+      const target = ctx.window();
+      if (target && !target.isDestroyed() && !target.webContents.isDestroyed()) target.webContents.send(channel, payload);
+    },
+  };
+
+  for (const install of installers) {
+    // One subsystem failing to install must not take the others — or the client
+    // window — with it. The scope names the installer so the log says which.
+    try { const subsystem = install(subsystemContext); built.set(subsystem.key as string, subsystem); }
+    catch (error) { report(`subsystem-install:${install.name}`, error); }
+  }
+  const order = [...built.values()];
+
   return {
-    get chat() { return sessions; },
-    get ready() { return ready; },
+    get chat() { return registry.get('chat')?.sessions ?? null; },
+    get ready() { return Promise.all(order.map(subsystem => subsystem.ready ?? Promise.resolve())); },
     connectionVerified(connection) {
-      const current = sessions;
-      if (closed || !current) return;
-      const next = ctx.store.connectionAddress || connection?.link || '';
-      if (!next) return;
-      let key: string;
-      try { key = beingIdentityKey(next); }
-      catch (error) { report('chat-identity', error); return; }
-      // Set before starting: the first request reads this through getContext.
-      address = next;
-      if (current.open && key === identityKey) return;
-      identityKey = key;
-      const epoch = ++revision;
-      ready = current.start(key).catch(error => {
-        // A binding that has already been replaced fails by design. Only the
-        // current one's failure is the user's problem.
-        if (epoch === revision && !closed) report('chat-sessions-start', error);
-      });
+      for (const subsystem of order) {
+        try { subsystem.connectionVerified?.(connection); }
+        catch (error) { report(`${String(subsystem.key)}-verified`, error); }
+      }
     },
     async connectionCleared() {
-      address = ''; identityKey = ''; revision++;
-      await settle();
+      for (const subsystem of order) {
+        try { await subsystem.connectionCleared?.(); }
+        catch (error) { report(`${String(subsystem.key)}-cleared`, error); }
+      }
     },
     async quitting() {
-      if (closed) return;
-      closed = true;
-      await settle();
+      for (const subsystem of [...order].reverse()) {
+        try { await subsystem.quitting?.(); }
+        catch (error) { report(`${String(subsystem.key)}-quitting`, error); }
+      }
     },
   };
 }
