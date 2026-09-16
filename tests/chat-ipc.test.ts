@@ -23,6 +23,9 @@ const CONNECTION: Connection = { endpoint: "https://echo.beings.town/cz_being", 
 const CHANNELS = [
   "beings:chat-sessions", "beings:chat-view", "beings:chat-send", "beings:chat-stop", "beings:chat-reload",
   "beings:chat-change-session", "beings:chat-rename-session", "beings:chat-forget-session", "beings:chat-composer-data",
+  // Only the conversation layer's channels: the fixture below installs the chat
+  // subsystem alone, so the sidebar ledger's three (I6) are asserted in
+  // tests/shell-state-ipc.test.ts, not here (merge of I3/I2/I4/I6, 2026-09-16).
 ];
 // The five BeingDesktop 0.8.26 answers with `{__townError:true, code, message}`
 // instead of throwing (src/main.cjs line 125 `townMethods`; docs/interfaces.md
@@ -166,7 +169,10 @@ test("a verified connection reads a baseline, probes for a breath already runnin
     const view = await f.call("beings:chat-view", state.active);
     expect(view).toMatchObject({ sessionId: state.active, rows: [{ seq: 4, role: "user", content: "早" }], sent: [], replied: [], live: null, workerResults: [] });
     expect((await f.call("beings:chat-sessions")).cursor).toBe(5);
-    expect(f.pushes.every(push => push.channel === "beings:chat-state")).toBe(true);
+    // A closed whitelist, not a filter: the conversation layer pushes state, and
+    // the sidebar ledger answers a new binding with its own (I6). Anything else
+    // appearing here would be a channel nobody declared.
+    expect(f.pushes.every(push => ["beings:chat-state", "beings:sidebar"].includes(push.channel))).toBe(true);
     expect(f.pushes.at(-1)!.payload).toMatchObject({ open: true, identityKey: "bound" });
     // Re-verifying the same Being keeps the timeline instead of rebuilding it.
     const before = f.calls.length;

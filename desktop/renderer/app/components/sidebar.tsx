@@ -6,9 +6,14 @@
 // DEVIATIONS from 0.8.26, all recorded in docs/migration/p1-ui.md:
 // · the session menu is drawn here rather than by Electron's native menu, since
 //   this shell has no `showSessionMenu` channel;
-// · pins, projects and archives are in memory only (OrganizerModel);
 // · deleting a conversation asks a second time in the shell's own dialog, where
 //   0.8.26 relied on the native menu being a deliberate act.
+//
+// Pins, archives and project folders are the main process's since integration
+// unit I6 (docs/migration/i6-shell-state.md): every entry below calls the ledger
+// and renders what it answers with, so a refused change leaves the sidebar
+// showing what was actually saved. `app.run` turns a refusal into the toast
+// 0.8.26 shows from its own `mutate` (renderer/sidebar.js line 36).
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { AppModel } from "../models/app";
 import { useModel } from "../../shared/hooks/use-model";
@@ -17,6 +22,22 @@ import { age, basename } from "../../conversation/models/organizer";
 import type { ConversationModel } from "../../conversation/models/conversation";
 import type { ChatSessionSummary } from "../../../shared/desktop-types";
 import { sidebarSections } from "../slots";
+import { NO_SHELL_STATE } from "../../settings/models/shell-state";
+
+/** A folded project folder is remembered per Being, exactly as 0.8.26 remembers
+ * it: `localStorage` under `being-sidebar-v1:${scope}:folder:${path}`
+ * (renderer/sidebar.js `foldKey` / `savePreference`), which is what makes folding
+ * one outlive a reload as well as a ledger update. Same rule, same stored text
+ * (`true` / `false`), under the `beings:` prefix this shell already uses for
+ * `beings:reading-size`. A window whose storage is unavailable — blocked or
+ * cleared site data — opens everything, which is 0.8.26's fallback too. */
+const foldKey = (scope: string, project: string) => `beings:sidebar-v1:${scope || "local"}:folder:${project}`;
+const readFold = (key: string) => {
+  try { return localStorage.getItem(key) === "true"; } catch { return false; }
+};
+const saveFold = (key: string, folded: boolean) => {
+  try { localStorage.setItem(key, String(folded)); } catch { /* Optional preference. */ }
+};
 
 export function Sidebar({ model }: { model: AppModel }) {
   const app = useModel(model);
@@ -26,11 +47,12 @@ export function Sidebar({ model }: { model: AppModel }) {
   const [editing, setEditing] = useState("");
   const [forgetting, setForgetting] = useState<ChatSessionSummary | null>(null);
   const [search, setSearch] = useState(false);
+  // `AppModel` catches a feature model that fails to build and carries on without
+  // the key, so the sidebar must not be the thing that turns one broken model into
+  // an empty window (app/models/app.ts).
+  const shell = useModel(app.features.shellState ?? NO_SHELL_STATE);
   const connected = conversation.connected;
   const groups = organizer.groups(conversation.sessions);
-  useEffect(() => {
-    organizer.setProjects(app.snapshot?.settings.workspace ? [app.snapshot.settings.workspace] : []);
-  }, [organizer, app.snapshot?.settings.workspace]);
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.repeat) return;
@@ -50,6 +72,7 @@ export function Sidebar({ model }: { model: AppModel }) {
       session={session}
       app={app}
       conversation={conversation}
+      busy={shell.busy}
       editing={editing === session.id}
       menuOpen={menu === session.id}
       onMenu={open => setMenu(open ? session.id : "")}
@@ -62,6 +85,7 @@ export function Sidebar({ model }: { model: AppModel }) {
       <div className="sidebar-head">
         <button
           type="button"
+          id="new-chat-session"
           className="sidebar-action"
           disabled={!connected}
           title={app.api?.platform === "win32" ? "新会话 Ctrl N" : "新会话 ⌘ N"}
@@ -72,6 +96,7 @@ export function Sidebar({ model }: { model: AppModel }) {
         </button>
         <button
           type="button"
+          id="sidebar-search"
           className="sidebar-action"
           title={app.api?.platform === "win32" ? "搜索会话 Ctrl K" : "搜索会话 ⌘ K"}
           onClick={() => setSearch(true)}
@@ -92,10 +117,40 @@ export function Sidebar({ model }: { model: AppModel }) {
           </section>
         )}
         {groups.projects.map(project => (
-          <ProjectGroup key={project.path} project={project} connected={connected} conversation={conversation}>
+          <ProjectGroup
+            // The scope belongs in the key: the fold is read from storage once per
+            // mount and is the current Being's, so switching Being has to re-read
+            // it rather than carry the previous Being's folds over.
+            key={`${organizer.scope}:${project.path}`}
+            project={project}
+            scope={organizer.scope}
+            connected={connected}
+            busy={shell.busy}
+            conversation={conversation}
+            app={app}
+          >
             {project.sessions.map(row)}
           </ProjectGroup>
         ))}
+        <button
+          type="button"
+          id="add-project"
+          className="sidebar-add-project"
+          // Nothing to add it to in a window with no ledger: the note below says
+          // why rather than letting the dialog open onto a folder nobody saves.
+          disabled={shell.busy || !organizer.persistent}
+          title="把一个本机文件夹加进侧栏，用来给会话分组"
+          onClick={() => void app.run(() => shell.addProject())}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          添加项目文件夹
+        </button>
+        {!organizer.persistent && (
+          <p className="sidebar-note" role="status">
+            这个窗口没有连上侧栏账本，置顶、归档与项目只在本次打开期间有效。
+          </p>
+        )}
+        {shell.error && <p className="sidebar-note" role="status">{shell.error}</p>}
         <section className="sidebar-section" aria-label="会话">
           <h2 className="sidebar-section-title">会话</h2>
           {groups.standalone.map(row)}
@@ -147,38 +202,91 @@ export function Sidebar({ model }: { model: AppModel }) {
   );
 }
 
-function ProjectGroup({ project, connected, conversation, children }: {
+function ProjectGroup({ project, scope, connected, busy, conversation, app, children }: {
   project: { path: string; name: string; sessions: ChatSessionSummary[] };
+  scope: string;
   connected: boolean;
+  busy: boolean;
   conversation: ConversationModel;
+  app: AppModel;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(true);
+  // Folding is the window's, not the ledger's. It survives a ledger update because
+  // nothing the main process sends carries it, and it survives a reload because it
+  // is written to storage under the Being's own key — the two rules 0.8.26 pins as
+  // `fold-survives-state-update` and `fold-survives-reload` (test/sidebar-ui.cjs).
+  const key = foldKey(scope, project.path);
+  const [folded, setFolded] = useState(() => readFold(key));
+  const open = !folded;
+  const [menu, setMenu] = useState(false);
   const id = useId();
+  const row = useRef<HTMLDivElement>(null);
+  // Same dismissal as the conversation menu below: a click anywhere else closes
+  // it, so a menu is never left hanging over the list.
+  useEffect(() => {
+    if (!menu) return;
+    const outside = (event: Event) => { if (!row.current?.contains(event.target as Node)) setMenu(false); };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [menu]);
   return (
     <section className="sidebar-section" aria-label={`项目 ${project.name}`}>
-      <div className="sidebar-project-row">
+      <div className="sidebar-project-row" ref={row}>
         <button
           type="button"
           className="sidebar-project-toggle"
           aria-expanded={open}
           aria-controls={id}
           title={project.path}
-          onClick={() => setOpen(value => !value)}
+          onClick={() => { const next = !folded; setFolded(next); saveFold(key, next); }}
         >
           <svg className={`sidebar-chevron${open ? " is-open" : ""}`} viewBox="0 0 12 12" aria-hidden="true"><path d="m4.5 3 3 3-3 3" /></svg>
           {project.name}
         </button>
         <button
           type="button"
-          className="icon-button compact"
+          className="icon-button compact project-new-task"
           aria-label={`在 ${project.name} 中新建会话`}
           title={`在 ${project.name} 中新建会话`}
-          disabled={!connected}
-          onClick={() => void conversation.create().then(id => { if (id) conversation.organizer.move(id, project.path); })}
+          disabled={!connected || busy}
+          onClick={() => void app.run(async () => {
+            const created = await conversation.create();
+            if (!created) return;
+            // File it, then raise it: 0.8.26 sends the same two changes for a
+            // conversation created inside a project (src/main.cjs line 1170).
+            await conversation.organizer.move(created, project.path);
+            await conversation.organizer.touch(created);
+          })}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
         </button>
+        <button
+          type="button"
+          className="icon-button compact project-more"
+          aria-haspopup="menu"
+          aria-expanded={menu}
+          aria-label={`项目「${project.name}」的更多操作`}
+          onClick={() => setMenu(value => !value)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></svg>
+        </button>
+        {menu && (
+          <div className="sidebar-menu" role="menu" aria-label="项目操作">
+            <button
+              type="button"
+              role="menuitem"
+              disabled={busy}
+              onClick={() => {
+                setMenu(false);
+                // The folder and its files are untouched; the conversations filed
+                // under it become standalone.
+                void app.run(() => conversation.organizer.removeProject(project.path));
+              }}
+            >
+              从侧栏移除项目
+            </button>
+          </div>
+        )}
       </div>
       <div id={id} hidden={!open}>
         {children}
@@ -188,10 +296,11 @@ function ProjectGroup({ project, connected, conversation, children }: {
   );
 }
 
-function SessionRow({ session, app, conversation, editing, menuOpen, onMenu, onEdit, onForget }: {
+function SessionRow({ session, app, conversation, busy, editing, menuOpen, onMenu, onEdit, onForget }: {
   session: ChatSessionSummary;
   app: AppModel;
   conversation: ConversationModel;
+  busy: boolean;
   editing: boolean;
   menuOpen: boolean;
   onMenu: (open: boolean) => void;
@@ -228,7 +337,11 @@ function SessionRow({ session, app, conversation, editing, menuOpen, onMenu, onE
       />
     );
   return (
-    <div className="sidebar-task-row" onContextMenu={event => { event.preventDefault(); onMenu(true); }}>
+    <div
+      className="sidebar-task-row"
+      data-task-id={session.id}
+      onContextMenu={event => { event.preventDefault(); onMenu(true); }}
+    >
       <button
         type="button"
         className={`session-shortcut${active ? " active" : ""}`}
@@ -243,7 +356,7 @@ function SessionRow({ session, app, conversation, editing, menuOpen, onMenu, onE
       >
         <span className={`session-activity-light ${activity || "inactive"}`} aria-hidden="true" />
         <span className="session-title">{session.title || "新会话"}</span>
-        <span className="task-age">{age(session)}</span>
+        <span className="task-age">{age(session, Date.now(), value.touchedAt)}</span>
       </button>
       <button
         type="button"
@@ -270,7 +383,12 @@ function SessionRow({ session, app, conversation, editing, menuOpen, onMenu, onE
             buttons[(index + (event.key === "ArrowDown" ? 1 : buttons.length - 1) + buttons.length) % buttons.length]?.focus();
           }}
         >
-          <button type="button" role="menuitem" onClick={() => { onMenu(false); organizer.pin(session.id); }}>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={busy}
+            onClick={() => { onMenu(false); void app.run(() => organizer.pin(session.id)); }}
+          >
             {value.pinned ? "取消置顶" : "置顶"}
           </button>
           <button
@@ -282,12 +400,23 @@ function SessionRow({ session, app, conversation, editing, menuOpen, onMenu, onE
             重命名
           </button>
           {organizer.projects.filter(path => path !== value.project).map(path => (
-            <button key={path} type="button" role="menuitem" onClick={() => { onMenu(false); organizer.move(session.id, path); }}>
+            <button
+              key={path}
+              type="button"
+              role="menuitem"
+              disabled={busy}
+              onClick={() => { onMenu(false); void app.run(() => organizer.move(session.id, path)); }}
+            >
               移到 {basename(path)}
             </button>
           ))}
           {value.project && (
-            <button type="button" role="menuitem" onClick={() => { onMenu(false); organizer.move(session.id, ""); }}>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={busy}
+              onClick={() => { onMenu(false); void app.run(() => organizer.move(session.id, "")); }}
+            >
               移出项目
             </button>
           )}
@@ -295,10 +424,16 @@ function SessionRow({ session, app, conversation, editing, menuOpen, onMenu, onE
           <button
             type="button"
             role="menuitem"
+            disabled={busy}
             onClick={() => {
               onMenu(false);
-              organizer.archive(session.id);
-              app.toast(value.archived ? "会话已恢复" : "会话已归档，可从搜索中恢复。");
+              // The confirmation is only shown for a change that was saved:
+              // 0.8.26 toasts after its `mutate` resolves, not before it
+              // (renderer/sidebar.js line 165).
+              void app.run(async () => {
+                await organizer.archive(session.id);
+                app.toast(value.archived ? "会话已恢复" : "会话已归档，可从搜索中恢复。");
+              });
             }}
           >
             {value.archived ? "取消归档" : "归档会话"}
@@ -341,7 +476,7 @@ function RenameEditor({ session, rename, onDone }: {
     input.current?.select();
   };
   return (
-    <div className="sidebar-task-row session-editing">
+    <div className="sidebar-task-row session-editing" data-task-id={session.id}>
       <input
         ref={input}
         className="session-name-input"
@@ -380,10 +515,15 @@ function SearchDialog({ open, onClose, app }: { open: boolean; onClose: () => vo
   }, [open]);
   const selected = Math.min(index, Math.max(0, results.length - 1));
   const openResult = (session: ChatSessionSummary) => {
-    if (organizer.metadata(session.id).archived) organizer.archive(session.id);
-    onClose();
-    app.navigate("chat");
-    void conversation.select(session.id);
+    // Restoring first, and only opening it if that was saved: an archived
+    // conversation the ledger refused to restore would otherwise open into a
+    // sidebar that still does not list it (renderer/sidebar.js line 196).
+    void app.run(async () => {
+      if (organizer.metadata(session.id).archived) await organizer.archive(session.id);
+      onClose();
+      app.navigate("chat");
+      await conversation.select(session.id);
+    });
   };
   return (
     <Dialog id="session-search" aria-label="搜索会话" open={open} onClose={onClose} dismissOnBackdrop>

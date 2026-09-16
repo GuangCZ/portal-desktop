@@ -2,6 +2,7 @@ import type { ChatAPI } from './desktop-types';
 import type { TerminalAPI, ToolBrowserAPI } from './desktop-types';
 import type { DesktopToolsAPI } from './desktop-types';
 import type { OrchestrationAPI } from './desktop-types';
+import type { ShellStateAPI } from './shell-state-types';
 export interface UpdateState {
   phase: 'idle' | 'checking' | 'available' | 'current' | 'unavailable';
   currentVersion: string; latestVersion?: string; message: string; releaseUrl: string;
@@ -118,6 +119,7 @@ export interface DesktopAPI {
   toolBrowser: ToolBrowserAPI;
   tools: DesktopToolsAPI;
   orchestration: OrchestrationAPI;
+  shellState: ShellStateAPI;
   // ────────────────────────────────────────────────────────────────────────────
 }
 declare global { interface Window { beings: DesktopAPI } }

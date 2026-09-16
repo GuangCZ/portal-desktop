@@ -22,6 +22,7 @@ import { toolBrowserModelFactory } from '../../tool-browser/models/tool-browser'
 import { toolsModel } from '../../tools/slot';
 import { orchestrationModel } from '../../orchestration/models/workers';
 import { featureTasksModel } from '../../features/models/feature-tasks';
+import { ShellStateModel } from '../../settings/models/shell-state';
 
 /** Each feature adds its key with a `declare module '.../models/registry'` block
  * in its own file, so landing a feature never edits this one. */
@@ -54,5 +55,6 @@ export const FEATURE_MODELS: FeatureModelFactory[] = [
   toolsModel,
   orchestrationModel,
   featureTasksModel,
+  { key: 'shellState', create: (api, app) => new ShellStateModel(api, app) },
 ];
 // ──────────────────────────────────────────────────────────────────────────────

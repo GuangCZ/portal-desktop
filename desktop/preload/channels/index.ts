@@ -15,6 +15,7 @@ import { terminal } from './terminal';
 import { toolBrowser } from './tool-browser';
 import { tools } from './tools';
 import { orchestration } from './orchestration';
+import { shellState } from './shell-state';
 
 export const desktopChannels = {
   chat,
@@ -22,6 +23,7 @@ export const desktopChannels = {
   toolBrowser,
   tools,
   orchestration,
+  shellState,
 };
 // ──────────────────────────────────────────────────────────────────────────────
 

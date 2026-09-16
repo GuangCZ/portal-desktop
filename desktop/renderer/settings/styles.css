@@ -1,0 +1,27 @@
+/* The sidebar footer's links and the two static pages they open; 2026-09-16
+   (integration unit I6). Variables and rhythm are the shell's
+   (desktop/renderer/app/styles.css), so both themes come for free. Imported from
+   settings/components/entry.tsx rather than from renderer/main.tsx, which this
+   unit does not own. */
+
+.shell-links{display:flex;align-items:baseline;gap:6px;width:100%;margin-top:6px;font-size:10px;color:var(--muted)}
+.shell-link{padding:2px 0;font-size:10px;color:var(--muted);background:none}
+.shell-link:hover{color:var(--text)}
+
+.shell-page{display:flex;flex-direction:column;gap:14px;max-width:62ch}
+.shell-page h3{margin:0;font-size:15px;font-weight:500}
+.shell-page .field-help{margin:0;line-height:1.9}
+.shell-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px 22px;margin:0}
+.shell-facts-block{grid-template-columns:1fr}
+.shell-facts>div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.shell-facts dt{font-size:10px;letter-spacing:.6px;color:var(--muted)}
+.shell-facts dd{margin:0;font-size:12px;line-height:1.9;color:var(--text);overflow-wrap:anywhere}
+.shell-facts-block dd{color:var(--secondary)}
+.shell-mono{font-family:var(--code-font,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:11px}
+
+/* The sidebar's own note when a change could not be saved, and the row that adds
+   a project folder. */
+.sidebar-note{margin:4px 0;padding:0 8px;font-size:11px;line-height:1.8;color:var(--warning,var(--muted))}
+.sidebar-add-project{display:flex;align-items:center;gap:6px;width:100%;padding:6px 8px;border-radius:7px;font-size:11px;color:var(--muted);text-align:left}
+.sidebar-add-project:hover:not(:disabled){color:var(--text)}
+.sidebar-add-project svg{width:12px;height:12px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
