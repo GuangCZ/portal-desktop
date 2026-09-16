@@ -225,8 +225,23 @@ context 为 `{connected: true, connection: {url: 'https://echo.beings.town/cz_be
 
 | 文件 | 状态 |
 |---|---|
-| `desktop/main/chat/protocol-types.ts` | 未开始 |
-| `desktop/main/chat/being-chat.ts` | 未开始 |
+| `desktop/main/chat/protocol-types.ts` | 已移植 |
+| `desktop/main/chat/being-chat.ts` | 已移植，测试通过（30/30） |
 | `desktop/main/chat/recovery.ts` | 未开始 |
-| `tests/being-chat.test.ts` | 未开始 |
+| `tests/being-chat.test.ts` | 已移植，30 个用例全绿 |
 | `tests/being-recovery.test.ts` | 未开始 |
+
+### 移植时的取舍（being-chat.ts）
+
+- `parseConnection` 改用本仓库既有的 `desktop/main/chat/connection.ts`（返回 `{endpoint, being,
+  token, relaySecret, link}`，`endpoint` 即原来的 `apiBase`），不再重复 BeingDesktop 的
+  `src/security.cjs`。两者对 `https://host/being/?token=…` 与 `api=` 同源参数的解析结果一致；
+  本仓库的版本另外限制 token 字符集、不接受 `[::1]` 回环写法。
+- `_readJson` 原本 `for await (const chunk of response.body)`（Node 的 Response body 可异步迭代，
+  DOM 类型里不可），移植为等价的 reader 循环；另外给 `body` 为 null 的 200 响应补了
+  `INVALID_RESPONSE`（原来会抛裸 TypeError）。读到的字节完全一致。
+- `wrapMessage` 留在 being-chat.ts 里（`unwrapMessage` 已被并行块放进 `frame.ts`），
+  两者在后续阶段合并。
+- `randomUUID` 变成可注入的构造参数（默认仍是 `node:crypto` 的那个），符合本阶段
+  「外部依赖用构造参数注入」的要求；默认行为不变。
+- `ChatEvent` 是可辨识联合，`emit()` 用分发式 `Omit`（`ChatEventBody`）保留各成员自己的字段。

@@ -1,0 +1,677 @@
+// Desktop's own message layer, ported line for line from BeingDesktop 0.8.26
+// src/being-chat.cjs (509 lines); 2026-09-16. Talks to the five Being endpoints
+// directly instead of injecting scripts into the Loom page, so conversations need
+// no in-body routing protocol:
+//   POST /api/chat/stream   send; streams when the Being is idle, splices when it is breathing
+//   GET  /api/history       timeline (limit / after)
+//   GET  /api/stream/active probe + replay buffer
+//   POST /api/stop          interrupt
+//   GET  /api/status        being identity
+//
+// A Desktop conversation is a scene, and the scene name encodes the conversation, so any event or
+// history row routes back to its conversation with no registry. `scene_id` is the only routing key
+// the server persists; `client_ref` is echoed on meta but never stored, so it only confirms that a
+// live stream is the one we asked for.
+//
+// Measured against a real Being on 2026-09-11 (see BeingDesktop docs/desktop-message-layer.md,
+// whose sections are cited below as §一 … §十):
+//   - Sends are serialized server-side. Two concurrent sends from different scenes both landed, in
+//     order, each reply carrying its own scene_id: attribution survives concurrency (§三).
+//   - A send that arrives mid-breath returns `202 {"spliced":true}` and gets no stream of its own.
+//     Its reply appears on whichever connection is already open, after a meta event with
+//     `continuation: true` switches scenes (loom.html:2852 `breath_leftovers`). A connection
+//     therefore belongs to no single conversation, and events must be routed by scene rather than
+//     filtered to the sender — filtering would drop a spliced reply that no other connection will
+//     ever deliver (§一, §二).
+//   - Replay events carry scene_id as well, shaped `{event, seq, data}`, so a recovered buffer
+//     fans out exactly like a live stream (§五).
+//   - Images go as multimodal content blocks (`content: [{type:'text'}, {type:'image'}]`) in place
+//     of `message`; the Being sees them directly, without a vision tool. The server accepts only
+//     `text`, `image` and `image_url` blocks — an `audio` block is refused with 422 before anything
+//     is recorded — and a 9.5 MB PNG went through. History keeps the text alone: the image is not
+//     persisted anywhere and the next breath cannot see it. A block list with no text lands no user
+//     row at all and the Being answers the previous text instead, so text is required (§十).
+//
+// Exports
+//   class BeingChat
+//     constructor(options: BeingChatOptions)
+//     onEvent: (event: ChatEvent) => void            // mutable; BeingRecovery takes it over
+//     reset(): void
+//     inFlight(sessionId: string): boolean
+//     status(options?): Promise<StatusResult>
+//     history(options?): Promise<HistoryPage>
+//     probe(options?): Promise<ProbeResult>
+//     stop(options): Promise<StopResult>
+//     send(options): Promise<SendResult>
+//     replay(options?): { cursor: number } & RouterState
+//     router(options?): ChatRouter
+//   consumeEvents, sceneId, sessionFromScene, inScene, historyRow, imageBlocks, imageBytes,
+//   wrapMessage, IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_MESSAGE, HISTORY_LIMIT
+//
+// Call points the coming chat-sessions port needs (BeingDesktop src/chat-sessions.cjs):
+//   new BeingChat({getContext, desktopId, clientVersion, prepareMessage, fetchImpl?})
+//   chat.inFlight(sessionId)    — the composer's "awaiting a turn" marker (line 139)
+//   chat.reset()                — on unbinding a Being (line 121)
+//   sceneId(desktopId, id)      — channel sessions and stop()'s owner lookup (lines 192, 255)
+//   imageBytes / IMAGE_TYPES / MAX_IMAGE_BYTES / MAX_IMAGES — the composer's own envelope check
+//   recovery.send / stop / reconcile / checkActiveStream / dispose / state — via BeingRecovery
+//   chat.onEvent — consumed through BeingRecovery, whose events are delta / think / tool_use /
+//     reply / settled / error (src/chat-sessions.cjs `_onEvent`, line 279)
+
+import { randomUUID as nodeRandomUUID } from 'node:crypto';
+import { parseConnection } from './connection';
+import {
+  MESSAGES,
+  type ChatContext,
+  type ChatError,
+  type ChatErrorCode,
+  type ChatEvent,
+  type ChatEventBody,
+  type ChatRouter,
+  type ContentBlock,
+  type HistoryPage,
+  type HistoryRow,
+  type ImageBlock,
+  type ImageInput,
+  type PreparedMessage,
+  type ProbeResult,
+  type RawReplayEvent,
+  type ReplayEvent,
+  type RequestContext,
+  type RouterProgress,
+  type RouterState,
+  type SceneMeta,
+  type SendBody,
+  type SendResult,
+  type StatusResult,
+  type StopResult,
+} from './protocol-types';
+
+const MAX_BYTES = 4 * 1024 * 1024;
+export const MAX_MESSAGE = 200000;
+const MAX_EVENTS = 5000;
+export const HISTORY_LIMIT = 100;
+// The image envelope measured on 2026-09-11: one 9.5 MB PNG was accepted, so a message's images
+// stay within that total. Formats are the ones Loom's attachment path already sent to Heart.
+export const IMAGE_TYPES = /^image\/(?:png|jpeg|webp|gif)$/;
+export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const MAX_IMAGES = 8;
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const fail = (code: ChatErrorCode): ChatError =>
+  Object.assign(new Error(MESSAGES[code] || MESSAGES.SERVICE_ERROR), { code });
+
+const errorCode = (error: unknown): unknown => (error as { code?: unknown } | null | undefined)?.code;
+
+// Runtime context is transient request metadata. Keep it outside the human message in local
+// history, while supplying it as text to Heart (scene_meta is routing metadata). Ported from
+// BeingDesktop src/orchestration-message.cjs lines 18-26; the unwrap half already lives in
+// ./frame.ts and the two merge in a later stage.
+const CONTEXT_PREFIX = '[Being Desktop request context v1; length=';
+const CONTEXT_SUFFIX = '\n[/Being Desktop request context v1]\n\n';
+export function wrapMessage(text: string, context?: string): string {
+  if (!context) return text;
+  const trimmed = context.trimEnd();
+  return CONTEXT_PREFIX + trimmed.length + ']\n' + trimmed + CONTEXT_SUFFIX + text;
+}
+
+// A Desktop conversation maps to exactly one scene, and the mapping is reversible both ways.
+export function sceneId(desktopId: string, sessionId: string): string {
+  if (!UUID.test(desktopId || '') || !UUID.test(sessionId || '')) throw fail('INVALID_REQUEST');
+  return `desktop-${desktopId}-${sessionId}`;
+}
+
+// The image blocks of one message: `[{media_type, data}]`, base64 payloads only, within the
+// measured envelope. Anything else is refused before the network, like the other inputs.
+export function imageBlocks(images?: ImageInput[] | null | unknown): ImageBlock[] {
+  if (images === undefined || images === null) return [];
+  if (!Array.isArray(images) || images.length > MAX_IMAGES) throw fail('INVALID_REQUEST');
+  let total = 0;
+  return (images as unknown[]).map(entry => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw fail('INVALID_REQUEST');
+    const { media_type: mediaType, data } = entry as ImageInput;
+    if (typeof mediaType !== 'string' || !IMAGE_TYPES.test(mediaType)) throw fail('INVALID_REQUEST');
+    if (typeof data !== 'string' || !data || data.length % 4 !== 0 || !BASE64.test(data)) throw fail('INVALID_REQUEST');
+    total += imageBytes(data);
+    if (total > MAX_IMAGE_BYTES) throw fail('INVALID_REQUEST');
+    return { type: 'image', media_type: mediaType, data };
+  });
+}
+
+// Decoded size of a base64 payload, without decoding it.
+export function imageBytes(data: string): number {
+  return Math.floor((data.length * 3) / 4) - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0);
+}
+
+// Reverse of sceneId: the routing step for every event and history row. Empty means the scene is
+// not one of ours — another Desktop, or the Loom page's own `loom-*` scene on the same Being.
+export function sessionFromScene(desktopId: string, scene: unknown): string {
+  if (typeof scene !== 'string' || !UUID.test(desktopId || '')) return '';
+  const prefix = `desktop-${desktopId}-`;
+  if (!scene.startsWith(prefix)) return '';
+  const sessionId = scene.slice(prefix.length);
+  return UUID.test(sessionId) ? sessionId : '';
+}
+
+// Unlike Loom (loom.html:3638), a row without a scene predates scene support and belongs to no
+// conversation in particular: Desktop multiplexes several conversations on one timeline, so
+// admitting unscoped rows would show every old message in every conversation. Separator rows
+// (`from: system`, e.g. `[breath yielded to human]`) are unscoped too. Such rows surface only
+// through a session's own stored transcript, which is why the renderer must tell the user that
+// pre-scene history is hidden rather than let it look like data loss (§七).
+export function inScene(row: unknown, scene: string): boolean {
+  const value = row && typeof row === 'object' ? (row as { scene_id?: unknown }).scene_id : null;
+  return typeof value === 'string' && value === scene;
+}
+
+export function historyRow(value: unknown): HistoryRow | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as { seq?: unknown; content?: unknown; role?: unknown; at?: unknown; from?: unknown; scene_id?: unknown };
+  const seq = Number(raw.seq);
+  if (!Number.isSafeInteger(seq) || seq <= 0) return null;
+  if (typeof raw.content !== 'string') return null;
+  const role: HistoryRow['role'] = raw.role === 'user' ? 'user' : 'being';
+  const row: HistoryRow = {
+    seq,
+    role,
+    content: raw.content.slice(0, MAX_MESSAGE),
+    at: typeof raw.at === 'string' ? raw.at.slice(0, 64) : '',
+  };
+  if (typeof raw.from === 'string') row.from = raw.from.slice(0, 64);
+  if (typeof raw.scene_id === 'string') row.scene_id = raw.scene_id.slice(0, 200);
+  return row;
+}
+
+// SSE reader. Server-Sent Events are framed by blank lines; `data:` lines concatenate.
+export async function consumeEvents(
+  body: ReadableStream<Uint8Array> | null | undefined,
+  onEvent: (type: string, data: unknown) => void,
+): Promise<void> {
+  if (!body) throw fail('INVALID_RESPONSE');
+  const reader = body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let pending = '', type = '', size = 0;
+  let data: string[] = [];
+  const flush = () => {
+    if (data.length) {
+      let parsed: unknown;
+      try { parsed = JSON.parse(data.join('\n')); } catch { throw fail('INVALID_RESPONSE'); }
+      onEvent(type || 'message', parsed);
+    }
+    type = ''; data = []; size = 0;
+  };
+  const line = (value: string) => {
+    if (!value) return flush();
+    size += value.length;
+    if (size > MAX_BYTES) throw fail('INVALID_RESPONSE');
+    if (value.startsWith(':')) return;
+    const at = value.indexOf(':');
+    const key = at < 0 ? value : value.slice(0, at);
+    const content = at < 0 ? '' : value.slice(at + 1).replace(/^ /, '');
+    if (key === 'event') type = content;
+    if (key === 'data') data.push(content);
+  };
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      pending += decoder.decode(part.value, { stream: true });
+      let match: RegExpExecArray | null;
+      while ((match = /\r\n|\r(?!$)|\n/.exec(pending))) {
+        line(pending.slice(0, match.index));
+        pending = pending.slice(match.index + match[0].length);
+      }
+      if (pending.length + size > MAX_BYTES) throw fail('INVALID_RESPONSE');
+    }
+    // A truncated trailing event is discarded; history reconciliation recovers it.
+  } finally { void reader.cancel().catch(() => {}); }
+}
+
+export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+
+export interface BeingChatOptions {
+  getContext: () => ChatContext | null | undefined;
+  desktopId: string;
+  fetchImpl?: FetchLike;
+  onEvent?: (event: ChatEvent) => void;
+  clientVersion?: string;
+  prepareMessage?: ((options: { sessionId: string }) => Promise<PreparedMessage | null | undefined> | PreparedMessage | null | undefined) | null;
+  /** Injected so a test can make client_ref deterministic; the default is the
+   * Node source the original imported directly (src/being-chat.cjs line 33). */
+  randomUUID?: () => string;
+}
+
+interface RequestOptions {
+  method?: string;
+  query?: Record<string, string | number>;
+  body?: SendBody | Record<string, never>;
+  accept?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+export interface RouterOptions {
+  scene?: string;
+  sessionId?: string;
+  onDelta?: (text: string) => void;
+  onProgress?: (progress: RouterProgress) => void;
+}
+
+export interface SendOptions {
+  sessionId: string;
+  text: string;
+  images?: ImageInput[] | null;
+  sceneMeta?: SceneMeta;
+  signal?: AbortSignal;
+  onDelta?: (text: string) => void;
+  onProgress?: (progress: RouterProgress) => void;
+  router?: ChatRouter | null;
+}
+
+export interface ReplayOptions {
+  events?: RawReplayEvent[];
+  from?: number;
+  router?: ChatRouter | null;
+  sessionId?: string;
+  scene?: string;
+}
+
+export class BeingChat {
+  readonly getContext: () => ChatContext | null | undefined;
+  readonly desktopId: string;
+  readonly fetchImpl: FetchLike;
+  /** Mutable on purpose: BeingRecovery takes the channel over when it binds
+   * (src/being-recovery.cjs line 68). */
+  onEvent: (event: ChatEvent) => void;
+  readonly clientVersion: string;
+  readonly prepareMessage: BeingChatOptions['prepareMessage'];
+  private readonly randomUUID: () => string;
+  private _epoch = 0;
+  private readonly _requests = new Set<AbortController>();
+  // client_ref → sessionId for sends still in flight. Routing no longer needs it — the scene
+  // name carries that — but the composer does, to show which conversations are awaiting a turn.
+  private readonly _pending = new Map<string, string>();
+
+  constructor({
+    getContext,
+    desktopId,
+    fetchImpl = globalThis.fetch,
+    onEvent = () => {},
+    clientVersion = '',
+    prepareMessage = null,
+    randomUUID = nodeRandomUUID,
+  }: BeingChatOptions) {
+    this.getContext = getContext;
+    this.desktopId = desktopId;
+    this.fetchImpl = fetchImpl;
+    this.onEvent = onEvent;
+    this.clientVersion = clientVersion;
+    this.prepareMessage = prepareMessage;
+    this.randomUUID = randomUUID;
+  }
+
+  reset(): void {
+    this._epoch++;
+    for (const controller of this._requests) controller.abort();
+    this._requests.clear();
+    this._pending.clear();
+  }
+
+  inFlight(sessionId: string): boolean {
+    for (const value of this._pending.values()) if (value === sessionId) return true;
+    return false;
+  }
+
+  private _context(expected?: RequestContext): RequestContext {
+    const value = this.getContext();
+    if (!value?.connected || !value.connection) throw fail('NOT_CONNECTED');
+    let connection;
+    const address = typeof value.connection === 'string' ? value.connection : value.connection.url || '';
+    try { connection = parseConnection(address); }
+    catch { throw fail('NOT_CONNECTED'); }
+    const next: RequestContext = { apiBase: connection.endpoint, token: connection.token, revision: value.revision ?? 0, epoch: this._epoch };
+    if (expected && (next.apiBase !== expected.apiBase || next.token !== expected.token
+      || next.revision !== expected.revision || next.epoch !== expected.epoch)) throw fail('SESSION_CHANGED');
+    return next;
+  }
+
+  // The chat endpoints authenticate by query token: Authorization is rejected with 403 here,
+  // the opposite of the Town client. Verified against a live Being on 2026-09-11.
+  private _url(ctx: RequestContext, route: string, query: Record<string, string | number> = {}): string {
+    const url = new URL(ctx.apiBase + route);
+    url.searchParams.set('token', ctx.token);
+    for (const [key, value] of Object.entries(query)) url.searchParams.set(key, String(value));
+    return url.href;
+  }
+
+  private async _request(ctx: RequestContext, route: string, options: RequestOptions = {}): Promise<{ response: Response; controller: AbortController; signal: AbortSignal }> {
+    const { method = 'GET', query, body, accept = 'application/json', signal, timeoutMs = 30000 } = options;
+    const controller = new AbortController();
+    this._requests.add(controller);
+    const combined = AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
+    try {
+      if (combined.aborted) throw fail('ABORTED');
+      const response = await this.fetchImpl(this._url(ctx, route, query), {
+        method,
+        headers: { Accept: accept, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: combined, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', cache: 'no-store',
+      });
+      this._context(ctx);
+      if (response.status === 401 || response.status === 403) { void response.body?.cancel().catch(() => {}); throw fail('AUTH_REQUIRED'); }
+      if (!response.ok || response.redirected) { void response.body?.cancel().catch(() => {}); throw fail('SERVICE_ERROR'); }
+      return { response, controller, signal: combined };
+    } catch (error) {
+      this._requests.delete(controller); controller.abort();
+      this._context(ctx);
+      if (signal?.aborted) throw fail('ABORTED');
+      const code = errorCode(error);
+      if (typeof code === 'string' && Object.hasOwn(MESSAGES, code)) throw error;
+      throw fail('NETWORK_ERROR');
+    }
+  }
+
+  private async _readJson(ctx: RequestContext, response: Response): Promise<unknown> {
+    if (response.status === 204) return null;
+    if (!response.headers.get('content-type')?.includes('application/json')) throw fail('INVALID_RESPONSE');
+    // The original iterated `response.body` directly (Node's Response body is async-iterable);
+    // a reader loop is the typed equivalent and reads exactly the same bytes.
+    if (!response.body) throw fail('INVALID_RESPONSE');
+    const reader = response.body.getReader();
+    let length = 0; const chunks: Buffer[] = [];
+    try {
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        length += part.value.length;
+        if (length > MAX_BYTES) throw fail('INVALID_RESPONSE');
+        chunks.push(Buffer.from(part.value));
+      }
+    } finally { reader.releaseLock(); }
+    this._context(ctx);
+    try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+    catch { throw fail('INVALID_RESPONSE'); }
+  }
+
+  private async _json(ctx: RequestContext, route: string, options: RequestOptions = {}): Promise<unknown> {
+    const { response, controller } = await this._request(ctx, route, options);
+    try { return await this._readJson(ctx, response); }
+    finally { void response.body?.cancel().catch(() => {}); this._requests.delete(controller); controller.abort(); }
+  }
+
+  async status({ signal }: { signal?: AbortSignal } = {}): Promise<StatusResult> {
+    const ctx = this._context();
+    const value = await this._json(ctx, '/api/status', { signal }) as { being_name?: unknown } | null;
+    return { beingName: typeof value?.being_name === 'string' ? value.being_name.slice(0, 100) : '' };
+  }
+
+  // One timeline read feeds every conversation: the cursor is global, the projection is per scene.
+  // Callers pass `after` from their stored cursor and dispatch rows by scene_id themselves.
+  async history({ after = 0, limit = HISTORY_LIMIT, signal }: { after?: number; limit?: number; signal?: AbortSignal } = {}): Promise<HistoryPage> {
+    if (!Number.isSafeInteger(after) || after < 0) throw fail('INVALID_REQUEST');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw fail('INVALID_REQUEST');
+    const ctx = this._context();
+    const value = await this._json(ctx, '/api/history', { query: { limit, ...(after > 0 ? { after } : {}) }, signal }) as { messages?: unknown } | null;
+    if (!value || !Array.isArray(value.messages)) throw fail('INVALID_RESPONSE');
+    const rows = (value.messages as unknown[]).map(historyRow).filter((row): row is HistoryRow => row !== null)
+      .sort((left, right) => left.seq - right.seq);
+    // The cursor only moves forward: `fresh` holds rows past `after`, so its last seq exceeds it.
+    // Taking the last row of the unfiltered page instead would move the cursor backwards whenever
+    // the server ignores `after` — the one thing Loom's cache invariants forbid (§六.4).
+    const fresh = after > 0 ? rows.filter(row => row.seq > after) : rows;
+    // A page that came back non-empty yet held nothing new means the server ignored `after`;
+    // without this flag the caller cannot tell that apart from "no new messages" and would
+    // re-read the same window forever (§八).
+    return {
+      rows: fresh, cursor: fresh.length ? fresh[fresh.length - 1].seq : after,
+      more: fresh.length >= limit, ignoredAfter: after > 0 && rows.length > 0 && fresh.length === 0,
+    };
+  }
+
+  // Probe whether a stream is still breathing after a disconnect, and read its replay buffer from
+  // `after` onward. Ported from Loom's probeStream (loom.html:2593): a client disconnect does not
+  // interrupt a breath, so the right move on a broken stream is to ask the server what happened,
+  // not to abort and report an error. Verdicts match Loom's so its decision table ports as-is.
+  //
+  // Replay events are shaped `{event, seq, data}`, seq counting from 1 within the stream; `nextSeq`
+  // says where to resume. `scene` is the conversation being spoken to right now — the newest event
+  // wins, because a continuation meta can hand the stream to another one. An autonomous breath
+  // (origin beating / callback / leftover rather than human) has a stream_id but no events at all,
+  // so it can only be waited out and then reconciled from history (loom.html:4011).
+  async probe({ streamId = '', after = 0, localSeq = 0, signal }: { streamId?: string; after?: number; localSeq?: number; signal?: AbortSignal } = {}): Promise<ProbeResult> {
+    if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(localSeq) || localSeq < 0) throw fail('INVALID_REQUEST');
+    const ctx = this._context();
+    const value = await this._json(ctx, '/api/stream/active', { query: after > 0 ? { after } : {}, signal });
+    const empty = { events: [] as ReplayEvent[], streamId: '', nextSeq: 0, serverSeq: 0, scene: '', scenes: [] as string[], origin: '', autonomous: false, speaking: false, trigger: '' };
+    if (value === null) return { verdict: 'gone', ...empty };
+    if (!value || typeof value !== 'object') throw fail('INVALID_RESPONSE');
+    const raw = value as { stream_id?: unknown; events?: unknown; next_seq?: unknown; origin?: unknown; finished?: unknown; trigger_message?: unknown };
+    const active = typeof raw.stream_id === 'string' ? raw.stream_id.slice(0, 128) : '';
+    if (streamId && active && active !== streamId) return { verdict: 'superseded', ...empty, streamId: active };
+    const events: ReplayEvent[] = (Array.isArray(raw.events) ? raw.events as unknown[] : []).slice(0, MAX_EVENTS)
+      .map(item => item && typeof item === 'object' && !Array.isArray(item)
+        ? { type: typeof (item as RawReplayEvent).event === 'string' ? (item as RawReplayEvent).event as string : 'message', seq: Number((item as RawReplayEvent).seq) || 0, data: (item as RawReplayEvent).data }
+        : null)
+      .filter((item): item is ReplayEvent => item !== null);
+    const seen = events.map(item => {
+      const scene = (item.data as { scene_id?: unknown } | null | undefined)?.scene_id;
+      return typeof scene === 'string' ? scene : '';
+    }).filter(Boolean);
+    // With `after`, the buffer is only a tail, so the resume point must come from next_seq.
+    const nextSeq = typeof raw.next_seq === 'number' && Number.isSafeInteger(raw.next_seq) && raw.next_seq > 0 ? raw.next_seq : after + events.length + 1;
+    const origin = typeof raw.origin === 'string' ? raw.origin.slice(0, 32) : '';
+    // After a message_stop the next event may belong to another scene (a continuation), so the
+    // buffer cannot say who speaks next: `speaking` is false and ownership must be asked, not guessed.
+    const last = events.length ? events[events.length - 1] : null;
+    const base = {
+      events, streamId: active, nextSeq, serverSeq: Math.max(0, nextSeq - 1), origin, autonomous: origin !== '' && origin !== 'human',
+      scene: seen.length ? seen[seen.length - 1] : '', scenes: [...new Set(seen)], speaking: !!last && last.type !== 'message_stop',
+      trigger: typeof raw.trigger_message === 'string' ? raw.trigger_message.slice(0, 200) : '',
+    };
+    if (raw.finished === true) return { verdict: 'finished', ...base };
+    if (base.serverSeq > localSeq) return { verdict: 'progressing', ...base };
+    return { verdict: 'stalled', ...base };
+  }
+
+  // Stopping is stream-scoped, never conversation-scoped: /api/stop takes no scene, so it
+  // interrupts whatever breath is running — which, after a splice, may be another conversation's.
+  // Refuse unless the active stream is provably this conversation's; `force` is the user answering
+  // the prompt that refusal produces. Interrupting the wrong conversation leaves its user waiting
+  // on an ending that never comes, and may persist a half-reply that reads as a whole one (§四).
+  async stop({ sessionId, force = false, signal }: { sessionId: string; force?: boolean; signal?: AbortSignal }): Promise<StopResult> {
+    const scene = sceneId(this.desktopId, sessionId);
+    if (!force) {
+      const active = await this.probe({ signal });
+      if (active.verdict === 'gone' || active.verdict === 'finished') return { stopped: false, reason: 'idle', scene: active.scene };
+      // An autonomous breath is the Being thinking for itself; no conversation owns it.
+      if (active.autonomous) return { stopped: false, reason: 'autonomous', scene: '' };
+      // No scene in the buffer, or a bubble just closed and the next speaker is not yet known:
+      // ownership cannot be proven either way, and asking beats guessing.
+      if (!active.scene || !active.speaking) return { stopped: false, reason: 'unknown', scene: active.scene };
+      if (active.scene !== scene) return { stopped: false, reason: 'other-scene', scene: active.scene };
+    }
+    const ctx = this._context();
+    await this._json(ctx, '/api/stop', { method: 'POST', body: {}, signal }).catch((error: unknown) => {
+      if (errorCode(error) === 'INVALID_RESPONSE') return null;
+      throw error;
+    });
+    return { stopped: true, reason: force ? 'forced' : 'matched', scene };
+  }
+
+  /**
+   * Send one message on behalf of a conversation, and consume the stream if we are given one.
+   *
+   * The body carries only what the protocol needs: human text, the scene this conversation is,
+   * a small scene declaration, and a correlation ref. A main-owned provider may add current
+   * execution context; routing continues to use scene_id alone.
+   * With images the text becomes the first of the content blocks; the text is still required,
+   * because a message of images alone lands no row (measured 2026-09-11, §十).
+   */
+  async send({ sessionId, text, images = [], sceneMeta = {}, signal, onDelta = () => {}, onProgress = () => {}, router = null }: SendOptions): Promise<SendResult> {
+    if (!UUID.test(sessionId || '')) throw fail('INVALID_REQUEST');
+    if (typeof text !== 'string' || !text.trim() || text.includes('\0')) throw fail('INVALID_REQUEST');
+    if ([...text].length > MAX_MESSAGE) throw fail('INVALID_REQUEST');
+    if (!sceneMeta || Object.getPrototypeOf(sceneMeta) !== Object.prototype) throw fail('INVALID_REQUEST');
+    const blocks = imageBlocks(images);
+    const scene = sceneId(this.desktopId, sessionId);
+    const clientRef = `req-${this.randomUUID()}`;
+    const ctx = this._context();
+    this._pending.set(clientRef, sessionId);
+    let dispatched = false;
+    try {
+      const prepared = this.prepareMessage ? await this.prepareMessage({ sessionId }) : null;
+      this._context(ctx);
+      prepared?.assertCurrent?.();
+      const wireText = wrapMessage(text, prepared?.context);
+      if ([...wireText].length > MAX_MESSAGE) throw fail('INVALID_REQUEST');
+      const body: SendBody = {
+        ...(blocks.length ? { content: [{ type: 'text', text: wireText } as ContentBlock, ...blocks] } : { message: wireText }),
+        scene_id: scene,
+        scene_meta: { client: `being-desktop/${this.clientVersion || '0'}`, ...sceneMeta },
+        client_ref: clientRef,
+      };
+      const { response, controller, signal: live } = await this._request(ctx, '/api/chat/stream',
+        { method: 'POST', body, accept: 'text/event-stream', signal, timeoutMs: 600000 });
+      dispatched = true;
+      try {
+        // 202: spliced into the running breath. The message is delivered — treating this as a
+        // failure would make the user resend and queue a duplicate — but the reply will surface
+        // on another conversation's open connection or through catch-up, not here (§一).
+        if (response.status === 202) {
+          const value = await this._readJson(ctx, response).catch(() => null) as { spliced?: unknown } | null;
+          this.onEvent({ sessionId, type: 'spliced', scene });
+          return { ok: true, streamed: false, spliced: value?.spliced !== false, streamId: '', clientRef, confirmed: false, replies: 0, liveSeq: 0, foreign: 0, trailing: '' };
+        }
+        if (!response.headers.get('content-type')?.includes('text/event-stream')) throw fail('INVALID_RESPONSE');
+        return await this._consume(ctx, { response, scene, clientRef, sessionId, onDelta, onProgress, live, router });
+      } finally { void response.body?.cancel().catch(() => {}); this._requests.delete(controller); controller.abort(); }
+    } catch (error) {
+      // Once the POST is accepted the message may already be in the Being's timeline, so nothing
+      // that fails afterwards may claim it was not sent — not a broken stream, not a reconnect,
+      // not the user cancelling. Only pre-dispatch errors describe a send that did not happen.
+      if (dispatched) {
+        const progress = (error as { progress?: RouterState } | null | undefined)?.progress;
+        throw Object.assign(fail('RESULT_UNKNOWN'), progress ? { progress } : {});
+      }
+      throw error;
+    } finally { this._pending.delete(clientRef); }
+  }
+
+  private async _consume(ctx: RequestContext, { response, scene, clientRef, sessionId, onDelta, onProgress, live, router }: {
+    response: Response; scene: string; clientRef: string; sessionId: string;
+    onDelta: (text: string) => void; onProgress: (progress: RouterProgress) => void;
+    live?: AbortSignal; router: ChatRouter | null;
+  }): Promise<SendResult> {
+    const active = router || this.router({ scene, sessionId, onDelta, onProgress });
+    active.expect(clientRef);
+    try {
+      await consumeEvents(response.body, (type, data) => {
+        this._context(ctx);
+        // Stop reading on our own account rather than waiting for the socket to notice the abort.
+        if (live?.aborted) throw fail('ABORTED');
+        active.handle(type, data);
+      });
+    } catch (error) {
+      // How far the stream got is what recovery needs: the probe resumes from this seq.
+      throw Object.assign(error as object, { progress: active.state() });
+    }
+    return { ok: true, streamed: true, spliced: false, clientRef, ...active.state() };
+  }
+
+  // Fold a replay buffer in by exactly the rules that fold a live stream. Events at or before
+  // `from` were already delivered and are skipped; the return value says where the next probe
+  // should resume. `sessionId` is the conversation that asked, if any — recovery of a stream we did
+  // not start has none, and then no conversation is "ours" beyond what each event's scene says.
+  replay({ events = [], from = 0, router = null, sessionId = '', scene = '' }: ReplayOptions = {}): { cursor: number } & RouterState {
+    if (!Array.isArray(events) || !Number.isSafeInteger(from) || from < 0) throw fail('INVALID_REQUEST');
+    const active = router || this.router({ scene, sessionId });
+    let cursor = from;
+    for (const item of events) {
+      if (!item || typeof item !== 'object') continue;
+      const seq = Number(item.seq);
+      if (Number.isFinite(seq) && seq <= cursor) continue;
+      const type = typeof item.type === 'string' ? item.type : typeof item.event === 'string' ? item.event : 'message';
+      active.handle(type, item.data ?? {});
+      if (Number.isFinite(seq)) cursor = Math.max(cursor, seq);
+    }
+    return { cursor, ...active.state() };
+  }
+
+  /**
+   * The per-event routing for one stream. Shared by the live reader and the replay path so a
+   * recovered buffer and a live stream can never disagree about which conversation a reply is in.
+   *
+   * A router outlives a connection on purpose: when a live reader dies and the replay poller takes
+   * over from its last seq, the same router carries the half-built reply text across, so the text
+   * joins with not one character repeated or missing (Loom's cutoverToReplay, loom.html:2615).
+   */
+  router({ scene = '', sessionId = '', onDelta = () => {}, onProgress = () => {} }: RouterOptions = {}): ChatRouter {
+    let streamId = '', liveSeq = 0, confirmed = false, current = scene, replies = 0, foreign = 0, clientRef = '';
+    // One connection carries several conversations, so reply text accumulates per conversation.
+    // A single connection-wide buffer would splice one Being's answer into another's bubble.
+    const buffers = new Map<string, string>();
+    const emit = (target: string, event: ChatEventBody) => {
+      if (!target) return;
+      try { this.onEvent({ sessionId: target, ...event } as ChatEvent); } catch { /* Observers cannot affect the stream. */ }
+    };
+    const handle = (type: string, data: unknown) => {
+      // meta never enters the server replay buffer and never consumes a seq. Every other event
+      // does, exactly once: that 1:1 property is what lets a probe resume a stream mid-flight (§六.1).
+      if (type !== 'meta') liveSeq++;
+      const payload = data as { scene_id?: unknown; stream_id?: unknown; client_ref?: unknown; text?: unknown; message?: unknown; delta?: { text?: unknown } } | null | undefined;
+      const eventScene = typeof payload?.scene_id === 'string' ? payload.scene_id : '';
+      if (type === 'meta' && typeof payload?.stream_id === 'string') streamId = payload.stream_id;
+      // Connection-level progress, before routing: a watchdog must see foreign events too, or its
+      // idea of the stream's seq falls behind the server's and every probe looks like progress.
+      try { onProgress({ type, liveSeq, streamId }); } catch { /* Observers cannot affect the stream. */ }
+      if (type === 'meta') {
+        // client_ref is echoed here and nowhere else; it proves this stream is our request.
+        if (clientRef && typeof payload?.client_ref === 'string' && payload.client_ref === clientRef) confirmed = true;
+        // `continuation: true` hands the connection to whatever scene this meta names.
+        if (eventScene) current = eventScene;
+        emit(sessionFromScene(this.desktopId, current) || sessionId, { type: 'meta', streamId, scene: current, confirmed });
+        return;
+      }
+      // Scene-addressed events route by their own scene; usage/error carry none and belong to
+      // whichever conversation the last meta handed the connection to.
+      const target = sessionFromScene(this.desktopId, eventScene || current);
+      // A foreign scene is another Desktop's conversation, or the Loom page's own, on this same
+      // Being. Dropping it is correct; counting it keeps that decision visible in diagnostics.
+      if (!target) { foreign++; return; }
+      if (type === 'error') { emit(target, { type: 'error', message: String(payload?.message || '').slice(0, 2000) }); return; }
+      // `reasoning` is the thinking stream. It is shown live but not folded into the reply text,
+      // so a stop mid-thought cannot leave reasoning persisted as if it were the answer (§五).
+      if (type === 'reasoning') {
+        const think = typeof payload?.text === 'string' ? payload.text : '';
+        if (think) emit(target, { type: 'think', text: think });
+        return;
+      }
+      if (type === 'content_block_delta') {
+        const delta = typeof payload?.delta?.text === 'string' ? payload.delta.text : '';
+        if (!delta) return;
+        const buffer = (buffers.get(target) || '') + delta;
+        if (buffer.length > MAX_MESSAGE) throw fail('INVALID_RESPONSE');
+        buffers.set(target, buffer);
+        if (target === sessionId) onDelta(delta);
+        emit(target, { type: 'delta', text: delta });
+        return;
+      }
+      if (type === 'message_stop') {
+        // A yielded breath emits several message_stop events, and after a splice the later ones
+        // belong to another conversation. Each closes only its own conversation's bubble.
+        const buffer = buffers.get(target) || '';
+        buffers.delete(target);
+        if (target === sessionId) replies++;
+        emit(target, { type: 'reply', text: buffer });
+        return;
+      }
+      emit(target, { type, data });
+    };
+    const state = (): RouterState => ({ streamId, confirmed, replies, liveSeq, foreign, trailing: sessionId ? buffers.get(sessionId) || '' : '' });
+    // A writer that ends for good settles its router: the conversations whose bubble is still open
+    // are returned so they can be told, and the buffers are dropped so a second settle is a no-op.
+    const settle = () => { const open = [...buffers.entries()].filter(([, text]) => text).map(([target]) => target); buffers.clear(); return open; };
+    return { handle, state, settle, expect: ref => { clientRef = typeof ref === 'string' ? ref : ''; }, get sessionId() { return sessionId; } };
+  }
+}
