@@ -79,7 +79,6 @@ function ChatView({
     setSelection(null);
     setHighlighted(null);
     state.changed();
-    void runtime.refreshHistory();
   }
   const dragDepth = useRef(0),
     composing = useRef(false),

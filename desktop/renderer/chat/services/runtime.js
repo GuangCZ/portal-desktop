@@ -2337,8 +2337,9 @@ export function createChatRuntime(state, options = {}) {
   }
 
   async function refreshHistory() {
-    // Each explicit scope change needs a request started after that change.
-    // Wait for older reads, including rapid switches, instead of reusing them.
+    // Wait for older reads instead of reusing them, so a later call still
+    // observes the latest shared cursor. Scope changes filter locally and
+    // must not go through this path.
     while (reconcileInFlight || cursorSyncInFlight) {
       await Promise.all([reconcileInFlight, cursorSyncInFlight]);
     }
