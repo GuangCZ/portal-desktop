@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { BackgroundPortal, command, windowsModulePath, windowsPowerShellScript } from '../desktop/main/portal/background';
@@ -7,7 +7,20 @@ import { parseConnection } from '../desktop/main/chat/connection';
 
 it.skipIf(process.platform !== 'win32')('opens a saved Windows runtime even when its scheduled task no longer exists', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'portal-missing-task-'));
-  const background = new BackgroundPortal(root);
+  let phase = 'discover';
+  const commands: { phase: string; milliseconds: number; error?: string }[] = [];
+  const background = new BackgroundPortal(root, async (file, args, input) => {
+    const started = Date.now(), operation = phase;
+    console.info(`[missing-task] ${operation}: starting ${path.basename(file)}`);
+    let failure: string | undefined;
+    try { return await command(file, args, input); }
+    catch (error) { failure = String(error); throw error; }
+    finally {
+      const entry = { phase: operation, milliseconds: Date.now() - started, error: failure };
+      commands.push(entry);
+      console.info('[missing-task]', JSON.stringify(entry));
+    }
+  });
   const service = { label: background.label, root: path.join(root, 'runtime'), file: '', existing: false };
   const metadata = JSON.stringify(service);
   await writeFile(path.join(root, 'portal-service.json'), metadata);
@@ -17,9 +30,16 @@ it.skipIf(process.platform !== 'win32')('opens a saved Windows runtime even when
       .resolves.toMatchObject({ installed: true, enabled: false, running: false });
     expect(background.installedService).toEqual(service);
     expect(await readFile(path.join(root, 'portal-service.json'), 'utf8')).toBe(metadata);
+    phase = 'disable and refresh';
     await expect(background.disable()).resolves.toMatchObject({ enabled: false, running: false });
+  } catch (error) {
+    await mkdir('test-results', { recursive: true });
+    await writeFile('test-results/background-native-failure.json', JSON.stringify({ phase, commands, state: background.state, error: String(error) }, null, 2));
+    throw error;
   } finally { await rm(root, { recursive: true, force: true }); }
-}, 20_000);
+// Discover, unload and refresh each have a 30s production command deadline.
+// Let those deadlines report the failing operation before Vitest interrupts.
+}, 100_000);
 
 it.skipIf(process.platform !== 'win32')('keeps scheduler permission failures visible as readable UTF-8 instead of CLIXML', async () => {
   const script = windowsPowerShellScript("function Get-ScheduledTask { throw '计划任务访问被拒绝 fixture' }; Find-PortalTask 'fixture'");
@@ -27,7 +47,7 @@ it.skipIf(process.platform !== 'win32')('keeps scheduler permission failures vis
     .then(() => { throw new Error('Expected scheduler failure'); }, error => error as Error);
   expect(failure.message).toContain('计划任务访问被拒绝 fixture');
   expect(failure.message).not.toContain('CLIXML');
-}, 10_000);
+}, 35_000);
 
 it.skipIf(process.env.PORTAL_DESKTOP_NATIVE_UPGRADE_TESTS !== '1' || process.platform !== 'win32')('protects credentials and registers an interactive Windows task', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'town-windows-registration-'));
