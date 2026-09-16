@@ -606,6 +606,52 @@ prepareDraft: async (text, getContext) => { getContext(); drafts.push(text); }}`
 对同样 4 个 code 断言 `fail()` 的 `status`/`errorCode`（错误对象用 `Object.assign(new Error('固定诊断信息'), {code})` 模拟 preload 抛出的形状）。
 preload 那一半计入 openIssues，由后续集成阶段接管。
 
+### src/main.cjs 的 boot() 注入面（grep 后逐段读完，供后续集成阶段机械对接）
+
+引入（第 70–72 行）：`FeatureTaskHistory`、`FeatureTaskRunner`、`discussFeatureTask`。
+
+组合根状态（第 114–122 行）：
+```
+let townSyncRecords=[]; let featureHistory=null;
+const featureHistories=new WeakMap();   // ledger 实例 -> history（按发起时身份归属）
+const openFeatureHistories=new Set();   // 退出时统一 flush
+const featureHistoryCache=new Map();    // identityKey -> history
+const featureMethods=new Set(['getFeatureTasks','getFeatureTask','discussFeatureTask','endFeatureTaskTracking',
+  'requestTownRead','listScrolls','getScroll','getGroveCatalog','getGroveDetail','prepareGroveInstallation',
+  'deployPortal','startPortal','stopPortal','checkPortalUpdates','beginChannelConnection','checkChannelStatus']);
+for(const name of ['installGroveKit','installEligibleGroveKits']) featureMethods.add(name);
+const taskRunner=new FeatureTaskRunner({getLedger:()=>featureHistory.ledger});
+```
+- `loadFeatureHistory()`：`identityKey = connection ? sessionPartition(connection) : 'disconnected'`；
+  同身份直接返回；**切换时先向渲染进程推 `being:feature-tasks` 空列表**；
+  `new FeatureTaskHistory({identityKey, directory: path.join(app.getPath('userData'),'feature-tasks'), safeStorage,
+  onChange: () => { if (featureHistory !== history) return; publishFeatureTasks(); }})`；
+  进 `featureHistoryCache` 与 `openFeatureHistories`；`await history.restore()`；
+  restore 期间连接/generation 变了 → 抛 `SESSION_CHANGED`（`'连接身份已变化，请重新读取功能任务。'`）；
+  然后 `featureHistory = history; featureHistories.set(history.ledger, history); townSyncRecords = history.records; publishFeatureTasks();`。
+- `publishFeatureTasks()`：窗口存在且 `featureHistoryCurrent()` 才 `win.webContents.send('being:feature-tasks',
+  {tasks: featureHistory.ledger.list(), persistenceError: featureHistory.persistenceError})`。
+- `featureHistoryCurrent()`：`featureHistory?.ledger.identityKey === (connection ? sessionPartition(connection) : 'disconnected')`。
+- `registerFeatureRequest(record, owner = taskRunner.currentTask())`：
+  `history = owner ? featureHistories.get(owner.ledger) : featureHistory`；无 → 返回；
+  有 owner 则 `owner.ledger.update(owner.task.id, {requestId: record.requestId,
+  detail:'Being 正在处理，结果将显示在功能页；聊天可能等待。'})`；`history.register(record)`；
+  若 `history !== featureHistory` 就此返回，否则刷新 `townSyncRecords` 并 `applyLoomTownSync`。
+- `handle(name, fn)`（第 721–735 行）：先 `authSender`；`sdkReadMethods` 直通；
+  `featureMethods.has(name) && !featureHistoryCurrent()` → 抛 `SESSION_CHANGED`（`'连接身份正在切换，请稍后重新选择功能。'`）；
+  再 `taskRunner.run(name, args, () => ...)`，其中 `serialized` 集合内的方法进 `mutationTail`，
+  执行前再查一次 `owner.ledger !== featureHistory.ledger` → `SESSION_CHANGED`（`'连接身份已变化，请重新选择功能。'`）。
+- IPC（第 1239–1251 行）：`getFeatureTasks`（`{tasks: ledger.list(options), persistenceError}`）、`getFeatureTask`（`ledger.get(id)`）、
+  `endFeatureTaskTracking`（id 校验 → `ledger.get` → `reading = status==='running' && requestId && execution==='being' &&
+  ['bonfire','fireside','scroll'].includes(feature)`；`!['waiting','needs_input'].includes(status) && !reading` → 抛
+  `'只能结束读取、等待中或待处理任务的本地跟踪。'`；否则 `ledger.cancel(id,{detail:'本地跟踪已结束；这不会取消 Being 端的执行。'})`）、
+  `discussFeatureTask`（`getLedger: () => featureHistory.ledger`，
+  `getContext: () => ({connection, generation, revision: viewRevision, view, configured, status, exiting})`）。
+- 退出时（第 1623 行）：`...[...openFeatureHistories].map(history => history.flush())` 一起 await。
+
+**结论**：本单元移植出的 TS 类/函数保持同名同参即可被上面这些调用面机械替换；
+`endFeatureTaskTracking` 的判定逻辑留在 main（IPC 层），不属于本单元。
+
 ## 进度
 
 | 模块 | 状态 |
@@ -622,7 +668,7 @@ preload 那一半计入 openIssues，由后续集成阶段接管。
 | test/feature-task-discussion.test.cjs | 已读（4 个用例） |
 | test/town-error-ipc.test.cjs（feature-tasks 相关用例） | 已读（只有 1 个用例相关，取其账本一半） |
 | src/loom-town-sync.cjs `normalizeTownSyncRecords`（外部依赖） | 已读 |
-| src/main.cjs boot() 注入面 | 未开始 |
+| src/main.cjs boot() 注入面 | 已读 |
 
 注：worktree 里已存在上一轮被中断的未提交草稿 `desktop/main/features/{types,feature-tasks,feature-task-runner,feature-task-history}.ts`
 （无任何迁移记录），本轮按源码逐行复核后再定稿。
