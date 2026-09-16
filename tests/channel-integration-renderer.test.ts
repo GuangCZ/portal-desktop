@@ -32,6 +32,8 @@ function harness(options: HarnessOptions = {}) {
   const posts: any[] = [];
   const toasts: unknown[] = [];
   const navigations: string[] = [];
+  /** The shell dialogs「打开功能页」opens instead of navigating (`model`). */
+  const pages: string[] = [];
   const acks: { id: string; ack: string }[] = [];
   const navigate: { handler: ((feature: string, task: { id: string }) => void) | null } = { handler: null };
   let pushState: ((value: ChannelWorkerState) => void) | null = null;
@@ -57,11 +59,14 @@ function harness(options: HarnessOptions = {}) {
     post: (data: unknown) => { posts.push(data); options.post?.(data); },
     navigate: (view: string) => { navigations.push(view); },
     toast: (error: unknown) => { toasts.push(error); },
-    features: { featureTasks: { setNavigate: handler => { navigate.handler = handler; } } },
+    features: {
+      featureTasks: { setNavigate: handler => { navigate.handler = handler; } },
+      shellState: { open: (page: "models") => { pages.push(page); } },
+    },
   };
   const model = new ChannelModel(api, host);
   return {
-    model, calls, posts, toasts, navigations, acks, navigate,
+    model, calls, posts, toasts, navigations, acks, navigate, pages,
     state: (value: Partial<ChannelWorkerState>) => pushState?.({ channel: "", status: "unknown", detail: "", connectionRevision: 7, connected: true, ...value }),
     draft: (value: ChannelDraftPush) => pushDraft?.(value),
   };
@@ -396,8 +401,15 @@ it("installs the feature-task page’s destination and takes it away again", asy
     f.navigate.handler!(feature, { id: "t1" });
     expect(f.navigations.at(-1)).toBe(view);
   }
-  // A feature with no page in this client says so instead of navigating nowhere.
+  // 模型 is a shell dialog, not a place: `navigate` would set a view nothing
+  // draws, so it opens I6b's page the way the sidebar footer's「模型」does
+  // (2026-09-17, integration unit IN).
   f.navigate.handler!("model", { id: "t1" });
+  expect(f.pages).toEqual(["models"]);
+  expect(f.navigations.at(-1)).toBe("town");
+  // A feature with no page in this client still says so instead of navigating
+  // nowhere. 工作区 has no counterpart in this shell at all.
+  f.navigate.handler!("workspace", { id: "t1" });
   expect(f.toasts).toEqual(["该功能暂时没有可打开的页面。"]);
   stop();
   expect(f.navigate.handler).toBe(null);

@@ -176,3 +176,33 @@ I5 的 openIssue 1 逐字给出的三行，落地时多了一处：**main.ts 构
 ① `connected/managed` 时 wire 帧里的 `runtime.portal` **逐字等于** `portalRuntime(...)` 对应行（断言对着映射表的源，不是它的副本）；
 ② **按调用时读、不是安装时捕获**：同一个 fixture 连发五条，`not_configured → starting → external → running+conflict → error` 五行逐条命中；
 ③ 不带 `portalState` 的上下文仍然是 `not_configured / unknown`，且 `configuredName`、`workspace` 仍是 profile 里的真值。
+
+### 3.3 【第 3 条】功能任务账本写满的那句话——已修
+
+- `desktop/shared/town-desktop-errors.ts` 的 `TOWN_ERROR_CODES` 末尾 append `'TASK_LIMIT_REACHED',`（BD `src/main.cjs:127` 有）。
+- `desktop/main/features/feature-tasks.ts`：新增常量 `TASK_LIMIT_REACHED = '功能任务记录已满，请到任务页结束不再跟踪的等待任务后重试。'`
+  （BD `src/main.cjs:740` 逐字），第 121 行的抛出点由英文 `'Too many active feature tasks'` 改用它。
+  **结构上偏离 BD、可观察行为与 BD 一致**：BD 在 `handle` 的统一 catch 里换文案，本外壳没有那一层
+  （`beings:feature-task*` 四条不包络，`publicErrorMessage` 会原样放行 33 字的英文）。`code` 一字未动，
+  两个按 code 分支的调用方（`feature-task-runner.ts:206`、`town/channel/ipc.ts:197`）不受影响。
+- `tests/features-feature-tasks.test.ts` +1 条：账本满 → `code` 是 `TASK_LIMIT_REACHED`、`message` 是 BD 原话、
+  `publicErrorMessage` 原样放行（普通通道那一半）、`townErrorEnvelope` 不再降级成「Town 操作未完成，请稍后重试。」（包络通道那一半）。
+- **`main/town/channel/ipc.ts` 的 `TASK_LIMIT` 常量没有删**：任务书写的位置是 `features/ipc.ts`，
+  实际在 `desktop/main/town/channel/ipc.ts:117`——**IT 的独占目录**。删它只是去冗余（两条路径现在给出同一个字符串），
+  没有行为差异，留给合并者，见 openIssues。
+
+### 3.4 【第 4 条】功能任务页的「模型」目的地——已接，但不是一行 TASK_VIEWS
+
+任务书假设加一行 `TASK_VIEWS` 即可。**实读之后不成立**：`TASK_VIEWS` 的值进的是 `AppModel.navigate(view)`
+（`renderer/app/models/app.ts:231`，设 `this.view`），而 I6b 的模型页不是 place，是**外壳对话框**——
+`ShellStateModel.open("models")`（`renderer/settings/models/shell-state.ts:128`，`ShellPage = "" | "about" | "privacy" | "models"`），
+侧栏页脚的「模型」按钮走的就是这条（`renderer/settings/components/entry.tsx:37`）。
+写成 `TASK_VIEWS.model = 'models'` 会把 `app.view` 设成一个谁都不画的值。
+
+于是 `desktop/renderer/channel/models/channel.ts` 加了一张并列的表：
+`const TASK_SHELL_PAGES: Record<string, "models"> = { model: "models" };`，
+`ChannelHost.features` 加一个可选成员 `shellState?: { open(page: "models"): void }`（与既有的 `featureTasks?` 同规格：
+model 没建起来就 toast），`openFeature` 先查 `TASK_SHELL_PAGES` 再查 `TASK_VIEWS`。
+`workspace` **不进表**：本外壳根本没有工作区页，保持 toast。
+`tests/channel-integration-renderer.test.ts` 那条既有用例里，`model` 的断言改成「打开 models 对话框且没有 navigate」，
+并**补一条** `workspace` 仍然 toast——规则数 +1，没有删。

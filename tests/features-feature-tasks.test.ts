@@ -4,6 +4,8 @@
 
 import { describe, expect, it } from "vitest";
 import { FeatureTasks, type FeatureTasksOptions } from "../desktop/main/features/feature-tasks";
+import { publicErrorMessage } from "../desktop/shared/errors";
+import { TOWN_ERROR_CODES, townErrorEnvelope } from "../desktop/shared/town-desktop-errors";
 import type { FeatureTaskBeginInput, FeatureTaskRecord } from "../desktop/main/features/types";
 
 function setup(options: FeatureTasksOptions = {}) {
@@ -14,8 +16,8 @@ function setup(options: FeatureTasksOptions = {}) {
   return { tasks, changes, tick(value = 1) { timestamp += value; }, begin(input: Partial<FeatureTaskBeginInput> = {}) { return tasks.begin({ feature: "bonfire", operation: "read", title: "读取篝火消息", execution: "being", ...input }); } };
 }
 
-function capture(fn: () => unknown): { code?: string } {
-  try { fn(); } catch (error) { return error as { code?: string }; }
+function capture(fn: () => unknown): { code?: string; message?: string } {
+  try { fn(); } catch (error) { return error as { code?: string; message?: string }; }
   throw new Error("Expected the call to throw");
 }
 
@@ -197,6 +199,31 @@ describe("feature task ledger", () => {
     nextId = "invalid task ID";
     expect(() => tasks.begin(input)).toThrow(TypeError);
     expect(tasks.get(first.id)?.status).toBe("succeeded");
+  });
+
+  // 2026-09-17 (integration unit IN). The ledger being full is the one refusal in
+  // this file a user can act on, and until now it reached them in English: the
+  // four `beings:feature-task*` channels are plain — no envelope — and
+  // `publicErrorMessage` forwards a short message unchanged. BeingDesktop says the
+  // sentence in its IPC catch (src/main.cjs line 740); this shell has no such
+  // layer, so the sentence is minted at the throw. Both paths out of here are
+  // asserted: the plain channels' text, and the enveloped channels' code.
+  it("a full ledger says what to do, in the words BeingDesktop says it in", () => {
+    const context = setup({ maxRecords: 1 });
+    context.begin();
+    const error = capture(() => context.begin());
+    expect(error.code).toBe("TASK_LIMIT_REACHED");
+    expect(error.message).toBe("功能任务记录已满，请到任务页结束不再跟踪的等待任务后重试。");
+    // What `beings:feature-task-discuss` and its three siblings show the user.
+    expect(publicErrorMessage(error)).toBe("功能任务记录已满，请到任务页结束不再跟踪的等待任务后重试。");
+    // And what a「Town 包络」channel resolves with, now that the code is allowed to
+    // cross: before, an unlisted code was downgraded to「Town 操作未完成，请稍后重
+    // 试。」— advice to do the one thing that cannot work.
+    expect(TOWN_ERROR_CODES).toContain("TASK_LIMIT_REACHED");
+    expect(townErrorEnvelope(error)).toEqual({
+      __townError: true, code: "TASK_LIMIT_REACHED",
+      message: "功能任务记录已满，请到任务页结束不再跟踪的等待任务后重试。",
+    });
   });
 
   // Ledger half of test/town-error-ipc.test.cjs case 1; the preload half needs IPC.

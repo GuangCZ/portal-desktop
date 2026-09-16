@@ -104,6 +104,19 @@ const TASK_VIEWS: Record<string, string> = {
   bonfire: "bonfire", fireside: "firesides", scroll: "scrolls", grove: "kits", portal: "portal", beings: "town",
 };
 
+/** The feature keys whose page is a shell DIALOG rather than a place, so they
+ * cannot be a row in `TASK_VIEWS`: `navigate` sets `AppModel.view`, and nothing
+ * draws a page called「models」(2026-09-17, integration unit IN).
+ *
+ * `model` is I6b's 模型配置 page — `ShellStateModel.open("models")`, the same call
+ * the sidebar footer's「模型」button makes (renderer/settings/components/entry.tsx).
+ * Before it landed, a `model` feature task could only be told「该功能暂时没有可打开
+ * 的页面。」(docs/migration/i7-channel-drafts.md「未做事项」5).
+ *
+ * `workspace` is NOT here: BeingDesktop's 工作区 page has no counterpart in this
+ * shell at all, so that key keeps the toast — the honest answer. */
+const TASK_SHELL_PAGES: Record<string, "models"> = { model: "models" };
+
 /** What this model needs of `AppModel`. Structural, because the model layer may
  * not import the shell's components (tests/architecture.test.ts) and because a
  * narrow surface is what makes this testable without a whole shell. */
@@ -113,7 +126,13 @@ export interface ChannelHost {
   post(data: unknown): void;
   navigate(view: string, id?: string): void;
   toast(error: unknown): void;
-  readonly features: { featureTasks?: { setNavigate(handler: ((feature: string, task: { id: string }) => void) | null): void } };
+  readonly features: {
+    featureTasks?: { setNavigate(handler: ((feature: string, task: { id: string }) => void) | null): void };
+    /** I6b's shell pages (renderer/settings/models/shell-state.ts). Optional for
+     * the same reason `featureTasks` is: a model that failed to build is not on
+     * `AppModel` at all, and「打开功能页」then says so rather than doing nothing. */
+    shellState?: { open(page: "models"): void };
+  };
 }
 
 export class ChannelModel extends Store {
@@ -423,6 +442,13 @@ export class ChannelModel extends Store {
   /** An `app`-mode feature, and the destination of「打开功能页」on a feature task. */
   openFeature(feature: string): void {
     if (feature === "channel") { this.show(true, "channel"); return; }
+    const page = TASK_SHELL_PAGES[feature];
+    if (page) {
+      const shell = this.host.features.shellState;
+      if (!shell) { this.host.toast("该功能暂时没有可打开的页面。"); return; }
+      shell.open(page);
+      return;
+    }
     const view = TASK_VIEWS[feature];
     if (!view) { this.host.toast("该功能暂时没有可打开的页面。"); return; }
     this.host.navigate(view);

@@ -17,6 +17,9 @@ import type {
 const STATUSES = new Set<string>(['running', 'waiting', 'succeeded', 'failed', 'cancelled', 'needs_input']);
 const TERMINAL = new Set<string>(['succeeded', 'failed', 'cancelled']);
 const RESTART_DETAIL = '应用已重新启动，执行状态待核对；不会自动重发。';
+/** BeingDesktop src/main.cjs line 740, verbatim: the ledger is full and a retry
+ * never clears it, so the sentence has to say what to do instead. */
+const TASK_LIMIT_REACHED = '功能任务记录已满，请到任务页结束不再跟踪的等待任务后重试。';
 const ERROR_DETAILS: Readonly<Record<string, string>> = Object.freeze({
   AUTH_REQUIRED: '此功能需要授权，请在对应功能页面完成连接。',
   IDENTITY_MISMATCH: '连接身份不一致，请检查 Being 连接后重试。',
@@ -118,7 +121,18 @@ export class FeatureTasks {
     let oldest: FeatureTaskRecord | undefined;
     if (this._records.size >= this.maxRecords) {
       oldest = [...this._records.values()].filter(task => TERMINAL.has(task.status)).sort((a, b) => a.updatedAt - b.updatedAt || a.createdAt - b.createdAt)[0];
-      if (!oldest) { const error: Error & { code?: string } = new Error('Too many active feature tasks'); error.code = 'TASK_LIMIT_REACHED'; throw error; }
+      // DELIBERATE STRUCTURAL DEVIATION, same observable sentence (2026-09-17,
+      // integration unit IN). BeingDesktop throws the English text here
+      // (src/feature-tasks.cjs line 89) and swaps it for the Chinese one in its
+      // single IPC catch (src/main.cjs line 740: `error?.code ===
+      // 'TASK_LIMIT_REACHED' ? '功能任务记录已满…'`). This shell has no such
+      // layer — `beings:feature-task*` are plain channels and `publicErrorMessage`
+      // forwards a short message unchanged — so the English text reached the user
+      // verbatim (docs/migration/i7-channel-drafts.md「未做事项」8). The sentence is
+      // BeingDesktop's own, word for word; only the place it is minted moved, and
+      // `code` is unchanged for the two callers that branch on it
+      // (feature-task-runner.ts line 206, town/channel/ipc.ts line 197).
+      if (!oldest) { const error: Error & { code?: string } = new Error(TASK_LIMIT_REACHED); error.code = 'TASK_LIMIT_REACHED'; throw error; }
     }
     let id: string | undefined;
     for (let attempt = 0; attempt < 5; attempt++) {
