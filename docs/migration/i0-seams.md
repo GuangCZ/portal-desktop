@@ -291,3 +291,69 @@ auto-unpack-natives 真的产出 `*.node` 的 unpack 规则、`packagerIgnore` �
 | §2.1 `connectionCleared` 生命周期 | 接口与扇出都在，但 **main.ts 从来没有调用过它**。既有缺口，I0 原样保留 |
 | §2.5 分步收敛（I0 只建文件） | 按任务要求一次收敛完（见 F） |
 | §2.7「architecture 六条」 | 既有六条按目录模式写，新目录自动覆盖，不需要改；另补了两条（`common/` 的依赖边界、`subsystems/` 不得 import electron），现在是八条 |
+
+---
+
+## 复审处理（2026-09-16，第二轮）
+
+复审结论 `fail`，三条 finding（1 high + 2 medium）。门槛本身是绿的（typecheck 0；vitest 1063 通过 / 57 跳过，基线 1036/57，无回归、无删测）。
+本节记录逐条核实与修复。**复审给的证据我全部自己重测了一遍，没有一条是照抄的。**
+
+### 阅读摘要（本轮）
+
+- **`forge.config.ts`（140 行）** — `packagerConfig.asar: true`（第 79 行），`ignore: packagerIgnore`；`plugins` 里 `AutoUnpackNativesPlugin` 在 `VitePlugin` 之前。
+  `PACKAGED_MODULES` / `MODULE_PATH` / `FOREIGN_PREBUILD` / `packagerIgnore` 已导出给测试。**没有任何自带的 `asar.unpack`**——这正是 finding 1 的根。
+- **`tests/packaging-contract.test.ts`（111 行）** — 两个 describe、八条用例。第 53–66 条跑插件真实的 `resolveForgeConfig`，
+  但只断言 `expect(unpack).toMatch(/\*\.node/)`（第 65 行），即只钉住「插件加了自己那条 glob」，钉不住「需要落到 asar 外的文件都落到了 asar 外」。
+  另外它的 `input` 是 `{ ...forge, packagerConfig: { ...forge.packagerConfig } }` 浅拷贝：`asar` 一旦变成对象，插件的
+  `forgeConfig.packagerConfig.asar.unpack = ...` 会**原地改写导出的真实 config**，重复跑就会把 glob 叠成 `{{…},…}`。修复时必须一并深拷 `asar`。
+- **`desktop/main/subsystems/types.ts`（143 行）** — `DesktopSubsystem` 只有 `key` / `connectionVerified?` / `connectionCleared?` / `quitting?` / `ready?`，**没有 `linked?()`**。
+- **`desktop/main/extensions.ts`（181 行）** — `installSubsystems` 的 install 循环（151–156 行）之后直接 `const order = [...built.values()]` 就返回，**没有装后回调这一趟**。
+  三个扇出（verified / cleared / quitting）都是 `try { … } catch { report(`${key}-<阶段>`, error) }`。
+- **`desktop/renderer/app/models/registry.ts`（34 行）** — `FeatureModelFactory = { key; create(api, app): Store }`，`FEATURE_MODELS` 为空。
+- **`desktop/renderer/shared/models/store.ts`（18 行）** — `Store` 只有 `subscribe` / `getVersion` / `changed`，**没有 start/dispose**。
+- **`desktop/renderer/app/models/app.ts`（422 行）** — 构造末尾建全部 feature model（try/catch → toast）；
+  `start()` 的 `cleanups` 里 feature 只进了 `model.subscribe(…)`（119–120 行），而内置的 `this.town.start()`（121 行）是把 **cleanup** 放进同一个数组。
+  两者待遇不同，就是 finding 3。清理函数 `cleanups.forEach(cleanup => cleanup())` 无 try/catch，且 `clearTimeout(this.toastTimer)` 排在它**之前**。
+
+### finding 1（high · node-pty `spawn-helper` 没被 unpack）—— **确认成立，已修**
+
+自测证据（全部本机实测，非源码推断）：
+
+1. `node_modules/node-pty/binding.gyp:99-100` 有 `target_name: 'spawn-helper'`, `type: 'executable'`，且它在 `['OS=="mac"', {…}]` 条件块里
+   ——**只有 macOS 构建这个 helper**。
+2. `node_modules/node-pty/lib/unixTerminal.js:29-32`：`helperPath = native.dir + '/spawn-helper'` → `path.resolve(__dirname, …)` →
+   `.replace('app.asar', 'app.asar.unpacked')`。第 92 行把它作为第 10 个参数传给 `pty.fork`。
+   `src/unix/pty.cc:351-360` 只在 `#if defined(__APPLE__)` 里用它（`argv[0] = helper_path`）。
+3. `@electron-forge/plugin-auto-unpack-natives@7.11.2/dist/AutoUnpackNativesPlugin.js:20-26`：`newUnpack = '**/{.**,**}/**/*.node'`，
+   **有既有 unpack 时合并成 `{<既有>,<新增>}`，没有时直接替换**。`spawn-helper` 没有扩展名，`*.node` 永远匹配不到它。
+4. **用真的 `@electron/asar` 3.4.1 打了两个包**（`@electron/asar` 的 unpack 判定是 `minimatch(filename, unpack, { matchBase: true })`，asar.js:147）：
+
+   | unpack glob | `build/Release/pty.node` | `build/Release/spawn-helper` | `prebuilds/darwin-arm64/pty.node` | `prebuilds/darwin-arm64/spawn-helper` |
+   | --- | --- | --- | --- | --- |
+   | 修前（只有插件那条） | unpacked | **留在 asar 内** | unpacked | **留在 asar 内** |
+   | 修后（合并后的） | unpacked | unpacked, mode 755 | unpacked | unpacked, mode 755 |
+
+5. **`@electron/rebuild` 3.7.2 对 Electron 44.2.0 重建 node-pty 的产物**（本机实跑，头文件已在 `~/.electron-gyp/44.2.0`）：
+   `build/Release/` 下同时出现 `pty.node`（-rwxr-xr-x）与 `spawn-helper`（-rwxr-xr-x, Mach-O 64-bit executable arm64）。
+   所以打包时真正被加载的那份 helper 一定存在、一定需要被 unpack。
+
+**与复审说法的一处偏差**：复审写「every packaged macOS **and Linux** build」。Linux 不受影响——
+`binding.gyp` 的 spawn-helper target 在 `OS=="mac"` 条件里，`pty.cc` 也只在 `__APPLE__` 下用 helper，Linux 走 `forkpty` 直接路径。
+结论不变（macOS 是本项目唯一签名分发的目标），但影响面按实测写。
+
+**另一处实测补充**（复审没提）：npm 安装出来的 `prebuilds/*/spawn-helper` 权限是 **644，没有执行位**。
+只要打包时 `@electron/rebuild` 跑过（已实测会跑），`loadNativeModule` 优先 `build/Release`，用到的是 755 那份；
+但 glob 同时放行 `prebuilds/*`，是为了万一 rebuild 被跳过时 helper 至少存在于 asar 之外。
+
+### finding 2（medium · 缺 `linked?()`）—— **确认成立，已修**
+
+`integration-plan.md:844` 明确写了「**推荐 (a)** …→ 这条要回写到 I0 的 `types.ts`（`linked?(): void`）」，1104 行的串行清单里重复了一次。
+`types.ts` 里确实没有，`installSubsystems` 里也没有装后一趟。各单元允许的共享文件改动只有「一行 import + 数组里一行」，
+加接口成员和加扇出循环都超出授权 → I2 会卡住，必须回 I0。
+
+### finding 3（medium · feature model 没有 start/dispose）—— **确认成立，已修**
+
+`FeatureModelFactory.create` 的返回类型是裸 `Store`，而 `AppModel.start()` 只对它们调 `subscribe`。
+内置的 `TownModel` 是 `this.town.start()` 把 cleanup 放进 `cleanups`——这正是 I1/I4/I6 的 model 打开/关闭 IPC 订阅所需要的。
+`desktop/renderer/app/models/app.ts` **不在**方案 §3 允许触碰的共享文件清单里（535–538 行只有六个），所以任何单元都加不了这个钩子。
