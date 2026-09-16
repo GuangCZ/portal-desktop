@@ -10,7 +10,8 @@ import { expect, test } from "vitest";
 import { createTrustedHandle } from "../desktop/main/app/ipc";
 import { sceneId } from "../desktop/main/chat/being-chat";
 import { beingIdentityKey } from "../desktop/main/chat/connection";
-import { installDesktopExtensions } from "../desktop/main/extensions";
+import { installSubsystems } from "../desktop/main/extensions";
+import { installChatSubsystem } from "../desktop/main/subsystems/chat";
 import { chatErrorEnvelope, chatErrorFromEnvelope, isChatErrorEnvelope } from "../desktop/shared/chat-errors";
 import { publicErrorMessage } from "../desktop/shared/errors";
 import type { Connection } from "../desktop/main/chat/connection";
@@ -73,11 +74,15 @@ async function fixture({ desktopId = DESKTOP, address = ADDRESS }: { desktopId?:
     quitting: () => quitting, recoveryBlocked: () => false,
     report: (_channel, error) => publicErrorMessage(error),
   });
-  const extensions = installDesktopExtensions({
+  // The real registry machinery, installing only the subsystem under test.
+  // `installDesktopExtensions` would install every subsystem in `INSTALLERS`, and
+  // the channel-set assertion below — which is the point of this file — would then
+  // answer for whichever integration units happen to have landed (2026-09-16, I3).
+  const extensions = installSubsystems({
     handle, exclusive: operation => operation(),
     window: () => window, store, secretStorage, userData: directory, desktopId,
     clientVersion: "0.9.0", fetchImpl, onError: (scope, error) => { errors.push({ scope, error }); },
-  });
+  }, [installChatSubsystem]);
   // The application only ever notifies after `verifyBeingConnection` resolved,
   // which is exactly when the address it verified is the one saved in the store.
   const connect = async (value = address) => {
