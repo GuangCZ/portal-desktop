@@ -102,8 +102,12 @@ it('the scene survives a restart and a rename, and does not disturb the open con
   expect(scene).toBe(wechat.sceneId);
   // 「创建…不改变当前打开的会话」
   expect(sessions.snapshot().active).toBe(active);
-  sessions.rename(wechat.sessionId, '我的微信');
+  // Through the production channel, so the rename joins the mutation queue the
+  // way the sidebar's does, and let the background read-back `afterChannel`
+  // started finish before the profile is closed: it persists the same store.
+  expect(await first.call('beings:chat-rename-session', wechat.sessionId, '我的微信')).toBe(true);
   await settle();
+  await new Promise(resolve => setTimeout(resolve, 100));
   await first.cleanup();
   open.pop();
 
@@ -115,7 +119,7 @@ it('the scene survives a restart and a rename, and does not disturb the open con
   expect(restarted.calls.find(call => call.path === '/api/chat/stream')!.body.scene_id).toBe(scene);
   const restoredSessions = (restarted.extensions as unknown as { chat: any }).chat;
   expect(restoredSessions.snapshot().sessions.find((session: any) => session.id === wechat.sessionId).title).toBe('我的微信');
-  await rm(profile, { recursive: true, force: true });
+  await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 });
 
 it('another Being gets another set of scenes', async () => {
