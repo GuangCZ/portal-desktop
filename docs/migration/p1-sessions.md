@@ -347,12 +347,21 @@ chat-sessions 夹具。用例：
 门槛（2026-09-16）：`npm run typecheck` 通过；
 `npx vitest run` → Test Files 56 passed | 7 skipped (63)，Tests 445 passed | 16 skipped (461)。
 
+> 2026-09-16 复审后续：本块的复审结论、修复与新增的偏差清单都在
+> [`p1-sessions-fix.md`](p1-sessions-fix.md)。那里记了三条本文件没写到的偏差
+> （`chat-change-session` 的返回形状、非法会话 id 的文案、对话通道的 Town 包络），
+> 以及下面这条「未接线」升级成的 P2 硬性验收条件。
+
 未接线（留给后续阶段，不是遗漏）：
 - `prepareMessage` 没接。BeingDesktop 用 `nativeMessageContext({orchestration, environment:
   desktopEnvironment})`，而 `desktopEnvironment`（src/main.cjs 行 200）读的是 orchestration、
   desktopTools、portal、workspace——这个壳还没有。`desktopMessageContext` 在 BeingDesktop 里
   从来不会只带半个 runtime 被调用，硬凑一个等于编造 wire 形状，所以宁可暂时不发帧
   （`unwrapMessage` 对没帧的文本本来就是恒等）。注入点：`context.ts` + `frame.ts`。
+  **P2 验收条件（2026-09-16 复审定死）**：orchestration 与 desktopEnvironment 落地的同一阶段
+  必须把 `prepareMessage` 接上，并补一条「发出去的 wire 文本带 v1 帧且 `unwrapMessage` 能原样
+  剥掉」的端到端用例；在那之前原生对话不算可交付给真实 Being 的功能——少了「环境数据不是
+  指令 / 本轮只能用 runtime.bridge.place」的注入边界文案。
 - `ChatDetails` 已移植已测，但没有 IPC 通道、没有在 `extensions.ts` 里实例化。
 - `ensureChannel` / `syncChannel`（飞书、微信）没有调用方。
 - portal-desktop 原有的 `ChatProxy` / `chat-scene.json` 仍在，本块的会话层不依赖它们。

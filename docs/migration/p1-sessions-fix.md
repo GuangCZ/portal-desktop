@@ -80,6 +80,37 @@
 | `tests/chat-save-rollback.test.ts`（新增：takeover 失败 → 回滚 → chat 回到旧 Being） | 测试通过 |
 | `desktop/shared/desktop-types.ts`（`changeSession` 偏差声明） | 已移植 / 测试通过 |
 
+门槛（2026-09-16）：`npm run typecheck` 通过；
+`npx vitest run` → Test Files 57 passed | 7 skipped (64)，Tests 448 passed | 16 skipped (464)。
+
+## 复审逐条处理
+
+| # | 结论 | 处理 |
+| --- | --- | --- |
+| high | `beings:save` 回滚不通知 extensions | 已改。`main.ts` 回滚保存之后补 `extensions?.connectionVerified(store.connection)`；新增 `tests/chat-save-rollback.test.ts`（去掉这一行就红）。 |
+| medium | `chat-rename-session` 丢了控制字符校验、长度判定在折叠之后 | 已改。`chat/ipc.ts` 照抄 0.8.26 的守卫（原始 title 测控制字符、trim 后测长度），文案换回「会话名须为 1–80 个字符，且不能包含换行。」；NUL/BEL/DEL/LF 与 `'x'*78+'   '+'y'` 都进了 refuse 列表。 |
+| medium | `error.code` 过不了 handle 包装，测试假绿 | 已改。新增 `desktop/shared/chat-errors.ts`，五个通道改成返回 `{__townError:true,code,message}`，preload 侧还原成带 `code` 的 Error；`tests/chat-ipc.test.ts` 的所有调用改走真实的 `createTrustedHandle`（为此把 `main.ts` 里那段包装原样抽到 `desktop/main/app/ipc.ts`，行为不变），另加 sender 校验 / 退出守卫用例。 |
+| low | `prepareMessage` 未接线 | 接受延后。P2 验收条件已写进本文件与 `p1-sessions.md`。 |
+| low | `chat-change-session` 注释谎称与 §1.2 一致 | 已改成明确的偏差声明（`chat/ipc.ts` 与 `desktop-types.ts` 两处），并进了下面的偏差清单。 |
+
+### 一处没按建议改，附证据
+
+复审给 high 的修法是 `if (previousConnection) {…; connectionVerified} else await connectionCleared()`。
+**`else` 分支没有加**，理由：
+
+1. `SettingsStore.resolveConnection`（`app/settings.ts:197`）在 `connectionLink` 为空时回退到
+   `this.connection`，否则抛「请先输入 Being 链接。」；`save()` 第一步就调它，最后一行
+   `this.connection = connection`。所以 `await store.save(input)` 一旦成功，`store.connection`
+   必定非 null。
+2. `previousConnection` 为 null 只发生在「第一次连接」——而那条路径**根本不回滚**（`if (previousConnection)`
+   为假，新设置原样留在盘上）。此时 `store.connection` 就是刚验过的新 Being。
+3. 这时调 `connectionCleared()` 会把对话层解绑，而设置里仍写着这个 Being——变成反方向的不一致；
+   而且原生对话是直连 Being 的 `/api/*`，Portal 接管失败并不否定一个 `/api/status` 已经答应过的 Being。
+4. 如果失败发生在 `verifyConnection()` 自己（Being 不可达），`connectionVerified` 压根没执行过，
+   对话层从未绑定，也没有要清的东西。
+
+`tests/chat-save-rollback.test.ts` 里 `expect(fixture.cleared).toBe(0)` 把这个判断钉住了。
+
 ## 与 BeingDesktop 0.8.26 的偏差清单（本块新增）
 
 1. **`beings:chat-change-session` 返回会话 id，不是 `{ok:true}`**。BeingDesktop

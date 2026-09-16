@@ -127,6 +127,9 @@ it("puts the conversation layer back on the previous Being when a failed takeove
     expect(fixture.cleared).toBe(0);
   } finally {
     vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs();
-    await rm(fixture.directory, { recursive: true, force: true });
+    // The startup notice is still being appended to logs/client-errors.log by
+    // main.ts's own error log, which nothing here can await; retry the removal
+    // rather than race it.
+    await rm(fixture.directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
   }
 });

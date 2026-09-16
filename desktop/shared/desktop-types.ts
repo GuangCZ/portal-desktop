@@ -160,7 +160,13 @@ export type ChatEventPayload =
   | { sessionId: string; type: string; data?: unknown; [key: string]: unknown };
 
 /** The chat half of `window.beings`. One object rather than a dozen top-level
- * methods, so the surface the renderer sees matches the subsystem behind it. */
+ * methods, so the surface the renderer sees matches the subsystem behind it.
+ *
+ * `view`, `send`, `stop`, `reload` and `forgetSession` reject with an Error
+ * carrying `code` (a `ChatChannelErrorCode` — desktop/shared/chat-errors.ts);
+ * those are BeingDesktop's「Town 包络」rows in docs/interfaces.md §1.2. The rest
+ * reject with a message only, as they do there: nothing branches on their
+ * failure. */
 export interface ChatAPI {
   /** The conversation list and which one is active. */
   sessions(): Promise<ChatState>;
@@ -169,7 +175,12 @@ export interface ChatAPI {
   stop(input: { sessionId: string; force?: boolean }): Promise<ChatStopResult>;
   /** Re-read the newest window as a fresh baseline. */
   reload(): Promise<ChatReloadResult>;
-  /** Select a conversation, or create one when given `null`. Returns its id. */
+  /** Select a conversation, or create one when given `null`. Returns its id.
+   * DEVIATION from BeingDesktop: `changeChatSession` answers `{ok:true}` there
+   * (docs/interfaces.md line 88, src/main.cjs line 1177) and the caller reads the
+   * new id back out of `publicState()`. Its `project` parameter is not here
+   * either — that belongs to the sidebar, which is not ported yet. See
+   * docs/migration/p1-sessions-fix.md「偏差清单」. */
   changeSession(sessionId: string | null): Promise<string>;
   renameSession(sessionId: string, title: string): Promise<boolean>;
   forgetSession(sessionId: string): Promise<boolean>;
