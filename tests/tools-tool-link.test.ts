@@ -1,15 +1,19 @@
 // Ported line by line from BeingDesktop 0.8.26 test/desktop-tool-link.test.cjs on 2026-09-16.
 // The `/_relay` reverse-MCP contract: see docs/interfaces.md §6 and §5「错误码」.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import os from "node:os";
 import { once } from "node:events";
 import { createRequire } from "node:module";
 import { DesktopToolLink, toolDefinitions, validArguments, MAX_MESSAGE_BYTES, MAX_RESPONSE_BYTES, MAX_PENDING, MAX_BUFFERED_BYTES } from "../desktop/main/tools/tool-link";
 import type { ToolSocketFactory } from "../desktop/main/tools/tool-link";
 import { parseConnection } from "../desktop/main/tools/security";
+import { LoopbackRelay, frame, until } from "./tools-portal-loopback";
 
-const { WebSocketServer } = createRequire(import.meta.url)("ws");
+const { WebSocket, WebSocketServer } = createRequire(import.meta.url)("ws");
 const cleanups: (() => Promise<unknown> | unknown)[] = [];
+// node:test's `t.after` still runs after a failing assertion; afterEach is the
+// vitest equivalent, so a failure closes the real server instead of leaking it.
+afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
 
 const request = (method: string, params: unknown = {}, id: unknown = 1) => ({ jsonrpc: "2.0", id, method, params });
 const initialized = (id: unknown) => request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "local-test", version: "1.0" } }, id);
@@ -164,7 +168,6 @@ describe("desktop tool link", () => {
     // A subsequent MCP frame establishes that the preceding Pong was processed.
     const reply = once(socket, "message"); socket.send(JSON.stringify(initialized(1))); await reply;
     now = 90001; heartbeat(); expect(link.snapshot().status).toBe("error");
-    for (const cleanup of cleanups.splice(0)) await cleanup();
   }, 10000);
 
   it("handshake timeout rejects and removes its timers without retrying", async () => {
@@ -334,9 +337,29 @@ describe("desktop tool link", () => {
     await expect(connected).rejects.toThrow(); expect(h.link.snapshot().status).toBe("disconnected"); expect(h.intervals.size).toBe(0);
   });
 
-  // Requires test/integration/portal-loopback.cjs (LoopbackRelay/frame/until) from
-  // BeingDesktop; that relay simulator is not part of this migration unit.
-  it.skip("a local relay performs real native-WebSocket tool discovery and a fixed call", async () => {});
+  it("a local relay performs real native-WebSocket tool discovery and a fixed call", async () => {
+    const relay = new LoopbackRelay("LOCAL_ONLY_TOKEN", { beingId: "local-desktop-tool-test" });
+    class LocalWebSocket extends WebSocket {
+      constructor(url: string) { expect(url).toMatch(/^ws:\/\/127\.0\.0\.1:[0-9]+\/_relay$/); super(url); }
+      send(text: string) {
+        const value = JSON.parse(text);
+        if (Object.hasOwn(value, "portal_name")) { expect(value.portal_name).toMatch(/^being-desktop-tools-[a-f0-9]{12}$/); relay.portalName = value.portal_name; }
+        return super.send(text);
+      }
+    }
+    const calls: { name: string; args: Record<string, unknown> }[] = [];
+    const link = new DesktopToolLink({ WebSocketImpl: LocalWebSocket as unknown as ToolSocketFactory, invokeTool: async (name, args) => { calls.push({ name, args }); return success; } });
+    cleanups.push(async () => { link.dispose(); await relay.pause(); });
+    await relay.listen();
+    await link.connect(parseConnection(`http://127.0.0.1:${relay.port}/local-desktop-tool-test/?token=LOCAL_ONLY_TOKEN`));
+    await until(relay, () => relay.metadataReplies === 1, "desktop tool metadata", 5000);
+    expect(relay.toolNames).toEqual(toolDefinitions().map((item) => item.name));
+    const response = new Promise((resolve) => relay.on("rpc_response", (value) => { if (value.id === "local-call") resolve(value); }));
+    for (const socket of relay.sockets) socket.write(frame(1, JSON.stringify(call("desktop_browser_tabs", { place: relay.portalName, target_portal: relay.portalName }, "local-call"))));
+    expect(await response).toEqual({ jsonrpc: "2.0", id: "local-call", result: boundResult(success, relay.portalName) });
+    expect(calls).toEqual([{ name: "desktop_browser_tabs", args: {} }]);
+    expect(link.snapshot().status).toBe("connected"); expect(link.snapshot().lastCall!.status).toBe("completed");
+  }, 15000);
 
   it("tool initialization notifies configuration observers before the first tool call", async () => {
     const observations: string[][] = [];
