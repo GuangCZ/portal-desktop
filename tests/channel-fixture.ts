@@ -71,7 +71,9 @@ export async function channelFixture({ extra = [], withChat = true, directory }:
   };
   const always = (route: string, responder: Responder) => defaults.set(route, responder);
   const fetchImpl = (async (url: string, options: RequestInit = {}) => {
-    const parsed = new URL(url), route = parsed.pathname.replace(/^\/cz_being/, '');
+    // Strip whichever Being's path prefix the address carries, so one route table
+    // serves both identities a Being-switch case binds.
+    const parsed = new URL(url), route = parsed.pathname.replace(/^\/[a-zA-Z0-9_-]+(?=\/api\/)/, '');
     calls.push({ path: route, body: options.body ? JSON.parse(String(options.body)) : undefined, options });
     const responder = routes.get(route)?.shift() || defaults.get(route);
     if (!responder) throw new Error(`no route: ${route}`);
@@ -143,11 +145,18 @@ export async function channelFixture({ extra = [], withChat = true, directory }:
     try { await call(channel, ...args); return ''; }
     catch (error) { return String((error as { code?: unknown }).code ?? ''); }
   };
+  /** The epoch the renderer has to carry on every channel request. It is read,
+   * never assumed: `ChannelBeing` compares it against the identity it holds, and
+   * the renderer's only source for it is `beings:channel-status`. */
+  const revision = async (): Promise<number> => (await call('beings:channel-status')).connectionRevision;
+  /** `{channel, connectionRevision}` with the live epoch — what the page sends. */
+  const request = async (name: string) => ({ channel: name, connectionRevision: await revision() });
   const untrusted = (channel: string, ...args: unknown[]) =>
     handlers.get(channel)!({ sender: webContents, senderFrame: { url: 'https://evil.example/' } }, ...args);
 
   return {
     extensions, handlers, pushes, errors, calls, on, always, connect, call, invoke, codeOf, untrusted,
+    revision, request,
     store, directory: own,
     chat: () => (extensions as unknown as { chat: { ensureChannel(name: string): { sessionId: string; sceneId: string } } | null }).chat,
     drafts: () => pushes.filter(entry => entry.channel === 'beings:composer-draft'),
