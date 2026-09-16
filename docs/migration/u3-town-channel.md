@@ -12,7 +12,7 @@
 | --- | --- | --- | --- |
 | 注入接口 | （多处调用面） | `desktop/main/town/channel/types.ts` | 随模块增量补充 |
 | 支撑函数 | `src/security.cjs` `src/services.cjs` `src/being-chat.cjs` | `channel/errors.ts` `loom-connection.ts` `sanitize.ts` `sse.ts` | 已移植（随各模块测试通过） |
-| ChannelBeing | `src/channel-being.cjs` | `channel/channel-being.ts` | 未开始 |
+| ChannelBeing | `src/channel-being.cjs` | `channel/channel-being.ts` + `channel/being-client.ts` | 测试通过（tests/town-channel-channel-being.test.ts，26/26） |
 | TownBackground | `src/town-background.cjs` | `channel/town-background.ts` | 未开始 |
 | TownController | `src/town-controller.cjs` | `channel/town-controller.ts` | 未开始 |
 | Town catalog/drafts | `src/town.cjs` | `channel/town-catalog.ts` | 测试通过（tests/town-channel-town-catalog.test.ts，18/18） |

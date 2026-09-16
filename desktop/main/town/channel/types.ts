@@ -55,3 +55,45 @@ export interface LoomDraftContext {
   status?: string;
   exiting?: boolean;
 }
+
+/* --------------------------------------------- channel (channel-being.cjs) */
+
+/** main.cjs boot(): the Loom identity snapshot the Channel request is fenced against. */
+export interface ChannelBeingContext {
+  configured?: boolean;
+  connected?: boolean;
+  exiting?: boolean;
+  connectionId?: unknown;
+  identityRevision?: unknown;
+  beingName?: string;
+  connection?: { url: string; token?: string; secret?: string } | null;
+}
+
+/** BeingDesktop ChatSessions.ensureChannel(channel) (ported by the chat unit). */
+export interface ChannelSession { sceneId: string }
+
+/** BeingDesktop main.cjs readStatus: a read-only channel snapshot from the service. */
+export type ChannelStatusReader = (options: { signal: AbortSignal }) => Promise<unknown>;
+
+/** Task bookkeeping hook: main.cjs records the outgoing Channel request. */
+export interface RequestRecord { requestId: string; route: string; beingId: string; prompt: string }
+
+export interface ChannelOutcome {
+  channel: string;
+  status: string;
+  detail: string;
+  qrCodeUrl?: string;
+  qrCodeDataUrl?: string;
+}
+
+/** The send-only slice of BeingClient that ChannelBeing uses. */
+export interface ChannelClient {
+  send(request: {
+    message: string;
+    signal?: AbortSignal;
+    onEvent?: (event: { type: string; data: Record<string, any> }) => void;
+  }): Promise<{ accepted: boolean }>;
+}
+
+/** BeingDesktop loaded extensions/being-anywhere/being-client.mjs lazily; here it is injected. */
+export type ChannelClientFactory = (url: string, fetchImpl: typeof fetch) => ChannelClient;
