@@ -309,3 +309,19 @@ BD `renderer/sidebar.js:63`：`window.beingOrchestration?.hasActiveWorkers(item.
 另一条用三个假子系统跑真实 `installSubsystems`，断言 cleared 扇出仍按安装顺序、单个抛错记 `beta-cleared` 且不打断其余
 （钩子本身没坏，不能当死代码删掉）。
 
+### 2.12 `beings:town-open` 回到工具浏览器（i1 记录遗留 2）——已改
+
+BD `src/main.cjs:1252`：`handle('openTownPage', id => browserLinks().open(townPageUrl(id)))`——
+**页面开在工具浏览器的标签页里**，面板同时前置；这不是口味问题：只有那个浏览器里的页面 Being 才读得到、操作得了。
+I1 的 worktree 里没有工具桥，退而用了 `ctx.electron.shell.openExternal`，并记为偏差。
+
+`desktop/main/subsystems/town.ts` 传给 `registerTownDesktopIpc` 的 `openExternal` 改成：
+`const links = ctx.registry.get('tools')?.links; if (links) { links.open(url); return; } return ctx.electron.shell.openExternal(url);`
+——惰性解析（在回调里，不在构造期）；**`open()` 内部失败（窗口没了、地址被拒）照 BD 抛出，不退回系统浏览器**，
+只有「压根没有工具桥」才退回。`town/ipc-desktop.ts` 的路由允许名单**一个字没动**（那是 I1 的文件）。
+
+新增 `tests/town-integration-open.test.ts`（3 例）：装 tool-browser + tools + town 三个子系统，断言
+(a) 链接进了工具浏览器的标签页、`beings:tools-state` 先于 `beings:tools-reveal:'browser'` 推送、`shell.openExternal` **没有**被调用；
+(b) 允许名单在两条路径上都原样（六个坏 route 都抛「不支持的 Town 链接。」，且没有开出任何标签页）；
+(c) 只装 town 子系统时退回 `shell.openExternal`。
+

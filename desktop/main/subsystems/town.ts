@@ -307,7 +307,26 @@ export function installTownSubsystem(ctx: SubsystemContext): TownSubsystem {
       publish();
     },
     invalidateMembers,
-    openExternal: url => ctx.electron.shell.openExternal(url),
+    // A TOWN PAGE OPENS IN THE TOOL BROWSER, not the system browser.
+    // BeingDesktop 0.8.26: `handle('openTownPage', id => browserLinks().open(
+    // townPageUrl(id)))` (src/main.cjs:1252) — the page lands in a tab beside the
+    // conversation, where the Being can also read it, and the panel comes forward.
+    // I1 had no tool bridge in its worktree and used `shell.openExternal`,
+    // recorded as a deviation (docs/migration/i1-town.md 遗留 2); the bridge is
+    // merged now, so this is the deviation being closed (IM, 2026-09-16).
+    //
+    // Resolved lazily — `INSTALLERS` order carries no meaning — and the fallback
+    // is only for a build with no tool bridge at all (no Electron to give it a
+    // browser, or its installation failed): a link the user asked for should still
+    // open somewhere rather than silently do nothing. A failure INSIDE `open`
+    // (the window is gone, the address is refused) throws, exactly as 0.8.26's
+    // does; it is not a reason to send the user to another browser.
+    // The route allow-list stays in town/ipc-desktop.ts, untouched.
+    openExternal: url => {
+      const links = ctx.registry.get('tools')?.links;
+      if (links) { links.open(url); return; }
+      return ctx.electron.shell.openExternal(url);
+    },
   });
 
   let ready: Promise<unknown> = Promise.resolve();
