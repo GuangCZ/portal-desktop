@@ -19,7 +19,7 @@
 // its own visibility, empty state and errors. The shell will not render a frame,
 // a title bar or a placeholder for it.
 import type { ComponentType, ReactNode } from 'react';
-import { toolsAction, toolsPanel } from "../tools/slot";
+import { toolsAction, toolsPanel } from '../tools/slot';
 import type { AppModel } from './models/app';
 
 /** A dockable panel in the workspace body, after the tool browser. */
