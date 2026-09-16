@@ -111,3 +111,28 @@
 
 ### tests/architecture.test.ts（199 行，八条）
 - 无规则禁止 `main/features/` import `main/town/`；`main/common/` 只准 node 内建；`main/subsystems/` 不准 import electron。
+
+### BeingDesktop renderer/orchestration.js（156 行）与 test/orchestration-ui.cjs（199 行）
+- 四个词典逐字：`names`（starting 正在启动 / queued 排队中 / running 执行中 / stopping 正在停止 / completed 已完成 /
+  failed 失败 / cancelled 已取消 / interrupted 已中断）、`reviews`、`deliveries`、`agent status` 五项。
+- `active(worker)` = status ∈ {starting,running,queued,stopping}；`hasActiveWorkers(sessionId)` 供侧栏活动灯。
+- `appendSession`：分组标题 `${n} 个 Worker · ${m} 执行中`、折叠状态存 localStorage `being.workerGroups.collapsed`、
+  箭头 ▾/▸、动作文案「收起/展开」、`worker-caption` = `${agentId} · ${names[status]}${review ? ' · '+reviews[...] : ''}`。
+- 设置页：四个 kit 行（codex/claude/cursor/grok 与中文名）、`自动从 PATH 检测，或填写程序绝对路径`、
+  自动保存（无保存按钮）、失败后出现「重试」、`showModeStatus` 三句文案、`worker-reconnect` 两句文案。
+- Worker 详情：返回/停止 Worker/停止接续/重试通知-重新接续四个按钮的出现条件、事件 `details` 按 seq 保持展开、
+  `仅保留最近 300 条事件；早期事件已截断。`
+- UI 测试钉住的规则：Worker running → 会话灯 `talking` 且**优先于**「等待回复」；`session-light-breathe` 动画；
+  reduced-motion 下 opacity 恒 1；Worker 输出不清灯；Worker 消失时详情回退为「当前连接下没有此 worker。」。
+
+### BeingDesktop renderer/feature-tasks.js（264 行）
+- `featureNames` 9 项、`statusNames` 6 项、`activeStatuses`、`canEnd(task)`（与主进程 `endFeatureTaskTracking` 的 reading 判定同构）。
+- 筛选：功能下拉（含「全部功能」）+ 状态下拉六项（全部状态/进行与等待/需要你决定/已完成/未完成/已结束跟踪）+ `${n} 个任务`。
+- 详情：执行方式行（`使用 Being，聊天可能等待` / `本机执行` / `执行方式待确认`）、结果标题四选一、
+  三个时间项、「打开功能页/到功能页处理」「拿到聊天里讨论」「结束本地跟踪」与各自 hint。
+- `persistenceError` → `任务记录暂未保存，重启后可能无法恢复。当前操作不受影响。`
+
+### BeingDesktop docs/interfaces.md §1.1/§1.2/§1.3/§3.9
+- §1.1：`featureMethods` 经 `FeatureTaskRunner.run` 记账，身份不一致抛 `SESSION_CHANGED`；`serialized` 进 `mutationTail`。
+- §1.2 编排七条与功能任务四条的 payload 已抄进本单元的 IPC 清单（见下）。
+- §1.3 推送：`being:workers`（`Orchestration.snapshot()`，50ms 合并）、`being:feature-tasks`（`{tasks, persistenceError}`，身份切换先推空列表）。
