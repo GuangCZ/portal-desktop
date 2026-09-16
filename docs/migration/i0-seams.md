@@ -156,9 +156,14 @@ chat → orchestration → tools → orchestration → chat 是个环，任何�
 `store`（`SubsystemSettings`）、`electron`（`ElectronBindings` 门面）、`userData`、`desktopId`、`clientVersion`、`fetchImpl`、
 `onError(scope, error)`、`registry`、`push(channel, payload)`（**窗口守卫已经在里面**，子系统不必自己判断 destroyed）。
 
-`DesktopSubsystem` 可选实现 `connectionVerified(connection)`（**同步，不得 await `exclusive`**，它自己就跑在 exclusive 里）、
-`connectionCleared()`、`quitting()`、`ready`。扇出规则：verified / cleared 按安装顺序，quitting 逆序；任何一个抛错只记 `onError`，不打断其余。
+`DesktopSubsystem` 可选实现 `linked()`、`connectionVerified(connection)`（**同步，不得 await `exclusive`**，它自己就跑在 exclusive 里）、
+`connectionCleared()`、`quitting()`、`ready`。扇出规则：linked / verified / cleared 按安装顺序，quitting 逆序；任何一个抛错只记 `onError`，不打断其余。
 安装抛错记 `subsystem-install:<函数名>`，不影响其它子系统。
+
+`linked()`（2026-09-16 复审后补）是惰性规则的**唯一例外出口**：全部 installer 跑完之后、`installDesktopExtensions` 返回之前，
+按安装顺序同步跑一趟。惰性 getter 能表达「读」，表达不了「写」——§3.4 的
+`orchestration.presentation = new WorkerPresentation(...)` 是赋值，就放在 tools 子系统的 `linked()` 里。
+它**不是**开工的地方（那是 `connectionVerified`），也**不能**是异步的（安装是同步的）。
 
 `SubsystemSettings` 与方案 §2.1 的**偏差**：方案写的是一个 `settings: Settings & Record<string, unknown>`；
 真实的 `SettingsStore.settings` 只有类型化的那半，未知键在私有 `disk` 里。于是拆成两个成员：
@@ -186,7 +191,12 @@ chat → orchestration → tools → orchestration → chat 是个环，任何�
 `desktop/renderer/app/models/registry.ts`（`FEATURE_MODELS` + `AppFeatureModels`）。
 `page.tsx`（`<Browser>` 之后挂面板、`<Town>` 之后挂 sheet）、`sidebar.tsx`（head / scroll / foot 三处）、`topbar.tsx`（`topbar-actions` 开头）
 已经接好，**这三个文件后续单元不需要再改**。
-`AppModel` 新增 `readonly features`，构造末尾建全部注册 model（单个抛错只 toast，不阻断），`start()` 里把每个 model 的 `subscribe` 接进 `changed()`。
+`AppModel` 新增 `readonly features`，构造末尾建全部注册 model（单个抛错只 toast，不阻断），
+`start()` 里先把每个 model 的 `subscribe` 接进 `changed()`，再调它可选的 `start()` 并把返回的 cleanup 放进壳层自己的 cleanup 列表。
+
+**model 的生命周期**（2026-09-16 复审后补）：注册进来的 model 类型是 `FeatureModel = Store & { start?(): () => void }`。
+要开 IPC 订阅、定时器、轮询的，**一律放在 `start()` 里并返回关闭函数**——构造函数里开的东西没有任何地方能关掉它。
+这与内置 `TownModel.start()` 是同一条路径。start 抛错只 toast 并继续；cleanup 抛错被吞掉（清理必须走完整个列表）。
 
 排序是 `order` 升序、同 order 按 `key` 字典序，所以数组里的位置没有语义；`order` 请用百位（100、200…）留空隙。
 插槽组件自带边框、空态与错误处理，壳层只负责 mount。`tests/renderer-slots.test.ts` 钉住了这些规则。
@@ -202,9 +212,10 @@ chat → orchestration → tools → orchestration → chat 是个环，任何�
 | `desktop/renderer/app/slots.tsx` | 一行 import + 对应数组里一行条目 |
 | `desktop/renderer/app/models/registry.ts` | 一行 import + `FEATURE_MODELS` 里一行条目 |
 
-**只有 I0 能改**：`desktop/main/main.ts`、`package.json`、`forge.config.ts`、`vite.*.config.ts`。
-需要新依赖（比如 I3 若还缺什么）就回到 I0 补一次，不要在自己的单元里改这四处。
-`DesktopSubsystem` 接口若要加成员（比如 §3.4 提到的 `linked?()`），同样回 I0。
+**只有 I0 能改**：`desktop/main/main.ts`、`package.json`、`forge.config.ts`、`vite.*.config.ts`、
+`desktop/main/subsystems/types.ts` 的接口成员、`desktop/renderer/app/models/app.ts`。
+需要新依赖（比如 I3 若还缺什么）就回到 I0 补一次，不要在自己的单元里改这几处。
+§3.4 要的 `linked?()` **已经在了**（见 §A），不需要再回 I0；renderer model 的 `start()` 钩子同理（见 §D）。
 
 ### F. `desktop/main/common/`（共享正式实现）
 

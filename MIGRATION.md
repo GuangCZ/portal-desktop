@@ -288,6 +288,12 @@ P0、P1 与七个纯移植单元（u1–u7）之后，剩下的工作是把移�
 
 `desktop/main/main.ts` 只改了一处（多传一个 `electron` 门面）。**I0 之后任何单元都不得再改 main.ts、package.json、forge.config.ts、vite.*.config.ts。**
 
+复审之后补了两个生命周期钩子，都是「单元自己加不了、必须回 I0」的那类：
+`DesktopSubsystem.linked?()`（全部子系统装完后同步跑一趟，方案 §3.4 的 `orchestration.presentation` 赋值要用它），
+以及注册进 `FEATURE_MODELS` 的 renderer model 的 `start(): () => void`（开 IPC 订阅并把关闭函数交给壳层，与内置 `TownModel` 同一条路径）。
+同时修掉一个潜伏雷：`models/app.ts` 里 `this.features as Record<string, unknown>` 在 `AppFeatureModels` 有了第一个键之后就编译不过，
+而那个文件任何单元都不许改。
+
 P1 的 chat 子系统原样搬进 `subsystems/chat.ts`，成为这套注册方式的第一个使用者与模板；P1 的全部测试未改一行仍然通过。
 
 ### 副本收敛
@@ -317,6 +323,13 @@ P1 的 chat 子系统原样搬进 `subsystems/chat.ts`，成为这套注册方�
 本机（darwin-arm64）实测 `electron-forge package` 通过，并用干净的 Electron 44.2.0 对打出来的 asar 验证了
 `require('ws')` 与 `require('node-pty')` 都能解析，node-pty 的原生模块从 `app.asar.unpacked/.../build/Release/` 加载。
 `tests/packaging-contract.test.ts` 把这一整套钉住——这是 typecheck 与 vitest 都看不见的那部分。
+
+**复审抓到的第二个打包缺口（已修）**：`AutoUnpackNativesPlugin` 的 glob 是 `**/*.node`，而 node-pty 在 macOS 上还要一个
+**没有扩展名**的可执行文件 `spawn-helper`（`binding.gyp` 的 `OS=="mac"` 分支构建，`pty.cc` 只在 `__APPLE__` 下用它）。
+它留在 asar 内的后果是每一次 `pty.fork` 都 `posix_spawnp failed.`——也就是说打出来的 macOS 包里终端根本起不来。
+`forge.config.ts` 因此自带一条 `asar.unpack`（插件会与它合并而不是替换）。
+第二次真跑 `electron-forge package` 核实：helper 落在 `app.asar.unpacked/.../build/Release/`，mode 755，被 osx-sign 签过，
+`codesign --verify --deep --strict` 整包通过。
 
 ### 本阶段没做的事
 
