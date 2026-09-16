@@ -43,12 +43,30 @@ export async function closeTestApplication(app, graceMs = 8000) {
 
 export async function launchDesktop(options) {
   if (!options.env?.PORTAL_DESKTOP_USER_DATA) throw new Error('桌面测试必须使用独立临时配置。');
-  // Ad-hoc macOS builds change their signature on every rebuild. Opt in to
-  // Chromium's test keychain for UI checks without prompting for real secrets.
+  // Ad-hoc macOS builds change their signature on every rebuild, and the system
+  // then asks — with a modal dialog, on the first launch after every re-sign —
+  // whether the new binary may reach the keychain item the old one wrote. No
+  // test can answer it, so the launch simply times out: `electron.launch:
+  // Timeout 180000ms exceeded` (docs/migration/im-integration.md §4.2).
+  //
+  // DEFAULT SINCE 2026-09-17 (integration unit IN). It used to be opt-in, and
+  // three of the E2E scripts — tools, browser, terminal — did not know to opt
+  // in, so the first run after every `codesign --force --deep --sign -` failed
+  // for a reason that had nothing to do with what they test (IM's openIssue 3).
+  // None of those scripts, nor any other in tests/, asserts anything about the
+  // keychain: they drive the tool bridge, the browser panel, the terminal, the
+  // conversation and Town over fixture Beings. What the mock removes is the
+  // dialog, not a rule any of them keeps.
+  //
+  // Opting back out is `PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN=0`, for a script that
+  // one day does mean to exercise the real keychain — and it prints that it is
+  // doing so, because a real-keychain run is the one that can block on a human.
   // This switch is applied by the test launcher only, never by product code.
-  if (process.platform === 'darwin' && options.env.PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN === '1') {
+  if (process.platform === 'darwin' && options.env.PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN !== '0') {
     options = { ...options, args: [...(options.args || []), '--use-mock-keychain'] };
     console.log('Keychain coverage: MOCK — UI fixture only; native keychain authorization is not tested.');
+  } else if (process.platform === 'darwin') {
+    console.log('Keychain coverage: REAL — the first launch after a re-sign may block on a system dialog.');
   }
   const release = await acquire();
   let app;

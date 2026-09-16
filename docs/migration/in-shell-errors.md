@@ -234,3 +234,34 @@ model 没建起来就 toast），`openFeature` 先查 `TASK_SHELL_PAGES` 再查 
 (a) 任务书给本单元的 `main.ts` 授权是「只加 portalState 注入一行」；
 (b) 退出可以失败（`main.ts:642` 把 `quitting` 置回 false 并重新显示窗口），那时被跳过的推送没有补发点，
 面板会停在过期相位——要做得连补发一起做。写进 openIssues。
+
+### 3.6 【第 6 条】假钥匙串改成 E2E 的默认——已改
+
+`tests/support/electron-lifecycle.mjs` 的 `launchDesktop`：
+`PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN === '1'` → **`!== '0'`**。也就是 macOS 上默认加 `--use-mock-keychain`，
+`PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN=0` 才是真钥匙串（并且会打印 `Keychain coverage: REAL`，因为那条路径可能卡在系统对话框上）。
+
+理由写进了文件注释：ad-hoc 重签之后第一次启动，系统会弹一个「新二进制能否读取旧二进制写的钥匙串条目」的模态框，
+测试没人能回答，于是 `electron.launch: Timeout 180000ms exceeded`（IM §4.2 / openIssue 3）。
+`tools-e2e` / `browser-e2e` / `terminal-e2e` 从来没设过这个变量，所以每次重签后的第一跑必挂，
+而这三个脚本（以及 tests/ 下任何一个）**都不断言钥匙串的任何行为**。
+已经显式设 `='1'` 的四个脚本（`electron-smoke` / `town-ui` / `town-sdk` / `model-settings-bound-e2e`）行为不变。
+
+### 3.7 【第 7 条】两套连接纪元——**没做，按任务书「做不到就写设计、不要半做」**
+
+读完两边的真实代码，任务书设想的「types.ts + chat.ts 一处 + town.ts 一处」不成立：
+
+- `subsystems/chat.ts` 的 `revision`（`:66`）：`connectionVerified` 里 `!next` **直接 return 不动**；
+  `current.open && key === identityKey` 也 return；其余 `++`。读它的只有 `context()` / `connection()` 两处。
+- `subsystems/town.ts` 的 `revision`（`:89`）：`!next` **要 `++`**（并且同时 reset pairing/client/session、置 `connected=false`）；
+  `switched` 才 `++`；同 Being 重验不动。它还有**第二根轴** `identityRevision`（Being 自己的档案变了，连接没变），
+  两者成对出现在 `state()`、`getContext`、`getIdentity`、`getRevisions`、`revisions()` 五处读取点与三处 `++`。
+- 因此收敛不是「改读取纪元的那一行」：Town 要放弃对 `revision` 的所有权（删 3 处 `++`、把 5 处读取改成
+  `ctx.connectionGeneration()`），而新的所有者（注册表）必须自己算 `beingIdentityKey(next)` 才知道该不该推进
+  ——那等于把身份键搬进接缝，是 I0 级的契约变更，且会**改变 Town 在 `!next` 时的行为**。
+- 还有一层风险：`connectionRevision` 是**协议值**，会回显给渲染层并原样回到 `beings:town-speak` /
+  `beings:chat-composer-data`（I5 的 `tests/chat-integration-composer.test.ts` 钉住了这条握手）。换铸造者要连它一起重验。
+
+**结论**：不在本单元做。不变量仍由 I5 的 `tests/chat-integration-composer.test.ts` 钉着
+（生产可达路径上两者恒等，理由是 `main.ts:335/449` 两处调用都在 `verifyBeingConnection` 之后，
+而 `chat/ready.ts:6` 第一行就拒绝空连接，`!next` 那一支到不了）。设计与代价写进 openIssues。
