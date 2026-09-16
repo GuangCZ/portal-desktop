@@ -129,10 +129,12 @@ try {
         // 「成员目录还没到」= 请求真的挂着，直到 `releaseMembers()`。这正是下面两条
         // check 名字里的场景，也是 BeingDesktop test/town-conversation-ui.cjs
         //「while the member directory remains pending」的原样。
-        // 它当然会让篝火 feed 一起停住——那不是夹具的毛病，是
+        // 在 IT 之前它会让篝火 feed 一起停住——那不是夹具的毛病，是
         // desktop/main/town/session/session.ts 的 `getBonfireMessages` 把
         // `/api/bonfire/hear` 和 `getMembers()` 放进同一个 `Promise.all`，
-        // `.catch` 接得住「拒绝」接不住「慢」（复审 finding 2，记录 §8 openIssue 10）。
+        // `.catch` 接得住「拒绝」接不住「慢」（IM 复审 finding 2 / openIssue 10）。
+        // 现在目录只起飞不被等，所以这个挂起**应该**再也停不住 feed —— 下面那两条
+        // check 就是量这件事的，夹具这一行必须继续真的挂着，别改成快速失败。
         if (globalThis.town.holdMembers) await globalThis.town.membersHeld;
         return Response.json({ community: [{ town_id: 't_River', display_name: '河流', description: '' }] });
       }
