@@ -7,9 +7,17 @@
 // for the version that talked to `beings://chat`.
 import { useEffect, useLayoutEffect } from "react";
 import type { AppModel } from "../models/app";
+import { useModel } from "../../shared/hooks/use-model";
 import type { ConversationModel } from "../../conversation/models/conversation";
 
+/**
+ * Call this from a component that renders nothing. It subscribes to the
+ * conversation model, so its effects re-run when a projection or a connection
+ * state lands — and because the component has no output, a reply arriving one
+ * token at a time does not re-render the rest of the shell.
+ */
 export function useConversationBridge(app: AppModel, conversation: ConversationModel) {
+  useModel(conversation);
   useEffect(() => conversation.start(), [conversation]);
   useLayoutEffect(() => {
     app.post = (data: unknown) => {
@@ -33,16 +41,23 @@ export function useConversationBridge(app: AppModel, conversation: ConversationM
     app.frameLoaded();
     void conversation.reload();
   }, [app, app.chatSource, conversation]);
-  // ⌘F searches what this conversation has actually said.
+  // ⌘F searches what this conversation has actually said. `chatSource` is a
+  // dependency because the effect above resets the index through `frameLoaded`
+  // when the surface reloads, and that can land after a projection: without it,
+  // a conversation read before the connection settled would leave ⌘F empty
+  // until the next projection. (Measured: it does, on a cold start.)
   useEffect(() => {
     app.searchEntries = conversation.questions();
     app.changed();
-  }, [app, conversation, conversation.view]);
+  }, [app, app.chatSource, conversation, conversation.view]);
+  // Likewise reconciled rather than assigned once: `applySnapshot` puts the
+  // label back to "connecting" whenever a connection is (re)established, and
+  // the equality guard makes re-running on our own write a no-op.
   useEffect(() => {
     const next = app.snapshot?.settings.hasToken ? conversation.connectionState : "";
     if (app.connection === next) return;
     app.connection = next;
     app.workspace.connection(next === "online");
     app.changed();
-  }, [app, app.snapshot, conversation, conversation.state]);
+  }, [app, app.connection, app.snapshot, conversation, conversation.state]);
 }

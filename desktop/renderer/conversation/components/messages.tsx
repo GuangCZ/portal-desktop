@@ -100,8 +100,9 @@ export function ActivityLine({ text, think, live, activity }: {
 }
 
 /** One message: meta line, the activity line while the Being works on it, content. */
-function Bubble({ item, beingName, activity, onPlace }: {
-  item: TranscriptItem; beingName: string; activity: Activity | null; onPlace?: (target: PlaceTarget) => void;
+function Bubble({ item, beingName, activity, found, onPlace }: {
+  item: TranscriptItem; beingName: string; activity: Activity | null; found: boolean;
+  onPlace?: (target: PlaceTarget) => void;
 }) {
   const note = item.partial ? "回复中断，等待记录核对" : item.pending ? "等待记录确认" : "";
   const meta = [item.role === "user" ? "you" : beingName, clock(item.at), note].filter(Boolean).join(" · ");
@@ -110,7 +111,7 @@ function Bubble({ item, beingName, activity, onPlace }: {
   return (
     <article
       data-row-id={item.id}
-      className={`chat-message is-${item.role}${item.pending ? " is-pending" : ""}${item.live ? " is-live" : ""}${item.consecutive ? " is-consecutive" : ""}`}
+      className={`chat-message is-${item.role}${item.pending ? " is-pending" : ""}${item.live ? " is-live" : ""}${item.consecutive ? " is-consecutive" : ""}${found ? " is-found" : ""}`}
     >
       <div className="chat-meta">{meta}</div>
       {(item.think || item.live) && (
@@ -126,7 +127,7 @@ function Bubble({ item, beingName, activity, onPlace }: {
           whole; so do we — a half-written fence is not a code block yet. */}
       {item.live
         ? <div className="chat-body chat-body-live">{text}</div>
-        : <Markdown className="chat-body" content={text} chat onPlace={onPlace} />}
+        : <Markdown className="chat-body reading-text" content={text} chat onPlace={onPlace} />}
     </article>
   );
 }
@@ -141,14 +142,13 @@ export function Transcript({ model, onPlace }: { model: ConversationModel; onPla
     const node = stream.current;
     if (node && conversation.pinned) node.scrollTop = node.scrollHeight;
   });
+  // The row the search panel asked for stays marked until the model lets go of
+  // it, so the highlight outlives the re-render that follows the jump.
   useEffect(() => {
     const id = conversation.jumpTo;
     if (!id) return;
-    const target = stream.current?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(id)}"]`);
-    target?.scrollIntoView({ block: "center" });
-    target?.classList.add("is-found");
-    const timer = setTimeout(() => target?.classList.remove("is-found"), 1600);
-    conversation.jumped();
+    stream.current?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "center" });
+    const timer = setTimeout(() => conversation.jumped(), 1600);
     return () => clearTimeout(timer);
   }, [conversation, conversation.jumpTo]);
   return (
@@ -176,7 +176,13 @@ export function Transcript({ model, onPlace }: { model: ConversationModel; onPla
       {items.map(item => (
         <div key={item.id} className="chat-row">
           {item.gap && <div className="time-gap">{item.gap}</div>}
-          <Bubble item={item} beingName={conversation.beingName} activity={conversation.activity} onPlace={onPlace} />
+          <Bubble
+            item={item}
+            beingName={conversation.beingName}
+            activity={conversation.activity}
+            found={conversation.jumpTo === item.id}
+            onPlace={onPlace}
+          />
         </div>
       ))}
       {/* Loom's thinking indicator: the Being has the message and has not said

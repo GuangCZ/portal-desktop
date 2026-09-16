@@ -9,7 +9,7 @@
 // · pins, projects and archives are in memory only (OrganizerModel);
 // · deleting a conversation asks a second time in the shell's own dialog, where
 //   0.8.26 relied on the native menu being a deliberate act.
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { AppModel } from "../models/app";
 import { useModel } from "../../shared/hooks/use-model";
 import { Dialog } from "../../shared/components/dialog";
@@ -193,15 +193,21 @@ function SessionRow({ session, app, conversation, editing, menuOpen, onMenu, onE
   const activity = session.busy ? "talking" : session.inFlight ? "waiting" : "";
   const label = activity === "talking" ? "进行中" : activity === "waiting" ? "等待回复" : "";
   const menu = useRef<HTMLDivElement>(null);
+  // The close callback is read through a ref rather than depended on: a reply
+  // streaming into another conversation re-renders this row several times a
+  // second, and an effect that re-ran would pull focus back to the first menu
+  // item every time.
+  const close = useRef(onMenu);
+  useLayoutEffect(() => { close.current = onMenu; });
   useEffect(() => {
     if (!menuOpen) return;
     menu.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
     const outside = (event: Event) => {
-      if (!menu.current?.parentElement?.contains(event.target as Node)) onMenu(false);
+      if (!menu.current?.parentElement?.contains(event.target as Node)) close.current(false);
     };
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
-  }, [menuOpen, onMenu]);
+  }, [menuOpen]);
   if (editing)
     return (
       <RenameEditor

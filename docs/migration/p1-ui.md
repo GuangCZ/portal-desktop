@@ -254,6 +254,97 @@ buildKitPrompt`，服务于 `/` 调 Kit、`@` 通知 Being。本阶段**没有�
    壳层不再加载那个页面。
 6. **历史范围（当前场景 / 全部场景）**：原生会话没有这个概念，`ChatSceneIndicator`
    的两个单选项保持禁用（`scopeReady` 恒 false），「场景详情」仍可用。
+7. **侧栏元数据只在内存里**：置顶、项目归属、归档都存在 `OrganizerModel` 里，
+   关掉窗口就没了。0.8.26 由主进程按 Being 连接分桶存进 Desktop 设置
+   （`sidebarAction`，src/main.cjs:1139），本仓库还没有这个通道。形状照抄
+   0.8.26，持久化阶段不用重新设计。
+8. **项目只有一个**，取自 `snapshot.settings.workspace` —— 这正是 0.8.26 自己的
+   兜底（sidebar.js:117 `state.sidebar?.projects || [state.workspace.path]`）。
+   壳层没有「添加项目文件夹」入口，所以做不出第二个。
+9. **⌘1–9 切换会话没有绑**：本壳层的 ⌘1 是「回对话」。绑了的是 ⌘N（新会话）
+   与 ⌘K（搜索会话）。
+
+## 壳层接线（这一块改了什么）
+
+- `desktop/renderer/app/page.tsx`：`<iframe id="chat-frame">` 换成
+  `<ConversationPage model={app.conversation}>`；`.workspace-body` 里多了一个
+  `<Sidebar model={app}>`。`useChatBridge` 换成 `useConversationBridge`。
+  `renderer/chat/` 与 `app/hooks/use-chat-bridge.ts` **没有删**（下一阶段删），
+  只是壳层不再加载。
+- `desktop/renderer/app/models/app.ts`：只加了一个 `readonly conversation`
+  （在构造函数里建，和 `town` 一样，因为 `toast` 是字段、要等字段初始化完）。
+  `chatSource` / `frameLoaded()` / `post()` / `searchEntries` **一个都没删**：
+  `tests/renderer-state.test.ts` 直接断言 `chatSource` 的查询参数，
+  `post` 是伴随面板与 Town 层的出站通道，改了就是在弱化既有测试。
+- `app.post` 现在由 `useConversationBridge` 接到对话模型上：
+  `beings:scene-draft` → `conversation.placeDraft(text)`，用
+  `queueMicrotask` 回 `beings:scene-draft-result`（`WorkspaceModel.compose()`
+  还在自己的调用栈里，同步回话会在它设好超时之前就改它的状态）；
+  `beings:search-jump` → `conversation.jump(id)`。其余消息（sbs / history-scope /
+  chat-action / town-activity）无人接收，等于原地丢弃。
+- `app.chatSource` 变化时（首次连接、切 Being、topbar 的刷新按钮）：调
+  `app.frameLoaded()`（把 `chatLoading` 归零、重置搜索索引）并
+  `conversation.reload()`（以最新窗口重建基线）。刷新按钮因此有了真实语义。
+- `app.connection` 由 `conversation.connectionState` 推导：没有 token → `''`；
+  `state.open` 为假 → `connecting`；`phase === 'reconnecting'` → `reconnecting`；
+  `recovery.gaveUp` → `degraded`；否则 `online`。同时同步
+  `workspace.connection(online)`。
+- `⌘F`：`app.searchEntries` 现在来自 `conversation.questions()`
+  （当前会话的 user 行，id `row-<seq>`，文本截断到 240），
+  `ChatSearch` 未改动；跳转经 `beings:search-jump` 回到对话，
+  `Transcript` 把该行滚到视野中央并短暂高亮 `.is-found`。
+- Markdown 渲染复用 `shared/components/markdown.tsx`，className 为
+  `chat-body reading-text`（`.reading-text` 是壳层既有的正文排版）。
+  代码块、Markdown 预览切换、`chat-place-link`、hljs 配色这几组
+  `.reading-text` 没覆盖的规则，从 `renderer/chat/styles.css`
+  （行 937-960、1086-1092）按本仓库的变量重写进了 `conversation/styles.css`。
+  实测发现：不加这些，代码块会退化成「语言名 + 无框纯文本」。
+
+## 实机核对（2026-09-16）
+
+`npm run typecheck` 与 `npx vitest run` 之外，把 `vite build` 出来的真实渲染层
+挂上 stub 过的 `window.beings`（含完整 `chat` 通道）在浏览器里跑过一遍，逐项看过：
+
+- 历史行、markdown（粗体/列表/围栏代码 + 语法高亮）、`— hh:mm:ss —` 静默分隔、
+  user 行右侧气泡、`chat-place-link`（篝火/围炉/seeds）都正常。
+- 发送：输入框清空 → 暂存气泡 `you · 12:34:10 · 等待记录确认`（琥珀色）→
+  live 气泡 `willow · 12:34:10` 带活动行 `⟩ 在搜索 小镇 ▊` 与正文光标，自动滚到底。
+- 停止：把 `sessions[0].busy/inFlight` 与 `recovery.phase='streaming'` 推过去后
+  按钮点亮；点击 → 弹「Being 正在回复的是「昨天的部署问题」，不是这个会话。
+  要停止那边的回复吗？」→ 确认后走 `force:true`。idle 时按钮 `hidden`。
+- 侧栏：三组分栏、活动灯、相对时间、更多菜单（置顶/重命名/移到 work/归档会话/
+  删除会话）、行内重命名（Enter 保存后标题即时更新）、⌘K 搜索（会话/已归档两档、
+  结果带「独立会话」标签）。切换会话后 `aria-current="page"` 落在新会话上。
+- ⌘F：输入「小镇」命中 1 条提问 → 点击后对话滚到那一行并加 `.is-found`。
+- 说明条「知道了」后 `localStorage['being-chat-notice-v1'] === '1'`，刷新不再出现。
+- 深色主题：侧栏、气泡、代码块（含 hljs 配色）、说明条、输入区都可读。
+- 控制台无 error、无 pageerror。
+
+实机跑出来两个**源码推断看不出来的问题**，都已修：
+
+1. `useConversationBridge` 原本直接由 `App` 调用，而 `App` 只 `useModel(app)`，
+   不订阅对话模型 —— 于是「把 rows 同步成 ⌘F 索引」「把连接态同步给壳层」两个
+   effect 的依赖 `conversation.view` / `conversation.state` 根本不会重新求值。
+   现在挂在一个**只返回 null 的 `<ConversationBridge>`** 上并在 hook 里
+   `useModel(conversation)`：effect 会跟着对话模型跑，而逐 token 的流式更新
+   不会把 topbar、侧栏、Town 抽屉一起重渲染。
+2. 即使订阅了，冷启动时 ⌘F 仍然是空的：`sessions()` 先回来、投影先到，
+   `initialize()` 后到才设 `chatSource`，`frameLoaded()` 于是在索引建好之后
+   把 `searchEntries` 清了。把 `app.chatSource` 加进那个 effect 的依赖后，
+   顺序就固定了（`chatSource` 的 effect 声明在前、先跑，索引的在后、后跑）。
+   连接态的 effect 同理加了 `app.connection` 依赖：`applySnapshot` 会把它改回
+   `connecting`，靠相等判断自收敛。连开三次冷启动都稳定。
+
+自查时又发现两处（也已修，实机验证过）：
+
+3. `Transcript` 原本用 `classList.add('is-found')` + `setTimeout` 移除。
+   `conversation.jumped()` 会立刻把 `jumpTo` 清空、触发重渲染，effect 的清理函数
+   于是马上 `clearTimeout` —— 高亮永远不会消失。现在 `is-found` 由渲染决定
+   （`conversation.jumpTo === item.id`），1.6 秒后才 `jumped()`。
+   实测：命中后 `.is-found` 有 1 个，1.8 秒后 0 个。
+4. 侧栏会话菜单的 effect 把 `onMenu` 放进了依赖，而它每次渲染都是新闭包。
+   别的会话在流式回复时这一行每秒重渲染多次，焦点会被反复拽回菜单第一项。
+   改成用 ref 读回调，依赖只留 `menuOpen`。
 
 ## 进度
 

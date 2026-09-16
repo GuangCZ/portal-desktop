@@ -388,6 +388,28 @@ describe("the conversation layer", () => {
     expect(questions[1].text).toHaveLength(240);
   });
 
+  it("holds on to the row the search panel jumped to until the highlight is done", () => {
+    const test = fixture();
+    test.model.accept(chatState());
+    test.model.jump("row-4");
+    expect(test.model.jumpTo).toBe("row-4");
+    test.model.jumped();
+    expect(test.model.jumpTo).toBe("");
+    // Letting go twice is not a change, so it cannot loop a re-render.
+    const version = test.model.getVersion();
+    test.model.jumped();
+    expect(test.model.getVersion()).toBe(version);
+  });
+
+  it("stops pointing at a row once the conversation changes under it", async () => {
+    const test = fixture();
+    test.model.accept(chatState());
+    await settle();
+    test.model.jump("row-4");
+    test.model.accept(chatState({ active: "s2", version: 2 }));
+    expect(test.model.jumpTo).toBe("");
+  });
+
   it("remembers that the one-time explanation was dismissed", () => {
     const store = new Map<string, string>();
     const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
@@ -434,6 +456,21 @@ describe("the conversation layer", () => {
     expect(await model.rename("s1", "x")).toBe(false);
     expect(await model.forget("s1")).toBe(false);
     expect(model.beingName).toBe("being");
+  });
+
+  it("puts a quotation into an empty draft and refuses to overwrite one the user is writing", async () => {
+    const test = fixture();
+    test.model.accept(chatState());
+    await settle();
+    expect(test.model.placeDraft("一起看看这段：\n\n> 引用")).toBe(true);
+    expect(test.model.composer.text).toBe("一起看看这段：\n\n> 引用");
+    expect(test.model.placeDraft("另一段")).toBe(false);
+    expect(test.model.composer.text).toBe("一起看看这段：\n\n> 引用");
+    test.model.composer.setText("   ");
+    expect(test.model.placeDraft("第三段")).toBe(true);
+    // Nothing to type into: no conversation is open.
+    test.model.accept(chatState({ version: 9, open: false }));
+    expect(test.model.placeDraft("第四段")).toBe(false);
   });
 
   it("files a new conversation into the project it was created in", async () => {

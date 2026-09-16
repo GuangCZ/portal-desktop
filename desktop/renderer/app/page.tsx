@@ -21,7 +21,6 @@ import { PlaceHeading } from "./components/navigation";
 import logo from "../../../resources/branding/logo.png";
 export function App({ model }: { model: AppModel }) {
   const app = useModel(model);
-  useConversationBridge(app, app.conversation);
   useEffect(() => app.start(), [app]);
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = app.theme;
@@ -59,6 +58,7 @@ export function App({ model }: { model: AppModel }) {
   }, [app]);
   return (
     <>
+      <ConversationBridge app={app} />
       <section
         id="startup-screen"
         className="startup-screen"
@@ -164,6 +164,15 @@ export function App({ model }: { model: AppModel }) {
       <Toast message={app.toastMessage} />
     </>
   );
+}
+
+/** The conversation layer's wiring into the shell. It renders nothing on
+ * purpose: it subscribes to a model that changes on every streamed token, and
+ * the topbar, the sidebar and the Town sheet have no business re-rendering for
+ * that. */
+function ConversationBridge({ app }: { app: AppModel }) {
+  useConversationBridge(app, app.conversation);
+  return null;
 }
 
 function Toast({ message }: { message: string }) {

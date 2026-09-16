@@ -66,6 +66,42 @@
 .chat-reference-remove{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;color:var(--muted)}
 .chat-reference-remove svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round}
 
+/* What `<Markdown>` emits inside a message. The shell's `.reading-text` carries
+   the base typography (paragraphs, headings, quotes, tables); the rules below
+   are the chat-specific parts of it — code blocks, the Markdown preview toggle
+   and the place links — ported from the retired chat page's stylesheet
+   (desktop/renderer/chat/styles.css lines 937-960, 1086-1092) onto this shell's
+   tokens, so highlighting reads in both themes. */
+.chat-body.reading-text{margin:0}
+.chat-body>:first-child{margin-top:0}
+.chat-body>:last-child{margin-bottom:0}
+.chat-body code{padding:2px 5px;border-radius:4px;background:var(--code);font-size:.88em}
+.chat-body .code-block{margin:14px 0;border:1px solid var(--line);border-radius:10px;background:var(--code);overflow:hidden}
+.chat-body .code-block pre{margin:0;padding:14px;background:transparent;border-radius:0;overflow:auto}
+.chat-body .code-block pre code{padding:0;background:transparent;font-size:12px}
+.chat-body .code-lang{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 12px;border-bottom:1px solid var(--line);font-size:10px;letter-spacing:.3px;color:var(--muted)}
+.chat-body .markdown-code-modes{display:flex;gap:2px;padding:2px;border-radius:7px;background:var(--surface)}
+.chat-body .markdown-code-modes button{padding:3px 9px;border-radius:5px;font-size:10px;color:var(--muted);white-space:nowrap}
+.chat-body .markdown-code-modes button[aria-pressed=true]{background:var(--bg);color:var(--text)}
+.chat-body .markdown-preview{margin:0;padding:14px 16px;background:var(--bg)}
+.chat-body .markdown-preview>:first-child{margin-top:0}
+.chat-body .markdown-preview>:last-child{margin-bottom:0}
+.chat-body .table-wrap{overflow:auto;margin:14px 0}
+.chat-body table{display:table;margin:0}
+.chat-body .chat-place-link,.chat-body .chat-code-link{display:inline;padding:0;color:var(--accent);font:inherit;line-height:inherit;background:none;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:4px}
+.chat-body .chat-place-link:hover,.chat-body .chat-code-link:hover{text-decoration-style:solid;background:var(--hover)}
+.hljs{background:transparent!important;color:var(--text)}
+.hljs-strong,.hljs-emphasis,.hljs-subst{color:var(--text)}
+.hljs-comment,.hljs-code{color:var(--muted)}
+:root:not([data-theme=dark]) .hljs-keyword,:root:not([data-theme=dark]) .hljs-selector-tag{color:#8a4083}
+:root:not([data-theme=dark]) .hljs-string,:root:not([data-theme=dark]) .hljs-attr,:root:not([data-theme=dark]) .hljs-quote,:root:not([data-theme=dark]) .hljs-name{color:#3a7065}
+:root:not([data-theme=dark]) .hljs-title,:root:not([data-theme=dark]) .hljs-number,:root:not([data-theme=dark]) .hljs-section,:root:not([data-theme=dark]) .hljs-literal{color:#436b9f}
+:root:not([data-theme=dark]) .hljs-bullet{color:#82631d}
+:root[data-theme=dark] .hljs-keyword,:root[data-theme=dark] .hljs-selector-tag{color:#d2a8ff}
+:root[data-theme=dark] .hljs-string,:root[data-theme=dark] .hljs-attr,:root[data-theme=dark] .hljs-quote,:root[data-theme=dark] .hljs-name{color:#a5d6ff}
+:root[data-theme=dark] .hljs-title,:root[data-theme=dark] .hljs-number,:root[data-theme=dark] .hljs-section,:root[data-theme=dark] .hljs-literal{color:#79c0ff}
+:root[data-theme=dark] .hljs-bullet{color:#e3b341}
+
 /* ---- the composer ---------------------------------------------------- */
 
 .chat-composer-area{flex-shrink:0;padding:0 max(20px,calc((100% - 720px)/2)) 16px}
