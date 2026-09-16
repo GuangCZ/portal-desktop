@@ -61,7 +61,11 @@ export class ShellStateModel extends Store {
    * not the one that gets overwritten. */
   start() {
     const shell = host(this.app);
-    const stop = this.api?.shellState?.onSidebar?.(state => this.accept(state)) ?? (() => {});
+    // No bridge, no binding: the projection keeps its own entries, the sidebar
+    // still works, and nothing pretends to have been saved. The only way to be
+    // here is a preload without this unit's channels.
+    if (!this.api?.shellState) return () => {};
+    const stop = this.api.shellState.onSidebar(state => this.accept(state));
     shell?.conversation.organizer.bindLedger({ act: action => this.act(action) });
     void this.refresh();
     return () => {
