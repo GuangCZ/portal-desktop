@@ -449,3 +449,9 @@ TownPairing 的 5 个用例（全部移植）：
 2. `crypto.randomUUID` 从 `t.mock.method` 改为构造参数注入（`randomUUID` 选项），因为 vitest 无法对 ESM 命名空间打桩。
 
 放弃的迁移点：`townSpeak` 的 Being 中继回退（BeingTownWriter）按任务要求不移植；`ChannelBeing` 与 `TownController` 都把对应回退点保留为可注入的可选钩子（`createClient` / `groveConfigText`），缺省即无回退。
+
+### test/p1-name-rules.test.cjs 里针对 TownController 的两条断言
+`test/town-identity-migration.test.cjs` 不涉及 TownController（grep 无命中）。`test/p1-name-rules.test.cjs` 有两处：
+1. `P1 identity exposes distinct Loom, verified Town and display fields`（第 87 行）：`new TownController({installer:{}, portal:{state:{}}, getContext:()=>({beingName:'cz_being', townId:'t_self', displayName:'After'})})`，断言 `state().identity.loomBeingId === 'cz_being'`、`.townId === 't_self'`、`.displayName === 'After'`。其余部分测的是 TownClient。
+2. `P1 exact acceptance fixture keeps Loom, Town and display identities separate across IPC`（第 150 行）：identity 夹具 `{loomBeingId:'cz_being', townId:'t_IzYOPP3G0ABJuK2M', displayName:'Neuromancer'}`，经 `structuredClone(controller.state())` 走 preload 后三字段逐一相等。其余部分测 `renderer/town-mentions.js` 与 `src/town-wire.cjs`（其他单元）。
+注：两处都只给 `installer`/`portal`/`getContext` 三个构造参数 —— `state()` 必须在没有 `saveDeployment`/`startPortal` 的情况下可用。
