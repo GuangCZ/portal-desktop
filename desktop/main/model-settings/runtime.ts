@@ -16,24 +16,28 @@
 // in, `status` left `unknown` and `activeStream.active` left `null`, which is
 // exactly what BeingDesktop's own test asserts of that function ("updates
 // configuration without claiming runtime or stream health", test/model-config
-// .test.cjs). `readRuntime` is ported with it because it is the definition of
-// the fields — `sideBySide.configured` comes from `sbs_enabled` and from nowhere
-// else — and because a later unit that does own all three reads should find it
-// here rather than write it again.
+// .test.cjs).
+//
+// 0.8.26's `readRuntime`, which parses all three answers into one line, is NOT
+// ported: nothing here would call it, and a copy of the stream-phase table that
+// no code reads is a second definition waiting to disagree with the conversation
+// layer's. The two fields it would fill are kept on `RuntimeState` — `status` and
+// `activeStream.active`, both left at their unknown value — because every
+// function below must be able to say it did not touch that half. When a unit
+// takes ownership of all three reads it should write the parser against the
+// routes as they are then, not inherit a copy frozen on this date.
 //
 // `sideBySide.active` has no source in this shell at all. In 0.8.26 it arrived as
 // a `beings:sbs-state` message from the Loom page, which the native conversation
 // replaced; it stays `null` (unknown) and the settings page says so rather than
 // claiming the Being is asleep.
-import { publicModelUrl } from '../common/loom-connection';
 import type { ModelRuntimeState, ModelSideBySideState } from '../../shared/model-settings-types';
 
+/** The conversation layer's half, as far as this file is concerned: whether the
+ * Being is answering someone right now. Nothing here ever sets it — see the
+ * header — and the settings page reports it as unknown rather than guessing. */
 export interface ActiveStreamState {
   active: boolean | null;
-  id?: string;
-  sessionId?: string;
-  phase?: string;
-  tool?: string;
 }
 
 export interface RuntimeState {
@@ -62,48 +66,6 @@ export function emptyRuntime(): RuntimeState {
     status: 'unknown', error: '', checkedAt: null, configStatus: 'unknown', configError: '', configCheckedAt: null,
     model: '', provider: '', baseUrl: '', sideBySide: { configured: null, active: null }, activeStream: { active: null },
   };
-}
-
-type Settled = PromiseSettledResult<unknown>;
-
-export function readRuntime(results: [Settled, Settled, Settled], checkedAt: string): RuntimeState {
-  const next = emptyRuntime();
-  const [health, config, active] = results;
-  next.checkedAt = checkedAt;
-  next.configCheckedAt = checkedAt;
-  next.status = health.status === 'fulfilled' ? 'connected' : 'error';
-  next.error = next.status === 'error' ? '运行时状态读取失败，请检查网络与连接凭据。' : '';
-  const c = config.status === 'fulfilled' && (config.value as Record<string, unknown> | null);
-  if (c && typeof c === 'object' && !Array.isArray(c) && typeof c.model === 'string' && typeof c.provider === 'string') {
-    next.configStatus = 'connected';
-    next.model = c.model;
-    next.provider = c.provider;
-    next.baseUrl = publicModelUrl(String(c.base_url ?? ''));
-    next.sideBySide.configured = typeof c.sbs_enabled === 'boolean' ? c.sbs_enabled : null;
-  } else {
-    next.configStatus = 'error';
-    next.configError = '模型与并肩配置读取失败，当前值未知；重新读取成功后更新。';
-  }
-  if (active.status === 'fulfilled') {
-    const value = active.value as Record<string, unknown> | null;
-    if (value === null) next.activeStream.active = false;
-    else if (typeof value?.finished === 'boolean') next.activeStream.active = !value.finished;
-    if (next.activeStream.active === true) {
-      const stream = value as Record<string, unknown>;
-      const safe = (item: unknown) => typeof item === 'string' ? item.slice(0, 160) : '';
-      next.activeStream.id = safe(stream.stream_id);
-      next.activeStream.sessionId = safe(stream.session_id);
-      next.activeStream.phase = 'awaiting_first';
-      next.activeStream.tool = '';
-      const phases: Record<string, string> = { thinking: 'reasoning', reasoning: 'reasoning', tool_use: 'tool', tool_result: 'working', content_block_delta: 'text', message_stop: 'continuing', error: 'error' };
-      for (const item of (Array.isArray(stream.events) ? stream.events : []) as Record<string, unknown>[]) {
-        if (!item || !Object.hasOwn(phases, String(item.event))) continue;
-        next.activeStream.phase = phases[String(item.event)];
-        next.activeStream.tool = item.event === 'tool_use' ? safe((item.data as Record<string, unknown> | undefined)?.name) : '';
-      }
-    }
-  }
-  return next;
 }
 
 /** The other half of `updateRuntimeConfig`: a read that did NOT come back.
