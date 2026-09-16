@@ -699,13 +699,16 @@ orchestration.assertEnforced = () => orchestrationPolicy.assertEnforced();
 | tests/orchestration-policy.test.ts | test/orchestration-policy.test.cjs | 7 / 7 | 通过 |
 | tests/orchestration-agent-process.test.ts | test/agent-process.test.cjs | 4 / 4 | 通过 |
 | tests/orchestration-manager.test.ts | test/orchestration.test.cjs | 24 / 24（2 skip） | 通过 |
-| tests/orchestration-worker-callbacks.test.ts | test/worker-callbacks.test.cjs | — | 未开始 |
+| tests/orchestration-worker-callbacks.test.ts | test/worker-callbacks.test.cjs | 18 / 18（1 skip） | 通过 |
 | tests/orchestration-native-results.test.ts | test/native-orchestration.test.cjs | — | 未开始 |
 
 测试文件按 BeingDesktop 的测试文件一对一映射（不按模块拆），这样用例数可以直接对账。
 `tests/orchestration-manager.test.ts` 里 skip 的两条（原文件第 2、16 条）属于 desktop-tool-link / desktop-tools 单元：
 `presentation schema accepts one nullable target only for the presentation action`、
 `desktop execution is denied in orchestrator mode and worker schemas require session binding`。
+`tests/orchestration-worker-callbacks.test.ts` 里 skip 的一条（原文件第 10 条）同样属于 desktop-tool-link 单元：
+`receive is the only callback tool without a historical session token; review still requires scope`。
+该文件把 `parseConnection` / `sessionPartition`（src/security.cjs）逐行复制成测试内的本地 helper 并注入两个 sender。
 
 移植测试时遇到的 TS 收敛（不改行为）：
 - `manager.context(id)` 返回 `OrchestrationContext`，测试里用 `as WorkerToolArgs` / `as Args` 断言后再展开，
