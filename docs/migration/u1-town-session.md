@@ -77,3 +77,10 @@
 | `GET /api/messages`、`POST /api/messages {recipient, content, reply_to?}` | 收件箱最新在前 ≤100；无中继回退 |
 | `GET /api/channels/status`、`POST /api/channels/register`、`POST /api/channels/credentials` | 经 `TownSession`；QR 只接受白名单域名或内联图片 |
 | `GET /api/grove?offset&limit`、`GET /api/grove/{id}` | 公开，`credentials:'omit'` |
+
+### BeingDesktop/docs/architecture.md §5.3 / §6.3 / §7 / §8（已读）
+
+- **§5.3 数据流**：`TownClient` 持 SSE → `onEvent(hello/bonfire/fireside/profile_changed/dm)` → main 合并为一次校准读 → `TownSession.getBonfireMessages({limit:50})` → `TownClient.read('/api/bonfire/hear', {limit, since?})` → `{messages, latest_seq, total_count}` → `pageDto` → TownRefresh `_merge`。`townSpeak` 先直连，只有 `AUTH_REQUIRED` 才回退 `BeingTownWriter`；私信无回退。只读缓存（卷轴/居民/Grove/围炉房间与成员）走 `TownCachedReads`→`TownDataCache`，成员 60 秒 TTL。
+- **§7 安全边界（Town 部分，逐条保真）**：`credentials:'omit'`、`referrerPolicy:'no-referrer'`、**固定来源**、**禁止重定向**、**响应体 ≤1MB**、**DTO 严格校验**（`town-wire`、`town-library-contract`、`town-session`）。
+- **§6.3 凭据**：连接地址只以 safeStorage 密文落盘；`isEncryptionAvailable()` 为假拒绝保存与配对（Linux basic_text 同样拒绝）。日志/诊断经 `sanitizeText`。
+- **§8 并发约定（本单元相关）**：①纪元校验 `generation`/`identityRevision`/各子系统 `_epoch`，过期结果静默丢弃、过期写入抛 `SESSION_CHANGED`。③**不自动重发**：`202`/`RESULT_UNKNOWN`/网络中断保留待确认状态。④Town 每个 feed 单飞（`_flight`），60 秒最小间隔退避（最长 300 秒）。⑥定时器全部 `unref()`。
