@@ -236,3 +236,54 @@ BD 的 `acceptTownState` 在身份变化时只 `clearPrivate()`，不重读，�
 `desktop/renderer/app/**`、`tests/support/**` 等）一个文件没碰。
 
 唯一落在独占目录之外的是 `tests/town-session-session.test.ts`，它是 `tests/town-*`，属本单元独占。
+
+---
+
+## 6. 门槛与打包冒烟（2026-09-17 实跑）
+
+| 项 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 绿 |
+| `npx vitest run` | **128 文件通过 / 8 跳过；1420 通过 / 24 跳过**（基线 127 / 8；1398 / 24 → 新增 22 条：`town-conversation-rules` 17 + `town-session-session` 5；**没有删除或弱化任何一条既有用例**） |
+| 打包 | `PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package` + `codesign --force --deep --sign -`，成功（第一次 `electron-forge package` 因 GitHub `ETIMEDOUT` 失败，重试即过——网络抖动，不是构建问题） |
+| `npm run test:town-ui` | **18 条通过 / 1 条红**。红的那条是 `an ambiguous recipient offers the choices Town returned` —— `contextBridge` 剥掉 `error.candidates`，**待 IN**（IM openIssue 1 的第二个后果）。基线是 13 过 2 红 |
+| `npm run test:town-sdk` | **13 条通过 / 4 条红**，四条全是同一个 `contextBridge` 剥 `error.code`，**待 IN**；与基线一模一样，本单元没有让它变好也没有让它变差 |
+| `npm run test:town-names` | **PASS** |
+| `npm run test:seed-garden` | **PASS** |
+
+### 6.1 本单元修掉的两条红，逐条反向证据
+
+| 红 | 修好之后 | 去掉修复 |
+| --- | --- | --- |
+| `messages render while the member directory is still pending` | passed（打包产物） | 把 `session.ts` 的两处改回原样、**重新打包**、重跑：`AssertionError: messages render while the member directory is still pending`，脚本当场停在这一条 |
+| `the pending directory did not stop the feed read` | passed（打包产物） | 同一次反向打包里它排在上一条之后，因此没有机会执行；它的规则由单元用例 `a pending member directory does not hold up the bonfire messages` 承接，去掉修复后该用例 **5008 ms 超时变红** |
+| （新增）`five directory reads at once are one request on the wire` | passed（打包产物） | 单元用例 `concurrent directory reads share one request, and a failure is not sticky` 与 `one caller giving up on the directory leaves the shared read running for the others`，去掉合并后**双双变红** |
+| （新增）四条渲染层规则 | passed | 逐条改回原样后 `tests/town-conversation-rules.test.ts` **17 条里 4 条变红**（围炉迟到答复、围炉往返、回执清草稿、身份到达不重读） |
+
+反向打包那一轮的完整日志：`scratchpad/it-reverse.log`；正向四个脚本：`scratchpad/it-final-e2e.log`。
+
+---
+
+## 7. 未做事项 / 存疑（openIssues）
+
+1. **`contextBridge` 剥掉 Error 的自定义属性** —— `tests/town-sdk.mjs` 的 4 条红与 `tests/town-ui.mjs` 的 1 条红全部指向它。
+   **归 IN**（另一个 worktree），本单元一个字没碰 `desktop/preload/**`，红的照红。
+2. **「GET /api/messages 是否返回已发送的私信」未实测** —— 本机没有真 Town。路由与 BD 0.8.26 逐字一致（§1.5 / §4.4），
+   按任务书以 BD 源码为准。真要确认，需要一条真配对与一次真发信。
+3. **250 ms 的那次 feed 读保留** —— 实测确认它是 SSE `hello` 触发的后台采集（§4.1），与 BD 逐字节一致。
+   如果将来要把「页面打开的那次读」与「live 事件触发的那次」合成一次，正确的做法是让
+   `notifyEvent` 知道「这条事件已经被一次在它之后开始并完成的读服务过了」，而不是缩短窗口或去掉事件；
+   本单元不改，因为做不对就会丢更新。
+4. **`/api` 在一次完整打开里仍然不止一条** —— 实测挂起场景下是 3 条，但它们**不是没合并**：
+   配对会 `session.reset()`（纪元 ++、旧请求被 abort）、`invalidateMembers()` 也会清合并槽，
+   每一条都属于不同的纪元。合并本身由 `five directory reads at once are one request on the wire`
+   与两条单元用例证明。夹具无法区分「被 abort 的旧请求」与「没合并的新请求」（被 abort 的 handler 永远挂着），
+   所以没有在 E2E 里对总条数下断言。
+5. **`refreshLabel` 的时间戳用的是本机 `toLocaleTimeString('zh-CN')`**，与 BD 一致；没有做窄屏/暗色的几何回归
+   （本仓库对 Town 页没有几何回归脚本，与 I6b openIssue 5 同一缺口）。
+6. **草稿焦点/滚动只覆盖篝火** —— BD 还有一条围炉版（`Fireside background changes preserve draft focus and scroll`）。
+   规则相同、代码路径相同（同一个 `TownComposer` 与同一个 feed 组件），模型层的围炉半边在
+   `tests/town-conversation-rules.test.ts` 里有，真窗口那半只做了篝火，没有第二次开围炉重跑一遍。
+7. **`npm run test:all` 没有整条跑过** —— 它是 fail-fast 的，`town-sdk` 的四条红（openIssue 1）会让它停在那一步，
+   与 IM 记录的现状一致。本单元验证方式是逐个脚本单独跑（§6）。
+8. **没有连过真 Being / 真 Town** —— 本机引擎是 stub，全部 E2E 都是 `protocol.handle` 夹具。
