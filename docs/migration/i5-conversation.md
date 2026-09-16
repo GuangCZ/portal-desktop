@@ -114,3 +114,29 @@ Worktree `.local/i5-conversation`，分支 `i5-conversation`，基线 `next @ 7b
   clean 去控制字符 + trim + 截断；kit handle 由 name 生成（空格转 `-`，去非字母数字），重名加 `-<id>`，再重名丢弃；
   member handle 就是 id；`installed` / `icon`（只给 kit，内嵌 data URI）/ `builtin`；
   kits 先塞两个内置再接 `value.kits.filter(installed===true)`，各自上限 1000。
+
+### 1.5 ChatDetails / kits / Town 成员 / composer 助手
+
+- **`desktop/main/chat/details.ts`（117 行）** —— 类已在，无 IPC。方法：`reset(notify=true)` / `open({parentSessionId,
+  reference})` / `view(id)` / `send({sessionId,text})` / `stop(id)` / `close(id)`。
+  `open` 上限 8 张卡（`BUSY`「请先关闭一个解释卡片。」）；`view/send/stop` 的 `_card` 失败抛 `INVALID_REQUEST`
+  「解释卡片已关闭。」。构造参数 `getContext / hasParent / onEvent / clientVersion / fetchImpl / timers`。
+  `DetailEvent = ChatSessionEvent | {type:'reset'} | {type:'state', sessionId?}`。
+- **`desktop/main/kits/catalog.ts`** —— `localKits(settings)` → `KitLibrary{directory, enabled, configPath?, kits: LocalKit[]}`；
+  `LocalKit{name, version, description, directory, command, tools, compatible, eager, problem?}`。
+  **没有 `id` 字段**：BD 的 `listInstalledComposerKits` 会读 `.being-desktop-install.json` 回执把市场 ID 找回来，
+  本仓库的 `kits/install.ts` 只写 `.beings-install.json{sha256, installedAt}`，**没有 id**。→ 偏差 D3。
+- **`desktop/main/town/session/session.ts`** —— `getMembers({signal?, force?})` → `{members: TownMember[], source}`，
+  `TownMember{id, name, description}`；`memberCacheState()` → `{revision, expiresAt}`；`invalidateMembers()`。
+  `TownSubsystem` 导出 `client/session/background/pairing/cachedReads/identityKey()/invalidateMembers()`。
+- **BD `renderer/composer-helpers.js`（62 行）** —— `tokenAtCaret(text,start,end)`（`/(^|\s)([/@])([^\s/@]{0,200})$/u`，
+  要求 start===end）、`composerSuggestions(data, token)`（大小写不敏感子串匹配 `name handle id description`，
+  handle 前缀命中的排前面，取 12 条）、`replaceComposerToken(text, token, item)`（插 `prefix+handle`，
+  后面没有空白就补一个空格并把 caret 放到空格后）、`composerReferences(text, items, prefix)`
+  （marker 前必须是行首或空白、后必须是结尾或标点）、`buildKitPrompt(text, kits)`（内置能力段 + 远端 Kit 段，
+  两段用 `\n` 连，再空一行接原文）。
+- **BD `renderer/town-mentions.js`** —— 聊天 composer 用到的是 `memberMap / memberName / resolve / unresolvedNotice`：
+  `resolve` 只认精确 ID（`t_` 前缀或目录里有的 id），其余进 `unresolved`；
+  `unresolvedNotice` 文案「未解析提及：@x；按原文发送，可能不会触发通知。请从候选列表选择完整 Town ID。」。
+  本仓库 `renderer/town/models/mentions.ts` 是 I1 的**显示向**投影（`mentionNames/mentionParts/mentionWarnings`），
+  与 composer 的解析无关，**不能复用也不许改**；本单元自建 `renderer/conversation/models/mentions.ts`。
