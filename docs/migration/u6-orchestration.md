@@ -118,6 +118,51 @@ Methods:
   Response envelope: `{content:[{type:'text',text:JSON.stringify(data)}],isError:false}`; when `data.events.length>30` -> last 30 + `eventsTruncated:true`.
 - `dispose()` — `revision++`, `presentation?.dispose()`, `callbacks.dispose()`, `stopAll()`, await all `finalizing`, `flush()`, clear notify timer.
 
+### src/worker-events.cjs (71 lines)
+
+Exports: `{ normalizeEvent, clean }`. Depends on `sanitizeText` from `src/services.cjs`.
+
+`clean(value)` = `sanitizeText(text) + (text.length>2000 ? '\n[内容已截断]' : '')` where
+`text = typeof value==='string' ? value : JSON.stringify(value ?? '')`.
+
+`resultText(content)` — array of blocks -> `part.text` string, or `'[图片]'` for `part.type==='image'`, else `''`; joins non-empty with `'\n'`; a non-array is returned as-is.
+
+`normalizeEvent(agent, value)` returns one event, an array of events, or `null`. Event shapes:
+`{kind:'session',sessionId}`, `{kind:'status',text}`, `{kind:'message',text,append?}`,
+`{kind:'tool',callId,name,status,text,output}`, `{kind:'result',success,text?,sessionId?}`, `{kind:'error',text}`.
+
+- Non-object -> `null`.
+- **claude** (measured 2026-09-11, Claude Code 2.1.245 `-p --output-format stream-json --verbose`):
+  `system/init` -> session(`session_id`); `system/permission_denied` -> status `` `${value.tool_name||'工具'} 需要审批，无人值守执行已拒绝` ``;
+  `system/api_retry` -> status `` `模型请求重试 ${Number(value.attempt)||0}/${Number(value.max_retries)||0}` `` (not passed through `clean`); other `system` -> null.
+  `assistant`: joins `text` blocks with `'\n'` into one message event, then one tool event per `tool_use` block
+  (`callId:part.id`, `name:part.name||'tool'`, `status:'running'`, `text:part.input??''`, `output:''`); `null` when empty.
+  `user`: one tool event per `tool_result` block (`callId:part.tool_use_id`, `name:''`, `status: part.is_error===true?'failed':'completed'`, `text:''`, `output:resultText(part.content)??''`); `null` when empty.
+  `result` -> `{kind:'result',success: value.is_error!==true && value.subtype==='success', text:value.result??'', sessionId:value.session_id}`.
+  `error` -> `{kind:'error',text:value.message||value.error?.message||'Worker 执行失败。'}`. Everything else -> null. Claude never reaches the shared branches below.
+- Shared (non-claude): codex `error` whose message matches `/^Reconnecting\.\.\.\s+\d+\/\d+\b/` becomes a **status** event;
+  otherwise `type==='error' || type==='turn.failed'` -> error event with the same fallback text.
+- **codex**: `thread.started` -> session(`thread_id`); `turn.completed` -> `{kind:'result',success:true}` (no text/sessionId);
+  `item.started|item.updated|item.completed` with `value.item`: `agent_message` -> message(`item.text`); `reasoning` -> status `'正在分析任务'`;
+  otherwise tool (`callId:item.id`, `name:item.tool||item.type`, `status:item.status || (type==='item.completed'?'completed':'running')`,
+  `text:item.command||item.changes||item.arguments||''`, `output:item.aggregated_output||item.result||item.error||''`).
+- **cursor**: `system` -> session(`session_id`); `assistant` -> message from `message.content` text parts joined with `'\n'`;
+  `tool_call` -> first entry of `value.tool_call` object gives `[name, call]`, tool event with `callId:value.call_id`,
+  `name:call.name||name`, `status: value.subtype==='completed' ? (call.result?.error?'failed':'completed') : 'running'`,
+  `text:call.args||call.arguments`, `output:call.result`; `result` -> result event like claude.
+- **grok**: `thought` -> status `'正在分析任务'`; `text` -> `{kind:'message',text:value.data,append:true}`;
+  `tool_call`/`tool_call_update` -> tool (`callId:value.toolCallId`, `name:value.toolName||value.title||''`, `status:value.status||'running'`,
+  `text:value.rawInput`, `output:value.rawOutput||value.content`); `end` -> `{kind:'result',success:value.stopReason==='end_turn',text:'',sessionId:value.sessionId}`.
+
+### src/native-worker-results.cjs (11 lines)
+
+Exports `{ nativeWorkerResults }`. `nativeWorkerResults(workers, sessionId)` filters workers of that session that have
+`presentation` or `review?.summary`, and maps each to
+`{workerId:worker.id, sessionId, title, at: worker.endedAt||worker.updatedAt, preview: Boolean(worker.presentation),
+status: worker.review?.summary ? worker.review.status : 'ready',
+summary: worker.review?.summary || '结果已生成，可以在 Desktop 内置浏览器中打开。', evidence: worker.review?.evidence || ''}`.
+Comment: worker history already owns persistence and identity; this projects display fields only.
+
 ---
 
 ## 进度
