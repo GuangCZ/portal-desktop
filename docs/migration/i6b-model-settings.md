@@ -35,3 +35,43 @@
 - §6 E2E：`tests/sbs-refresh.mjs` 归 I6b，按 §5.3 拍板后重写；真机冒烟清单 4 条（typecheck+vitest / `npm run start` /
   打包后从产物启动 / `test:all` 的 skipped 名单只减不增）。
 - 附录单元索引：I6b 在并行组 B，依赖 I0（实际还依赖 I6 的 `renderer/settings/`）。
+
+### 1.2 `docs/migration/i0-seams.md`（接缝权威说明）
+
+- `SubsystemContext`：`handle` / `exclusive` / `window()` / `store`（`connection`、`connectionAddress`、`settings`、
+  `extras`、`saveExtra`）/ `electron`（`ElectronBindings` 门面，`clipboard` 是 **Promise 形态**）/ `userData` / `desktopId` /
+  `clientVersion` / `fetchImpl`（`net.fetch` 绑定）/ `onError(scope, error)` / `registry` / `push(channel, payload)`（**窗口守卫已在里面**）。
+- `DesktopSubsystem` 可选实现 `linked()`（全部安装完成后同步跑，惰性规则的唯一例外，用于「赋值」）、
+  `connectionVerified(connection)`（**同步**，自己就跑在 `exclusive` 里，不得 await 队列）、`connectionCleared()`、`quitting()`、`ready`。
+- **铁律**：installer 同步体内不得解引用 `ctx.registry.get(...)`，只能包成闭包。
+- **既有缺口（I0 记录、I6 复述）**：`main.ts` 从来没有调用过 `extensions.connectionCleared()`。切 Being 走
+  `beings:save` → `verifyConnection` → `connectionVerified`，这条是通的。本单元照样实现 `connectionCleared`，并把缺口写进 openIssues。
+- `desktop/main/common/`：`sanitize.ts`、`platform.ts`、`loom-connection.ts`（`parseConnection` / `sessionPartition` /
+  `endpoint` / `publicModelUrl` / `allowedNavigation`）、`message-context.ts`。
+  `tests/architecture.test.ts` 有一条「`main/common/` 只能 import node 内建与自己目录内的文件」。
+- 六个一行式冲突点与「只有 I0 能改」的清单（含 `desktop/main/subsystems/types.ts` 的接口成员与 `renderer/app/models/app.ts`）。
+- renderer 插槽：`FeatureModel = Store & { start?(): () => void }`，**订阅/定时器一律放 `start()` 并返回关闭函数**；
+  排序 `order` 升序、同 order 按 `key` 字典序，`order` 用百位。
+
+### 1.3 共享文件现状（读了真实代码）
+
+`extensions.ts` 的 `INSTALLERS` 已有 7 项（chat / terminal / tool-browser / tools / orchestration / shell-state / town）；
+`preload/channels/index.ts` 的 `desktopChannels` 已有 7 个属性；`shared/desktop-types.ts` 已有 7 行 `export *`；
+`slots.tsx` 的 `SIDEBAR_SLOTS` 已有 `{ key: 'shell-pages', order: 900, placement: 'foot', Section: ShellPagesSection }`（I6）；
+`SHEET_SLOTS` 仍为空数组；`models/registry.ts` 的 `FEATURE_MODELS` 已有 6 项。
+
+### 1.4 `docs/migration/i6-shell-state.md`（本单元的直接前置）
+
+- I6 的独占产出：`main/shell/{sidebar-state,ipc}.ts`、`subsystems/shell-state.ts`、`preload/channels/shell-state.ts`、
+  `shared/shell-state-types.ts`、`renderer/settings/{components/{entry,about,privacy}.tsx,models/shell-state.ts,styles.css}`。
+- IPC：`beings:sidebar-state`（只读）、`beings:sidebar-action`（串行）、`beings:sidebar-project-add`（串行）、推送 `beings:sidebar`。
+- §4.1：`beings:snapshot` **没有**加 `sidebar` 字段，因为 `main.ts` 不得改；I6 自己开了读通道 + 推送。
+  **本单元照此办理**：`beings:model-settings-state` 推送 + `beings:model-config-get` 读通道，不碰 Snapshot。
+- §4.5 / §9.5：SBS 只读显示没做，因为本壳层 `Snapshot` 没有 `runtime`，而 `sbs_enabled` 的唯一来源是 `/api/llm/config`
+  （`src/runtime.cjs:22`、`:52`）——正是本单元要开的通道。I6 没有留任何半成品文件。
+- §4.6：静态页用 `SIDEBAR_SLOTS` 的 `foot` 插槽（`ShellPagesSection`），`app/components/settings.tsx` 一个字没改
+  （它的三 tab 键盘导航是硬编码 `%3`，加第四个 tab 要重写三段）。**本单元的模型设置入口同样挂在 `ShellPagesSection` 里**，
+  这是任务书给本单元的 `renderer/settings/**` 例外。
+- §4.7：身份分区从「已保存的地址」解析，`SettingsStore.load()` 一读到 credential 就填好 `connectionAddress`。
+- I6 有一条非一行式共享改动的先例：`tests/chat-ipc.test.ts` 的 `CHANNELS` 闭集断言随子系统落地而扩张
+  （断言的是「`installDesktopExtensions` 注册的全部通道」）。**本单元也必须往那里追加自己的通道**。
