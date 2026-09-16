@@ -49,3 +49,68 @@ Worktree `.local/i5-conversation`，分支 `i5-conversation`，基线 `next @ 7b
   插槽排序 `order` 升序、同 order 按 key 字典序；`order` 用百位留空隙。
 - architecture 测试现在是**八条**（多了 `main/common/` 依赖边界、`subsystems/` 不得 import electron）。
 - `connectionCleared()` **从来没有调用方**（main.ts 没接线），既有缺口。
+
+### 1.3 本仓库既有实现（读一遍的结论）
+
+- **`desktop/main/subsystems/chat.ts`（107 行）** —— `new ChatSessions({...})` 现在只传
+  `desktopId / clientVersion / cache / getContext / fetchImpl / onEvent / onState`。
+  四个空洞（`prepareMessage` / `generateTitle` / `titleAvailability` / `getWorkerResults`）都还没接。
+- **`desktop/main/chat/sessions.ts`（490 行）** —— `ChatSessionsOptions` 里这四个参数**已经有定义**：
+  `prepareMessage?: ({sessionId}) => Promise<PreparedMessage|null|undefined>|…`、`generateTitle?`、
+  `titleAvailability?: () => string`、`getWorkerResults?: (sessionId) => unknown[]`。
+  `view()` 里 `workerResults: this.getWorkerResults(sessionId)`（默认 `() => []`）。
+  `titles` 只在 `generateTitle` 非空时构造 `SessionTitles`。`workersChanged()` 已存在。
+- **`desktop/main/chat/frame.ts`（76 行）** —— `wrapMessage/unwrapMessage` 与 BD
+  `src/orchestration-message.cjs:18-37` 逐行一致；`orchestrationInstructions` 是可注入的间接层，
+  **I4 已在 `subsystems/orchestration.ts` 调 `setOrchestrationInstructions(orchestrationInstructions)`**
+  （`orchestration/instructions.ts` 是 BD `:4-14` 的字节级副本，3069 字节）。
+- **`desktop/main/common/message-context.ts`（78 行）** —— `desktopMessageContext({platform, hostname, runtime})`，
+  `DESKTOP_PORTAL_NAME='being-desktop'`。`DesktopRuntime` 有 `desktopId?/portal?/mode?` + 索引签名。
+- **`desktop/main/chat/ipc.ts`（164 行）** —— 9 条通道；`beings:chat-composer-data` 现在返回写死的空壳
+  `{kits:[],members:[],kitsError:'',membersError:'',connectionRevision:0}` 且**不接受参数**。
+  `enveloped` / `fields` / `sessionId` / `plain` / `invalid` 四个助手就在这个文件里。
+- **`desktop/main/subsystems/orchestration.ts`** 导出 `orchestration / policy / methods / runner / histories /
+  register / setDraftPreparer`。`Orchestration` 类有公有字段 `mode / owner / revision / configuring / agents /
+  workers`，方法 `context(sessionId)` / `authorize(args)` / `generateTitle(sessionId, input)` / `openResult`。
+  `OrchestrationPolicy.inspectForMessage()` 返回 `PolicyState`（永不抛，内部吞 `assertEnforced`）。
+
+### 1.4 BeingDesktop 逐行对照物（实读行号，方案给的行号是旧的）
+
+- **`src/orchestration-message.cjs:39-55`**（方案写 24-37）—— `nativeMessageContext({orchestration, environment})`：
+  捕获 `revision/owner/enabled` 三个快照 → `assertCurrent()` 检查
+  `configuring || revision变 || owner变 || enabled变` 则抛 `SESSION_CHANGED`「编排模式或会话绑定已变化，请重新发送。」
+  → `assertCurrent()` → `await environment(sessionId)` → `assertCurrent()` →
+  `mode = orchestration.context(sessionId)`；`if (mode.enabled) orchestration.authorize(mode)` →
+  返回 `{context: runtime + orchestrationInstructions(mode), assertCurrent}`。
+- **`src/main.cjs:200-219`** —— `desktopEnvironment(sessionId)`：先取 `enabled`，`configuring` 则抛
+  `ORCHESTRATION_NOT_ENFORCED`「编排模式正在切换，请完成后再发送消息。」→ `await orchestrationPolicy.inspectForMessage()`
+  → 再查一次 enabled/configuring，变了抛 `ORCHESTRATION_NOT_ENFORCED`「编排模式已变化，请重新发送。」→
+  `bridge = desktopTools.link.capabilities()`；`terminalCallable = bridge.tools.includes('desktop_terminal_create')`
+  → `desktopMessageContext({runtime:{desktopId, capturedAt, application:{name:'Being Desktop',version},
+  chatSessionId, workspace, portal:{...}, bridge, executionPolicy, mode:'orchestrator'|'direct',
+  terminal:{present,interactive,shell,callable,approval,scope,sessions,lifetime},
+  browser:{present:true,callable,approval}, console:{interactive:false,callable,approval}}})`。
+- **`src/main.cjs:634-637`** —— ChatSessions 的四个参数；`titleAvailability` 的指纹是
+  `!exitStarted && chatSessions?.identityKey===orchestration.owner && orchestration.agents.some(ready)
+  ? JSON.stringify([orchestration.revision, readyAgents.map(a=>[a.id,a.path])]) : ''`。
+  `generateTitle` 的脱敏密钥是 `[connection?.token, connection?.secret]`（方案写的 relaySecret 名字不同）。
+  `getWorkerResults` 的身份校验是 `connection && chatSessions?.identityKey===orchestration.owner`。
+- **`src/native-worker-results.cjs`（11 行）** —— 过滤 `worker.sessionId===sessionId && (presentation || review?.summary)`；
+  映射 `{workerId, sessionId, title, at: endedAt||updatedAt, preview: Boolean(presentation),
+  status: review?.summary ? review.status : 'ready',
+  summary: review?.summary || '结果已生成，可以在 Desktop 内置浏览器中打开。', evidence: review?.evidence || ''}`。
+- **`src/main.cjs:1207-1219`** —— `chatView / chatOpenWorkerResult / chatSend / chatDetail{Open,View,Send,Stop,Close} /
+  chatStop / chatReload / chatForgetSession`。`chatOpenWorkerResult({sessionId,workerId})` 先 `chatSessions.view(sessionId)`
+  校验会话存在，再查 `connection && identityKey===orchestration.owner` 否则抛「Being 连接已变化。」，
+  最后 `orchestration.openResult(workerId, sessionId)`。
+  `src/main.cjs:126`：五条 `chatDetail*` 都在 `townMethods`（= 包络）。`chatOpenWorkerResult` **不在**。
+- **`src/main.cjs:1334-1349`** —— `getChatComposerData(value)`：`memberOptions(value)` 只认 `{force?:boolean}`（原型必须是
+  Object.prototype，多一个键就抛 `INVALID_REQUEST`「成员刷新参数无效。」）；捕获 `generation/identityRevision`；
+  未连接抛「请先连接 Being。」；`Promise.allSettled([readComposerKits(), townSession.getMembers(options)])`；
+  再查 revision/identity/status，变了抛 `SESSION_CHANGED`「Being 连接已变化。」；
+  返回 `{...normalizeComposerData({kits,members,kitsError:'已安装 Kit 暂时无法读取。',membersError:'Being 成员暂时无法加载。'}),
+  connectionRevision:revision, ...townSession.memberCacheState()}`。
+- **`src/loom-composer.cjs:8-49`** —— `BUILTIN_KITS`（being-search / being-browse 两个）与 `normalizeComposerData`：
+  clean 去控制字符 + trim + 截断；kit handle 由 name 生成（空格转 `-`，去非字母数字），重名加 `-<id>`，再重名丢弃；
+  member handle 就是 id；`installed` / `icon`（只给 kit，内嵌 data URI）/ `builtin`；
+  kits 先塞两个内置再接 `value.kits.filter(installed===true)`，各自上限 1000。
