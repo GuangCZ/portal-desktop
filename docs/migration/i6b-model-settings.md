@@ -224,13 +224,15 @@ BeingDesktop **没有** SBS 写入路径（`validateModelPatch` 白名单里没�
 | `desktop/renderer/settings/components/model-settings.tsx` | 模型页（DOM id 与 BD `renderer/index.html:300-316` 一一对应） |
 | `tests/model-settings-config.test.ts` | 17 条（BD 13 条逐条 + SBS 3 条 + 运行时失败半边 1 条） |
 | `tests/model-settings-ipc.test.ts` | 9 条（真 `SettingsStore` + 真 `createTrustedHandle` + 假 Being） |
-| `tests/model-settings-renderer.test.ts` | 22 条（BD `test/model-settings-ui.cjs` 26 条 check 的映射，见 §5） |
+| `tests/model-settings-renderer.test.ts` | 24 条（BD `test/model-settings-ui.cjs` 26 条 check 的映射，见 §5；复审后 +2 条冷启动） |
+| `tests/model-settings-bound-e2e.mjs` | 打包客户端 + 启动前就存好的 Being，13 条 check（复审后新增，见 §9） |
 
 ### 2.2 重写的既有文件
 
 - `tests/sbs-refresh.mjs`：原脚本驱动已删除的 `beings://chat` iframe，一直报 `SKIPPED:`。
   重写为「production preload + production renderer + production 子系统 + 本地假 Being HTTP 夹具」的
-  Electron 夹具（方法同 `tests/sidebar-e2e.mjs`），**26 条 check，实跑通过**。
+  Electron 夹具（方法同 `tests/sidebar-e2e.mjs`），**28 条 check，实跑通过**
+  （复审后把绑定挪到窗口加载之前，+2 条冷启动 check，见 §9）。
   `scripts/test-all.mjs` 的 skipped 名单因此少一项（只减不增 ✓）。
 
 ### 2.3 共享文件触碰行（逐行）
@@ -263,12 +265,14 @@ BeingDesktop **没有** SBS 写入路径（`validateModelPatch` 白名单里没�
 
 | 通道 | BD 对应 | 队列 | 包络 | payload |
 | --- | --- | --- | --- | --- |
+| `beings:model-settings` | BD `being:state` 的 `state.runtime` 半边（渲染端加载时自己读一次） | 否 | 否 | `() → ModelSettingsState` |
 | `beings:model-config-get` | `being:getModelConfig` | 否 | 否（同 BD） | `() → ModelConfigDto` |
 | `beings:model-config-save` | `being:saveModelConfig`（BD 标「串行」） | `ctx.exclusive` | **是**（偏离 BD，§4.3） | `(ModelPatchInput) → ModelConfigDto` |
 | `beings:sbs-set` | **无**（BD 只显示） | `ctx.exclusive` | **是**（§4.3） | `(enabled: boolean, connectionId: number) → ModelConfigDto` |
 | `beings:model-settings-state` | BD 的 `being:state` 里的 `state.runtime` 半边 | 推送 | — | `ModelSettingsState = {connected, connectionId, runtime}` |
 
-三条 invoke 全部经 `ctx.handle` 注册（继承来源校验与 quitting 守卫），推送经 `ctx.push`（窗口守卫在里面）。
+四条 invoke 全部经 `ctx.handle` 注册（继承来源校验与 quitting 守卫），推送经 `ctx.push`（窗口守卫在里面）。
+`beings:model-settings` 只读子系统已有的内存状态，不碰网络、不进队列（复审后新增，理由见 §9.1）。
 
 **输入校验**：`beings:model-config-save` 的唯一闸门是 `validateModelPatch`（白名单 5 键、原型必须是 `Object.prototype`、
 每个自有属性必须是数据属性——带 getter 的输入**不读取**就拒绝、`connectionId` 必须是 ≥0 安全整数、
@@ -360,7 +364,8 @@ BD 的「运行中」来自 Loom 页面 post 的 `beings:sbs-state` 消息，该
 ## 5. 测试映射：BD `test/model-settings-ui.cjs` 26 条 check 去哪了
 
 BD 那套在隐藏 Electron 窗口里驱动真实 DOM。本壳层没有 `renderer/index.html`，vitest 也没有 DOM，
-所以规则搬进 `settings/models/model-settings.ts`，check 搬进 `tests/model-settings-renderer.test.ts`（22 条，按名对应）。
+所以规则搬进 `settings/models/model-settings.ts`，check 搬进 `tests/model-settings-renderer.test.ts`
+（22 条按名对应，复审后再加 2 条冷启动 = 24 条，见 §9.1）。
 
 | BD check | 去处 |
 | --- | --- |
@@ -413,8 +418,9 @@ BD `test/model-config.test.cjs` 13 条 → `tests/model-settings-config.test.ts`
 | 项 | 结果 |
 | --- | --- |
 | `npm run typecheck` | **绿**（无输出） |
-| `npx vitest run` | **绿**：112 文件 / 1245 通过 / 34 跳过。基线是 109 / 1197 / 34，本单元新增 48 条（17 config + 9 ipc + 22 renderer），跳过数未变（`1197 + 48 = 1245` ✓） |
-| `tests/sbs-refresh.mjs`（重写后实跑） | **绿**：`PASS … 26 checks`。`npm run test:sbs-refresh`（含 `prepare:desktop`）同样通过 |
+| `npx vitest run` | **绿**：112 文件 / 1247 通过 / 34 跳过。基线是 109 / 1197 / 34，本单元新增 50 条（17 config + 9 ipc + 24 renderer），跳过数未变（`1197 + 50 = 1247` ✓） |
+| `tests/sbs-refresh.mjs`（重写后实跑） | **绿**：`PASS … 28 checks`。`npm run test:sbs-refresh`（含 `prepare:desktop`）同样通过 |
+| `tests/model-settings-bound-e2e.mjs`（复审后新增） | **绿**：`PASS … 13 checks`，打包产物 + 启动前就绑好的 Being（§9.2） |
 | `test:all` 的 skipped 名单 | **少一项**：`sbs-refresh` 不再打印 `SKIPPED:`，`scripts/test-all.mjs` 会把它记为 passed（只减不增 ✓） |
 | 打包 | **成功**：`resources/heart-portal` 放 I2 留下的 clang stub（`--version` → `heart-portal 0.0.0`），`PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package`（绕代理）产出 `out/Being Desktop-darwin-arm64/Being Desktop.app`，`codesign --force --deep --sign -` 重签成功 |
 | 打包产物真机启动 | **成功**（见下） |
@@ -463,7 +469,8 @@ OK: no renderer errors
 5. **BD 的响应式/几何 check 没有移植**（`*-no-horizontal-overflow`、`*-fits`、`fixture-window-never-shown`）。
    BD 用隐藏 Electron 窗口量 `getBoundingClientRect` 并截图，本壳层没有对应的回归脚本，model 层也答不了几何。
    模型页的 CSS 用的是壳层变量与 flex，窄窗下应当自然折行，但**没有自动化证据**。
-6. **`npm run start` 未单独执行**（理由见 §7）。
+6. **`npm run start` 未单独执行**（理由见 §7）。复审后改由 `tests/model-settings-bound-e2e.mjs`
+   在**打包产物**上覆盖「启动前就绑好 Being」这条路径（§9.2），比开发实例更强。
 7. **真实钥匙串授权未覆盖**：冒烟用 `--use-mock-keychain`（§7）。
 8. **`PROVIDERS` 会随 Loom 漂移**。`docs/architecture.md` §11 把它标为硬耦合点。本单元逐字节移植了
    Loom 1.8.0（2026-09-12 revision）的表。**更新方式是重读 Loom，不是推理这些值应该是什么。**
@@ -473,3 +480,128 @@ OK: no renderer errors
    要真正修得回 I0/main.ts。
 10. **`beings:model-config-get` 不在 `ctx.exclusive` 里**（同 BD：`getModelConfig` 不在它的 `serialized` 集合里）。
     并发读之间的保护由 `ModelConfig` 自己的 `busy` / `revision` 提供，不靠队列。
+    `beings:model-settings` 同理，而且它连网络都不碰。
+11. **`tests/model-settings-bound-e2e.mjs` 没有进 `npm run test:all`**：`scripts/test-all.mjs` 与 `package.json`
+    本轮都不得改（方案 §4）。合并 I6b 的人应当把它加在 `tools-e2e` 那一步旁边——那一步当年也是因为
+    `package.json` 冻结才直接 `step(...)` 调用的。脚本头部写了同样的话。
+12. **假 Being 冒烟只覆盖 `/api/status` 与 `/api/llm/config`**：其余路由一律 404。
+    模型页不依赖它们，但这说明这条 E2E 不是完整客户端冒烟，只是模型设置那条路径的。
+
+---
+
+## 9. 复审修复（2026-09-16，同日）
+
+复审判定 fail，两条要处理（high / medium）加两条 low。逐条如下。
+
+### 9.1 high：冷启动时页面永远读不到已经绑好的 Being（已修）
+
+**复审的复现是对的，而且我在打包产物上又复现了一遍。** 机制：
+
+- `main.ts:583-585` 是 `windowReady = true; createWindow(); await exclusive(() => restoreStartup())`，
+  `restoreStartup` → `verifyConnection()` → `extensions?.connectionVerified(store.connection)`。
+  窗口先建，绑定紧随其后，**渲染端的 bundle 还没跑**。
+- 于是 `beings:model-settings-state` 那条「已连接」的推送发给了空气；
+- 而 `subsystems/model-settings.ts` 的 `connectionVerified` 里 `if (connection && key === identityKey) return;`
+  在 `publish()` **之前**，所以重新验证同一个 Being 不会补发；`main.ts` 也从不调用 `connectionCleared()`（openIssue 9）。
+- 渲染端 `ModelSettingsModel` 只订阅不拉取 → `connected` 永远 false → `activate()`/`canRefresh`/`canToggleSideBySide` 全部关闭 →
+  **整个会话里模型页都是死的**，而且没有任何按钮能救回来。
+
+原来的两处测试都看不见这个顺序：`tests/model-settings-renderer.test.ts` 的 `open()` 先 `push()` 后 `activate()`，
+都在 `start()` 之后；`tests/sbs-refresh.mjs` 的夹具在 `#open-models` 出现之后才 `__fixtureBind()`。
+
+**修法（就是复审给的那条）**：给推送配一条拉取。
+
+| 改动 | 文件 |
+| --- | --- |
+| 新通道 `beings:model-settings` → `state()` | `desktop/main/model-settings/ipc.ts`（`ModelSettingsIpcOptions.state`） |
+| 传 `state` 进去 | `desktop/main/subsystems/model-settings.ts` |
+| `modelSettingsState(): Promise<ModelSettingsState>` | `desktop/shared/model-settings-types.ts` 的 `ModelSettingsAPI` |
+| `ipcRenderer.invoke('beings:model-settings')` | `desktop/preload/channels/model-settings.ts` |
+| `start()` 先订阅再 `void this.pull()`；`pull()` 结果喂给 `accept()` | `desktop/renderer/settings/models/model-settings.ts` |
+| `activate()` 在「一次状态都没收到」时补拉一次 | 同上 |
+
+两处保护，都是有意的：
+
+1. **顺序**：先订阅后拉取（同 `ShellStateModel.start()`）。拉取回来的若已被推送超过
+   （`received && state.connectionId <= this.connectionId`）就丢掉，不回退。
+2. **失败不等于没连**：拉取失败只 toast，不写 `connected`；`received` 保持 false，
+   页面打开时再拉一次。否则「主进程刚起来还没就绪」会被当成「没有 Being」钉死一整个会话。
+
+**证据（两个方向都实测）**：
+
+- vitest：新增 2 条 —「finds the Being that was already bound before this window existed (cold start)」与
+  「asks again when the page opens if the first state read did not come back」。
+  把 `start()` 里的 `void this.pull()` 拿掉，这两条 fail，其余 22 条照样 pass（即旧测试确实盖不住）。
+- `tests/sbs-refresh.mjs`：夹具主进程改成 **`window.loadURL(...)` 之后立刻 `connectionVerified(null)`**，
+  也就是 `main.ts` 的顺序。新增 check `page-finds-the-being-it-was-not-told-about` 与
+  `opening-the-page-reads-the-configuration`（共 28 条）。去掉 `pull()` 后，它在第一条上 fail：
+  `actual: false`。
+- 打包产物（§9.2）：去掉 `pull()` 重新打包，冷启动页面显示「连接 Being 后即可配置模型。」；加回去 13 条全过。
+
+**没有采用的另一种修法**：让 `connectionVerified` 在身份未变时也 `publish()`。复审说这不够，是对的——
+`main.ts` 可能**再也不会**调用它（同一 Being 只验证一次），推送多发一次也救不了「发的时候没人听」。
+
+### 9.2 medium：真机/打包冒烟没有用过绑定中的 Being（已修）
+
+新增 `tests/model-settings-bound-e2e.mjs`：**打包产物 + 启动前就存在 profile 里的 Being**，两次启动共用一个临时 profile。
+
+1. 第 1 次启动：用客户端**自己的连接表单**（`连接我的 Being` → `#connection-link` → `保存、连接并启动`，
+   同 `tests/tools-e2e.mjs`）把假 Being 存进 profile，然后退出。`#background-input` 先取消勾选，
+   所以不装 launch agent、不起 Portal，临时目录之外什么都不碰。
+2. 第 2 次启动：这次跑的是 `desktop/main/main.ts` 的真装配——真 `SettingsStore` 读真 profile、
+   `restoreStartup()` → `verifyConnection()`（假 Being 的 `/api/status` 回 `being_name`）→ `connectionVerified`，
+   真 preload、真 renderer bundle。然后点「模型」，断言 13 条。
+
+实跑输出（2026-09-16，重签后的 `out/Being Desktop-darwin-arm64/Being Desktop.app`）：
+
+```
+Launch 1: Being saved in the profile (1 config reads so far).
+PASS: packaged client, cold start with a saved Being — 13 checks.
+   status  : 配置保存在当前 Being，选择后点击保存。
+   options : Smoke Self Hosted · smoke-self-hosted · 自部署 | Smoke A · smoke-model-a · OpenAI Chat Completions
+             | Smoke B · smoke-model-b · OpenAI Chat Completions | 自定义模型…
+   patches : [{"sbs_enabled":"on"}]
+   reads   : 5
+   other routes asked for: (none)
+```
+
+覆盖到的：模型列表（keyless 组排最前）、`刷新列表` 真的又读了一次 Being、
+SBS 开关从「已关闭」点到「已开启」且线上形状是实测的 `{"sbs_enabled":"on"}`（字符串）、
+「运行中」照实说「未知」、API Key 框为空、无渲染端错误。
+
+**反向也测了**：把 `pull()` 拿掉重新打包，同一脚本在 `page-knows-a-being-is-connected` 上 fail，
+实际文案是「连接 Being 后即可配置模型。」——这正是复审复现出来的那一幕，只不过这次是在真客户端里。
+
+这条脚本**没有**进 `npm run test:all`（`scripts/test-all.mjs` 与 `package.json` 本轮冻结），见 openIssue 11。
+`npm run start` 仍然没单独跑：打包产物启动是更强的那一项，而且现在它已经覆盖了连接态。
+
+### 9.3 low：`CHAT_ERROR_CODES` 的第七处共享文件（**未改**，按复审结论）
+
+复审说「No code change needed; flag it to whoever merges I5」。照办：
+`desktop/shared/chat-errors.ts` 的 `CHAT_ERROR_CODES` 末尾那行 `'NEEDS_KEY', 'ROLLED_BACK',` 保留，
+理由见 §4.3（`app/ipc.ts:59` 会把抛出的 Error 换掉，`code` 活不下来，
+未知码降级成 `TOWN_ERROR` 会吃掉「此服务需要 API Key，请填写后重新保存。」这句）。
+合并时如果 I5 也动了这个数组，**取并集**，不要一方覆盖另一方。
+
+### 9.4 low：`readRuntime` 是死代码（已删）
+
+`desktop/main/model-settings/runtime.ts` 的 `readRuntime`（含 `/api/stream/active` 的整张 phase 映射表）
+没有任何调用方——全仓 grep 只有它自己的注释提到它。删掉，连带 `ActiveStreamState` 上那四个只有它会写的可选字段
+（`id`/`sessionId`/`phase`/`tool`）和因此不再需要的 `publicModelUrl` import。文件从 142 行降到 104 行。
+
+保留的是 `RuntimeState` 上属于对话层的那半边（`status` / `error` / `checkedAt` / `activeStream.active`，
+全部停在「未知」），因为 `updateRuntimeConfig` 与 `failRuntimeConfig` 都要能说明自己没碰它——
+`tests/model-settings-config.test.ts` 的两条断言正是钉这个的，一个字没改。
+头部注释换成了说明「为什么不移植」：一份没人读的 phase 表，迟早和对话层真正的那份对不上；
+将来真有单元同时拥有三条读，应当照当时的路由重写，而不是继承一份冻结在今天的副本。
+
+### 9.5 复审之后的门槛
+
+| 项 | 结果 |
+| --- | --- |
+| `npm run typecheck` | **绿** |
+| `npx vitest run` | **绿**：112 文件 / **1247** 通过 / 34 跳过（复审前 1245，新增 2 条冷启动） |
+| `tests/sbs-refresh.mjs` | **绿**：`PASS … 28 checks`（复审前 26） |
+| `tests/model-settings-bound-e2e.mjs` | **绿**：`PASS … 13 checks`（新增） |
+| 打包 + 重签 + 真机启动 | **成功**（本节两个方向各打了一次包） |
+
