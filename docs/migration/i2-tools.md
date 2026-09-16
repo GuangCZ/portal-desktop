@@ -109,3 +109,20 @@
   - `layout()` 用 rAF 合并，payload `{visible, bounds}`，visible 要求：面板开着 + browser 模式 + 未拖拽 +
     文档可见 + 无搜索对话框 + 当前标签有 url 且无 error；同 payload 不重发。
   - 错误文案脱敏：`String(error?.message).replace(/^Error invoking remote method '[^']+': Error: /,'')`。
+
+### 壳层：subsystems/chat.ts、chat/ipc.ts、preload/channels/{bridge,chat}.ts、renderer/{app/page.tsx,app/models/app.ts,browser/page.tsx}
+
+- 子系统模板：`install<Key>Subsystem(ctx)` 里 `report` 包 `ctx.onError`；构造自己的实例；
+  `register<Key>Ipc({handle: ctx.handle, exclusive: ctx.exclusive, ...})`；返回 `{key, ...钩子}`。
+- IPC 模板（`chat/ipc.ts`）：`plain()` 判原型、`fields(value, allowed, what)` 白名单、`invalid()` 带 `code:'INVALID_REQUEST'`；
+  `enveloped(channel, cb)` 包 `chatErrorEnvelope`；push 函数单独导出 `chatPush(target)`。
+- preload：`subscribe<T>(channel, cb)` / `enveloped<T>(channel, ...args)` 来自 `channels/bridge.ts`。
+- 渲染层 `Store` 只有 `subscribe/getVersion/changed`；`FeatureModel` 可加 `start(): () => void`。
+- `AppModel` 有 `api`、`toast(error)`、`run(op)`、`navigate`、`startup`、`snapshot`、`view`、`features`。
+- **壳层 `Browser`（ClientBrowser 面板）已经占了 `browser-address` / `browser-back` / `browser-forward` /
+  `browser-reload` / `browser-panel` / `browser-divider` 这些 DOM id**。工具面板必须用 `tools-` 前缀，
+  不能照抄 BD 的 id。
+- `tests/architecture.test.ts` 八条：renderer 不得出现 `fetch`/`WebSocket`/`EventSource`/`XMLHttpRequest`/
+  `sendBeacon` 标识符；`models/` 不得 import components/hooks/react；`main/common/` 只能 import node 内建；
+  `main/subsystems/` 不得 import electron。
+- 渲染层代码风格是 Prettier（双引号、2 空格、尾逗号）；主进程/测试是单引号。**跟随所在目录**。
