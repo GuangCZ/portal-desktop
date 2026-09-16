@@ -536,6 +536,28 @@ Cases:
 18. `native completion delivery is independent of Worker bridge readiness; evaluation waits for its recovery` — completion delivery succeeds while
     `toolsReady()` is false and `assertEnforced` throws `ORCHESTRATION_NOT_ENFORCED`; the continuation only runs once the bridge recovers.
 
+### test/native-orchestration.test.cjs (160 lines, 11 cases) — mostly outside this unit
+
+Requires `ChatSessions`, `BeingChat`, `desktop-message-context.cjs`, `orchestration-message.cjs` (P1's frame) and
+`renderer/chat-references.js` in addition to `Orchestration`, `OrchestrationPolicy` and `nativeWorkerResults`.
+The fixture wires a whole native chat stack (fake fetch serving `/api/history`, `/api/stream/active` 204 and `/api/chat/stream` 202)
+around the orchestration manager, with `getWorkerResults: id => nativeWorkerResults(manager.workers, id)`.
+
+Cases: (1) `native send supplies a usable current Worker scope; fake Being dispatch launches exactly one bound worker`;
+(2) `context is removed before cache and bubble confirmation; image and quote content survives exactly`;
+(3) `disconnected Worker bridge leaves native conversation available and Worker execution blocked`;
+(4-7) `preflight <identity|mode|mode-roundtrip|cancel> prevents a stale native POST`;
+(8) `switching to direct mode supplies the current mode and no old Worker scope`;
+(9) `plain protocol callers stay verbatim, and framed metadata does not eat user content`;
+(10) `native result projection is scoped, persistent in Worker history, and exposes only display fields`;
+(11) `Heart newline normalization preserves the human message and old frame recovery`.
+
+Only (10) exercises a module of this unit. Its fixture worker (copied verbatim into the port):
+`{id:randomUUID(), sessionId:id, title:'多米诺骨牌', endedAt:new Date().toISOString(), taskPrompt:'PRIVATE', events:[],
+ sessionToken:'PRIVATE', presentation:{artifactPath:'index.html'}, review:{status:'passed',summary:'已完成',evidence:'隔离测试通过'}}`,
+asserting another session sees nothing, `preview===true`, `status==='passed'`, and the projection leaks neither `PRIVATE` nor `artifactPath`.
+The remaining ten cases belong to the chat-core / message-frame units and are carried here as `it.skip` with the reason recorded.
+
 ---
 
 ## 进度
