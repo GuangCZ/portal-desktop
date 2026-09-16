@@ -34,7 +34,7 @@ Portal Desktop 是基于 **React、TypeScript、Electron、Vite 和 Rust** 的�
 
 浏览器使用独立的持久登录会话，无客户端本机 API。对话的 Markdown 与高亮资源随应用打包，不依赖运行时 CDN 脚本。对话过程展示来自当前流式事件；服务端历史未提供的思考和工具过程不会在重载后补造。
 
-对话核心在主进程，一个会话就是一个 scene：主进程用本 profile 的 Desktop 身份与会话 ID 合成 `scene_id`，并按它把每一条流式事件和每一行历史路由回各自的会话，因此多个会话可以同时呼吸。渲染层不持有 Being 地址或 token，也不向 Being 发请求，只订阅 `beings:chat-*` 通道显示主进程核对过的行。已同步的行按 Being 身份分文件缓存在 profile 的 `chat-cache/` 下，由系统钥匙串（Electron `safeStorage`）加密，不再使用浏览器 IndexedDB。沙箱 `beings://chat` 页面与它的请求代理已于 2026-09-16 移除，见 [MIGRATION.md](MIGRATION.md)。
+对话核心在主进程，一个会话就是一个 scene：主进程用本 profile 的 Desktop 身份与会话 ID 合成 `scene_id`，并按它把每一条流式事件和每一行历史路由回各自的会话，因此多个会话可以同时呼吸。渲染层不持有 token，也不自己发任何请求——`tests/architecture.test.ts` 会在渲染层源码里出现 `fetch`、`XMLHttpRequest`、`WebSocket`、`EventSource` 或 `sendBeacon` 时失败——只订阅 `beings:chat-*` 通道显示主进程核对过的行。Being 在消息里写的链接以文字呈现，地址在悬停提示里，消息本身不会打开任何网站。已同步的行按 Being 身份分文件缓存在 profile 的 `chat-cache/` 下，由系统钥匙串（Electron `safeStorage`）加密，不再使用浏览器 IndexedDB。沙箱 `beings://chat` 页面与它的请求代理已于 2026-09-16 移除，见 [MIGRATION.md](MIGRATION.md)。
 
 ### Town 阅读与发言
 

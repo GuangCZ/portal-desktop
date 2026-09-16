@@ -180,8 +180,12 @@ RFC 4122 附录 B 的公开样例校验算法本身。GUID 必须与 0.8.x 安�
 
 **渲染层只认 IPC。** `renderer/conversation/` 订阅 `beings:chat-state` /
 `beings:chat-event`，调用 `beings:chat-{sessions,view,send,stop,reload,change-session,
-rename-session,forget-session,composer-data}`。它不持有 Being 地址或 token，也不向 Being
-发任何请求。`tests/architecture.test.ts` 用一条规则守住这件事。
+rename-session,forget-session,composer-data}`。它不持有 token，也不自己发任何请求。
+`tests/architecture.test.ts` 的「the renderer cannot reach the network on its own」按语法树
+扫描 `desktop/renderer/` 下的标识符，出现 `fetch` / `XMLHttpRequest` / `WebSocket` /
+`EventSource` / `sendBeacon` 即失败（2026-09-16 补：此前只有导入规则，这句话没有测试兜底）。
+连接地址本身仍到得了渲染层——`Snapshot.settings.endpoint` 要显示在设置界面里——但它只是
+一个用来显示的字符串，没有任何发送路径。
 
 **以下东西已从仓库删除**（本块，2026-09-16）：
 
@@ -207,11 +211,14 @@ rename-session,forget-session,composer-data}`。它不持有 Being 地址或 tok
    town-ui,sbs-refresh}.mjs` 都通过 `page.frameLocator('#chat-frame')` 驱动对话，
    iframe 没了之后每个 locator 都指向不存在的东西。它们现在在文件头说明原因并 exit 0，
    `npm run test:all` 因此**不再覆盖打包客户端的对话冒烟、Town SDK 往返与 Portal 运行时**。
-   重写为针对原生对话 DOM 是 P2 的第一件事。
+   这五步在 `test-results/summary.json` 与 `summary.md` 里记作 `skipped`（不是 `passed`），
+   顶层 `skipped` 数组列出名单。重写为针对原生对话 DOM 是 P2 的第一件事。
 2. **选区工具条与「更多详情」解释卡片**未移植：依赖 0.8.26 的 `chatDetail*` 五个 IPC 通道，
    本仓库没有。引用可以经 `ChatSendRequest.references` 发出，历史里的引用信封也会被还原成
    chip——只是还没有产生引用的入口（除了 Town / Portal 日志的「一起看」）。
 3. **`/` Kit 补全与 `@` 成员补全**未移植：`beings:chat-composer-data` 恒返回空目录。
+   同一模块（`renderer/chat-composer.js`）里的输入法守卫已单独移植进 `ComposerModel`，
+   见下面第 3 节。
 4. **composer 的横排小镇入口**（0.8.26 的 `ChatPlaces`）未移植。它随 Loom 页面一起删除，
    `tests/town-names.mjs` 的 `/places` 覆盖也一并去掉了。
 5. **worker 结果卡片**未移植：`ChatView.workerResults` 是 `unknown[]`，本仓库没有生产者。
@@ -225,7 +232,32 @@ rename-session,forget-session,composer-data}`。它不持有 Being 地址或 tok
 10. **不属于任何已知会话的历史行被丢弃**：0.8.x 之前没有 `scene_id` 的旧行不会出现在任何
     会话的时间线里，界面用一条一次性说明条解释，但没有「全部历史」视图。
 
-### 3. 下一步
+### 3. 复审修复（2026-09-16）
+
+对话页与清理两块的复审开出七条，逐条处理如下，记录见
+`docs/migration/p1-ui-fix.md`。
+
+| 条目 | 结论 | 处理 |
+| --- | --- | --- |
+| 正文链接 | markdown 链接从 0.8.26 的惰性文本变成了可点击 `<a>`，一点即在应用内浏览器打开 Being 给出的地址 | 恢复 0.8.26：chat 模式下没有站内目标的链接渲染成 `<span class="chat-link" title="<地址>">`，地址只在悬停提示里 |
+| 连接时重复对账 | `use-conversation-bridge` 在 `chatSource` 变化时又发一次 `conversation.reload()` | 删除。绑定 Being 时 `ChatSessions.start` 已经 `reconcile({full: !seeded})` 对过一次，0.8.26 也不在连接时重读 |
+| 输入法 | 提交候选词的那次 Enter 会把半截消息发出去 | `ComposerModel` 维护 `composing` 与 50ms 的 `compositionUntil`（chat-composer.js:98/106/142），窗口内的 Enter 不发送，点发送按钮则被「请完成输入后再发送。」挡下 |
+| 停止确认 | 弹窗随页面卸载消失时 `ask()` 永不 settle，停止按钮此后永久禁用 | `cancelConfirm()`：连接关闭（`accept` 收到 `open:false`）、模型 teardown、弹窗组件卸载三处都 resolve(false) |
+| 读取失败提示 | 投影读取失败从常驻状态行变成 6 秒 toast | 回到状态行：`ConversationModel.readError` 优先显示在 `.chat-phase`，下一次状态更新才清除（chat-app.js:325 的语义） |
+| 架构测试文案 | MIGRATION/README 夸大了 `tests/architecture.test.ts` 的守护范围 | 新增规则「the renderer cannot reach the network on its own」，并改掉「不持有 Being 地址」这句（见上文第 1 节） |
+| E2E 报告 | 五个 exit 0 的跳过脚本在 `summary.json` 里记成 `passed` | `scripts/test-all.mjs` 认 `SKIPPED:` 标记，记成 `skipped`，并在 `summary.json` 顶层与 `summary.md` 里单列名单 |
+
+仍然存在、已知并接受的偏差：
+
+- **代码片段里的裸链接仍可点击。** `shared/components/markdown.tsx` 的 `code()` 在
+  chat 模式下把整段就是一个 `http(s)` 地址的行内代码渲染成 `.chat-code-link`，点击在
+  内置浏览器打开。0.8.26 没有这个行为（那里的行内代码永远是纯文本）。保留的理由是
+  它的可见文字就是目标地址本身，不存在「文案与去向不一致」这一层；上面那条修的正是
+  可见文字与地址不一致的 markdown 链接。
+- **站内链接仍可点击。** `placeFromURL` 命中的 `https://beings.town/...` 链接走
+  `onPlace`，在本窗口内跳转到对应页面，不发任何网络请求。
+
+### 4. 下一步
 
 **P2：Town。** Town 时间线累积（`docs/town-sdk-integration.md` 与 BeingDesktop
 `test/town-client*.test.cjs` 的实测分页语义：`since` 是最早 N 条、没有 `before`、序号稀疏）、

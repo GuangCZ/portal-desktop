@@ -41,7 +41,9 @@ Town 正文提及显示由 `tests/town-mentions.test.ts` 与 `test:town-names` �
 > portal-runtime-e2e,town-ui,sbs-refresh}.mjs` 都通过 `page.frameLocator('#chat-frame')`
 > 驱动对话，而 `beings://chat` 这条 iframe 路径已随对话核心迁移一起删除。它们现在在文件头
 > 说明原因并直接 exit 0，因此 **`test:all` 目前不覆盖打包客户端的对话冒烟、Town SDK 往返与
-> Portal 运行时**。重写计划见根目录 [MIGRATION.md](../MIGRATION.md) 的「P1 完成状态」。
+> Portal 运行时**。它们打印的 `SKIPPED:` 开头那行会被 `scripts/test-all.mjs` 认出来，在
+> `summary.json` / `summary.md` 里记成 `skipped` 而不是 `passed`，`summary.json` 另有一个
+> `skipped` 数组列出步骤名。重写计划见根目录 [MIGRATION.md](../MIGRATION.md) 的「P1 完成状态」。
 
 `test:all` 包含私信名称、Seed Garden 和内置浏览器回归。Windows 安装升级测试单独执行，需要交互式桌面会话和已构建的 Setup。测试使用临时安装目录、独立 profile、本地模拟 Being 和真实计划任务；NSIS 的用户级快捷方式、缓存和卸载登记会在结束时恢复。如果该 Windows 账户已有日常 NSIS 安装，测试会拒绝运行，应换测试账户。旧版本由当前包构造，不代表覆盖所有历史发布版。失败时保留临时目录和 `installation-metadata.json` 供排查。
 
@@ -62,7 +64,7 @@ Windows 的离线升级、坏引擎回滚与独立 Portal 接管另用 PowerShel
 ## 报告与隔离
 
 - `test-results/summary.md`：阶段结果、耗时、平台和后台测试是否适用。
-- `test-results/summary.json`：适合其他 CI 系统读取的结构化结果；失败退出码为 1。
+- `test-results/summary.json`：适合其他 CI 系统读取的结构化结果；失败退出码为 1。每个步骤的 `status` 为 `passed` / `failed` / `skipped`，`skipped` 表示该步骤自己声明什么都没跑（顶层 `skipped` 数组是同一份名单）。
 - `test-results/unit.xml`：客户端单元测试的 JUnit 报告。
 - `test-results/*.log`：各阶段原始日志，包含 Rust 实际通过/忽略计数。
 - `test-results/*.png`：界面截图，桌面失败时保存 `failure.png`，Town 失败时保存 `town-failure.png`。

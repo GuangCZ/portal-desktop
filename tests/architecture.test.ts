@@ -122,6 +122,36 @@ test("the retired chat page is gone from the renderer", () => {
   ).toEqual([]);
 });
 
+// The claim in README.md, README_CN.md and MIGRATION.md is that the renderer
+// makes no request of its own: every byte it shows arrived over IPC from the
+// main process, which is the only layer holding the connection. The import
+// rules above do not cover it — `fetch` and `WebSocket` are globals, not
+// imports — so name the globals themselves. Identifiers are read from the
+// syntax tree rather than the text, so a mention in a comment or a string is
+// not a violation and a shadowed local name still is.
+const network = new Set(["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "sendBeacon"]);
+test("the renderer cannot reach the network on its own", () => {
+  const uses = sources(path.join(root, "renderer")).flatMap((file) => {
+    const source = ts.createSourceFile(
+      file,
+      readFileSync(file, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const hits: string[] = [];
+    function visit(node: ts.Node) {
+      if (ts.isIdentifier(node) && network.has(node.text))
+        hits.push(
+          `${path.relative(root, file).replaceAll(path.sep, "/")}: ${node.text}`,
+        );
+      ts.forEachChild(node, visit);
+    }
+    visit(source);
+    return hits;
+  });
+  expect(uses).toEqual([]);
+});
+
 test("feature models and services remain independent of React components and hooks", () => {
   expect(
     edges.filter(

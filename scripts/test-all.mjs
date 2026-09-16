@@ -16,29 +16,44 @@ const directory = path.resolve('test-results');
 await mkdir(directory, { recursive: true });
 const source = portalSource;
 const report = { startedAt: new Date().toISOString(), platform: process.platform, arch: process.arch,
-  portalSource: source, reusedPackage: flags.has('--reuse-package'), background: backgroundCoverage(), status: 'running', steps: [] };
+  portalSource: source, reusedPackage: flags.has('--reuse-package'), background: backgroundCoverage(), status: 'running', skipped: [], steps: [] };
 async function persist() {
+  report.skipped = report.steps.filter(step => step.status === 'skipped').map(step => step.name);
   await writeFile(path.join(directory, 'summary.json'), JSON.stringify(report, null, 2));
   await writeFile(path.join(directory, 'summary.md'), `# Desktop test results\n\nStatus: **${report.status}** · ${report.platform}/${report.arch}\n\n` +
     (report.error ? `${report.error}\n\n` : '') +
     `Background lifecycle: ${report.background.enabled ? 'included in desktop E2E (see step outcome)' : 'SKIPPED — ' + report.background.reason}\n\n` +
+    (report.skipped.length ? `Skipped steps (covered nothing): ${report.skipped.join(', ')}\n\n` : '') +
     '| Step | Result | Seconds |\n| --- | --- | ---: |\n' + report.steps.map(step => `| ${step.name} | ${step.status} | ${step.seconds} |`).join('\n') + '\n');
 }
+// A step that ran nothing is not a step that passed. Scripts that cannot run
+// yet (tests/{electron-smoke,town-sdk,portal-runtime-e2e,town-ui,sbs-refresh}.mjs
+// still drive the retired `beings://chat` iframe — MIGRATION.md §P1.2) print a
+// line beginning `SKIPPED:` and exit 0 so the run stays readable; recording that
+// as `passed` would show coverage nobody has. The marker is matched across chunk
+// boundaries, and only a clean exit may be downgraded to a skip.
+const SKIP_MARKER = /(?:^|\n)SKIPPED:/;
 async function step(name, file, args, cwd = process.cwd()) {
   console.log(`\n[${name}]`);
   const start = Date.now();
   const log = createWriteStream(path.join(directory, name + '.log'));
-  let result;
+  let result, announced = false, carry = '';
   try {
     result = await new Promise((resolve, reject) => {
       const child = spawn(file, args, { cwd, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: process.env });
-      for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { log.write(data); process.stdout.write(data); });
+      for (const stream of [child.stdout, child.stderr]) stream.on('data', data => {
+        log.write(data); process.stdout.write(data);
+        if (announced) return;
+        const text = carry + String(data);
+        announced = SKIP_MARKER.test(text);
+        carry = text.slice(-16);
+      });
       child.once('error', reject);
       child.once('close', (code, signal) => resolve({ code, signal }));
     });
   } catch (error) { log.write(String(error) + '\n'); result = { code: 1, error: String(error) }; }
   finally { log.end(); await finished(log); }
-  const status = result.code === 0 ? 'passed' : 'failed';
+  const status = result.code !== 0 ? 'failed' : announced ? 'skipped' : 'passed';
   report.steps.push({ name, status, seconds: Number(((Date.now() - start) / 1000).toFixed(2)), ...result });
   await persist();
   if (status === 'failed') throw new Error(`${name} 失败，详见 test-results/${name}.log`);
