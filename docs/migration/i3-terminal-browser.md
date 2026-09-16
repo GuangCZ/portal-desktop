@@ -64,3 +64,37 @@ xterm 依赖若缺必须回 I0 补，不在 I3 改 package.json。
 ## 2. 进度
 
 - [x] 读 integration-plan §3 约定 / §3.3 / §2.1 / §2.4 / §4 / 附录 / §1.1 u5 / §1.3 / §1.4 / §5.6 / §5.8 / §6.2-6.3
+
+### 1.3 `docs/migration/i0-seams.md`（接缝权威说明）
+
+**A 主进程子系统**：`SubsystemContext` 实际成员 = `handle / exclusive / window() / store / electron / userData /
+desktopId / clientVersion / fetchImpl / onError / registry / push`（push 自带窗口守卫）。
+`DesktopSubsystem` 可选 `linked() / connectionVerified(connection)（同步，不得 await exclusive） / connectionCleared() / quitting() / ready`。
+扇出：linked / verified / cleared 按安装顺序，quitting 逆序；抛错只记 `onError` 不打断其余。
+**铁律**：install 同步体里不得 `ctx.registry.get(...)` 取值，只能包成闭包。
+`linked()` 是惰性规则的唯一例外出口（用于「赋值」而不是「读」）。
+`SubsystemSettings` 与方案偏差：拆成 `settings: Settings` + `extras` + `saveExtra(patch)`。
+`ElectronBindings` 的 `WebContentsView` / `session` / `net.request` 是 `unknown`——**需要它们的单元（I3 的工具浏览器）
+在使用处 `as` 一次并写明理由**。`clipboard` 是 Promise 形态。
+
+**D renderer 插槽**：`page.tsx` / `sidebar.tsx` / `topbar.tsx` 已接好，后续单元不需要再改。
+`FEATURE_MODELS` 的 model 类型是 `FeatureModel = Store & { start?(): () => void }`——
+**IPC 订阅、定时器一律放 `start()` 里并返回关闭函数**，构造函数里开的东西没地方关。
+排序 `order` 升序、同 order 按 key 字典序；`order` 用百位留空隙。插槽组件自带边框、空态与错误处理。
+
+**E 六个一行式冲突点**：与方案一致。只有 I0 能改 `main.ts` / `package.json` / `forge.config.ts` /
+`vite.*.config.ts` / `subsystems/types.ts` 的接口成员 / `renderer/app/models/app.ts`。
+
+**F `main/common/`**：I0 已**一次收敛完**——`tools/terminal/platform.ts` **已被 I0 删除**，
+导入已改指 `common/platform`。所以 §3.3 里「要收敛的副本」这一步 **I3 不需要再做**（基线已是收敛后的）。
+
+**H 依赖与打包（对 I3 至关重要，全部已由 I0 落地）**：
+`node-pty` 1.1.0（不是方案猜的 1.0.0）、`@xterm/xterm` 6.0.0、`@xterm/addon-fit` 0.11.0、`ws` 8.21.3 已在 `dependencies`；
+`@electron-forge/plugin-auto-unpack-natives` 已挂进 `forge.config.ts`；
+`vite.main.config.ts` 的 external = `['electron','node-pty','ws']`；
+`forge.config.ts` 自带 `packagerIgnore`（plugin-vite 会把整棵 node_modules 排除，提级 dependencies 只是必要条件）；
+`NATIVE_UNPACK = '**/node_modules/node-pty/{build/*,prebuilds/*}/spawn-helper'`（macOS 专用 helper，`*.node` glob 匹配不到它）。
+I0 已实测 `npm run package` 在 darwin-arm64 全绿、`require('node-pty')` 从 asar 内可解析、
+`loadNativeModule('pty').dir` 落在 `app.asar.unpacked/`。**`pty.spawn` 的真实冒烟 I0 明确留给 I3 在真实应用里做。**
+
+**I 与方案不同的点**：`tools/terminal/platform.ts` 已删；node-pty 是 1.1.0；`connectionCleared()` 至今无调用方（既有缺口）。
