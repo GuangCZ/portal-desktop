@@ -57,3 +57,67 @@ export function unresolvedNotice(text: string, members: readonly ChatComposerEnt
     ? `未解析提及：${unresolved.map(name => '@' + name).join('、')}；按原文发送，可能不会触发通知。请从候选列表选择完整 Town ID。`
     : '';
 }
+
+// ── the other direction: reading ─────────────────────────────────────────────
+// Everything above decides what an `@` in a DRAFT costs. What follows projects an
+// `@id` in a FINISHED message into the name behind it, and is the port of
+// BeingDesktop 0.8.26 renderer/town-mentions.js `displayText` (line 33), applied
+// by renderer/chat-app.js line 102 to every text node of a rendered message.
+//
+// Display only, and the word is load-bearing: `view.rows` and `sent` keep the
+// bytes the Being and Town saw, and only what is painted changes. 0.8.26 pins
+// that with its own assertion (test/chat-composer-ui.cjs line 100), because a
+// transcript that rewrote history would make the message the user can read a
+// different message from the one that was sent.
+
+const CONTROL = /[\x00-\x1f\x7f‪-‮⁦-⁩]/g;
+/** A display name arrives from Town, is written by its owner, and lands between
+ * the user's own words. Bidirectional overrides are removed with the control
+ * characters: a name is allowed to be anything except a way to reorder the
+ * sentence around it. */
+const clean = (value: unknown, limit = 100): string =>
+  typeof value === 'string' ? value.replace(CONTROL, '').slice(0, limit) : '';
+
+/** The directory as the transcript reads it: id → the name to paint.
+ *
+ * Built once per directory rather than once per message. A conversation is long,
+ * a member list is not, and `displayText` runs over every text node of every
+ * bubble on every repaint. */
+export function displayNames(members: readonly ChatComposerEntry[] = []): ReadonlyMap<string, string> {
+  const names = new Map<string, string>();
+  for (const [id, member] of memberMap(members)) {
+    const name = clean(memberName(member));
+    // A name that is just the id again says nothing, and painting it would only
+    // replace `@t_abc` with a second copy of itself.
+    if (name && name !== id && name !== '@' + id) names.set(id, name);
+  }
+  return names;
+}
+
+/**
+ * `@<id>` becomes `@<name>`, for reading.
+ *
+ * The regex is 0.8.26's, including the first alternative that exists only to be
+ * thrown away: a URL is consumed whole so that `https://example.invalid/@t_x`
+ * keeps its address. The rest requires the `@` to open a word — start of text, or
+ * whitespace or an opening bracket/punctuation in either script — and to close on
+ * one, which is what keeps an e-mail address and `a@b` out of it.
+ *
+ * An id the directory does not know is left exactly as written. Guessing is the
+ * one thing this must not do: the id IS the address, and a wrong name here would
+ * tell the reader they are talking to somebody they are not.
+ */
+export function displayText(
+  text: string,
+  members: readonly ChatComposerEntry[] | ReadonlyMap<string, string> = [],
+): string {
+  const names = members instanceof Map ? members : displayNames(members as readonly ChatComposerEntry[]);
+  if (!names.size) return String(text ?? '');
+  return String(text ?? '').replace(
+    /(?:https?:\/\/|mailto:)\S+|(^|[\s，。！？；：、（【“‘(\[{])@([A-Za-z0-9][A-Za-z0-9_-]{0,99})(?=$|[\s.,!?;:，。！？；：、()\[\]{}）】”’])/gu,
+    (whole: string, before: string | undefined, id: string | undefined) => {
+      const name = id ? names.get(id) : '';
+      return name ? before + '@' + name : whole;
+    },
+  );
+}

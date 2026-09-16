@@ -124,6 +124,12 @@
    positioned in script (components/selection.tsx) so that it never covers the
    passage it is about; everything here is the look. */
 
+/* The passage keeps its selection colour while the toolbar has focus, which the
+   native highlight loses the moment the caret leaves the transcript
+   (chat-app.css line 118 / chat-selection.js line 107). Its own rule, so an
+   engine without `::highlight()` drops this line and nothing else. */
+::highlight(chat-selected){background:color-mix(in srgb,var(--text) 16%,var(--bg));color:var(--text)}
+
 .chat-selection-toolbar{position:fixed;z-index:60;display:flex;max-width:calc(100vw - 32px);overflow:hidden;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--text);box-shadow:0 4px 18px #0002;user-select:none}
 .chat-selection-toolbar button{padding:9px 14px;font:inherit;font-size:14px;font-weight:500;white-space:nowrap;color:inherit}
 .chat-selection-toolbar button+button{border-left:1px solid var(--line)}

@@ -20,7 +20,7 @@ import type {
 } from '../../../shared/desktop-types';
 import type { TownDesktopAPI, TownDesktopMemberCacheState } from '../../../shared/town-desktop-types';
 import { buildKitPrompt } from './completion';
-import { memberMap, resolve, unresolvedNotice } from './mentions';
+import { displayNames, memberMap, resolve, unresolvedNotice } from './mentions';
 
 /** The two abilities the Being always has. They are not installed, so no
  * catalogue read can add or remove them, and they stay in the menu while the
@@ -114,6 +114,8 @@ export class ComposerDirectory extends Store {
    * noise (chat-composer.js lines 92 and 93). */
   receipt: PublishReceipt | null = null;
   private identity = '';
+  private names: ReadonlyMap<string, string> = new Map();
+  private namesFor: ChatComposerData | null = null;
   private currentSession = '';
   private generation = 0;
   private membersExpiresAt = 0;
@@ -131,6 +133,19 @@ export class ComposerDirectory extends Store {
   get session() { return this.currentSession; }
   get epoch() { return this.generation; }
   get members(): ChatComposerEntry[] { return this.data.members; }
+  /**
+   * The same directory, keyed for reading rather than for resolving: id → the
+   * name the transcript paints in place of it (chat-composer.js hands this list
+   * to chat-app.js through `onMembersChanged`, which repaints).
+   *
+   * Cached against `this.data` by identity, because the transcript asks for it on
+   * every repaint — including every streamed token — and rebuilds nothing until
+   * a read replaces the directory.
+   */
+  get displayNames(): ReadonlyMap<string, string> {
+    if (this.namesFor !== this.data) { this.namesFor = this.data; this.names = displayNames(this.data.members); }
+    return this.names;
+  }
   get kits(): ChatComposerEntry[] { return this.data.kits; }
   get hasTown(): boolean { return Boolean(this.town); }
 

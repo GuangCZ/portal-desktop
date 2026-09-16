@@ -13,12 +13,13 @@
 // Every card is drawn, and the ones belonging to another conversation are
 // hidden rather than unmounted — a card belongs to the conversation it was
 // opened from, so coming back finds it and its half-typed follow-up.
-import { useLayoutEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
 import { Markdown } from "../../shared/components/markdown";
 import { useModel } from "../../shared/hooks/use-model";
 import { decode } from "../../../shared/chat-references";
 import type { ConversationModel } from "../models/conversation";
 import type { DetailCardState } from "../models/details";
+import { displayText } from "../models/mentions";
 import { interleave } from "../models/transcript";
 import { ReferenceChip } from "./messages";
 
@@ -56,6 +57,12 @@ export function DetailCards({ model }: { model: ConversationModel }) {
 
 function DetailCard({ model, card, hidden }: { model: ConversationModel; card: DetailCardState; hidden: boolean }) {
   const conversation = useModel(model);
+  // A card is drawn through chat-app.js's own `renderMarkdown` in 0.8.26
+  // (chat-selection.js line 191 is handed the function that walks the text
+  // nodes), so `@t_abc` reads as a name here exactly as it does in the
+  // transcript beside it.
+  const names = useModel(model.directory).displayNames;
+  const renderText = useCallback((text: string) => displayText(text, names), [names]);
   const details = model.details;
   const log = useRef<HTMLDivElement>(null);
   const items = messages(card);
@@ -113,6 +120,7 @@ function DetailCard({ model, card, hidden }: { model: ConversationModel; card: D
               className="chat-body reading-text"
               content={item.role === "user" ? decode(item.text).text : item.text}
               chat
+              renderText={renderText}
             />
           </div>
         ))}

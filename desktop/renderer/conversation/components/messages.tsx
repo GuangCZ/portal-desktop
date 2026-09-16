@@ -5,13 +5,14 @@
 // ("you · 13:44:23" / "<being> · 13:44:23"), the content below it, consecutive
 // messages grouped, a "— 13:40:01 —" divider after a long silence, thinking
 // dots before the first token.
-import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { Markdown } from "../../shared/components/markdown";
 import type { PlaceTarget } from "../../shared/lib/navigation";
 import { decode, type ChatReference } from "../../../shared/chat-references";
 import type { ChatRowImage } from "../../../shared/desktop-types";
 import { useModel } from "../../shared/hooks/use-model";
 import type { Activity, ConversationModel } from "../models/conversation";
+import { displayText } from "../models/mentions";
 import { clock, type TranscriptItem } from "../models/transcript";
 import { WorkerResultCard } from "./worker-result";
 
@@ -103,10 +104,12 @@ export function ActivityLine({ text, think, live, activity }: {
 /** One message: meta line, the activity line while the Being works on it, content.
  * A Worker result takes the place of the content — it is the Being reporting a
  * finished task, not something it said (chat-app.js line 372). */
-function Bubble({ item, beingName, activity, found, onPlace, onOpenWorker }: {
+function Bubble({ item, beingName, activity, found, onPlace, onOpenWorker, renderText }: {
   item: TranscriptItem; beingName: string; activity: Activity | null; found: boolean;
   onPlace?: (target: PlaceTarget) => void;
   onOpenWorker: (result: { sessionId: string; workerId: string }) => void;
+  /** `@t_abc` → `@名字`, for reading only (models/mentions.ts `displayText`). */
+  renderText?: (text: string) => string;
 }) {
   const note = item.partial ? "回复中断，等待记录核对" : item.pending ? "等待记录确认" : "";
   const meta = [item.role === "user" ? "you" : beingName, clock(item.at), note].filter(Boolean).join(" · ");
@@ -135,10 +138,13 @@ function Bubble({ item, beingName, activity, found, onPlace, onOpenWorker }: {
       )}
       {!!decoded?.references.length && <ReferenceChip references={decoded.references} />}
       {/* Loom streams escaped text and renders markdown once the moment is
-          whole; so do we — a half-written fence is not a code block yet. */}
+          whole; so do we — a half-written fence is not a code block yet. The
+          names are projected on the same side of that line as 0.8.26 puts them
+          (chat-app.js line 367: a live body is `textContent`, and only the
+          rendered branch walks its text nodes). */}
       {item.live
         ? <div className="chat-body chat-body-live">{text}</div>
-        : <Markdown className="chat-body reading-text" content={text} chat onPlace={onPlace} />}
+        : <Markdown className="chat-body reading-text" content={text} chat onPlace={onPlace} renderText={renderText} />}
     </article>
   );
 }
@@ -151,6 +157,14 @@ export function Transcript({ model, onPlace, streamRef }: {
   streamRef?: RefObject<HTMLDivElement | null>;
 }) {
   const conversation = useModel(model);
+  // The member directory is a second source for this view. 0.8.26 subscribes the
+  // same way — `onMembersChanged` hands chat-app.js the new list and calls
+  // `repaint()` (chat-app.js line 190) — so a directory that is read late, or
+  // invalidated and read again, renames the Beings already on screen instead of
+  // waiting for the next message.
+  const directory = useModel(model.directory);
+  const names = directory.displayNames;
+  const renderText = useCallback((text: string) => displayText(text, names), [names]);
   const own = useRef<HTMLDivElement>(null);
   const stream = streamRef || own;
   const items = conversation.items;
@@ -201,6 +215,7 @@ export function Transcript({ model, onPlace, streamRef }: {
             found={conversation.jumpTo === item.id}
             onPlace={onPlace}
             onOpenWorker={result => void model.openWorkerResult(result)}
+            renderText={renderText}
           />
         </div>
       ))}
