@@ -254,3 +254,37 @@ and says why only once」：断言 12 次布局发 12 次（不再封顶）、`f
 本仓库没有给它建过夹具。这不是本单元引入的，也没有因为删 `protocolFile` 而变差（那条测的是另一个函数），
 但既然现在唯一一条「路径穿越」用例没了，把它写进 openIssues。
 
+### 2.3 三个 E2E 的 npm 入口（i3 未做 1 / i6 没做 4 / i2 复审 low）——已接
+
+`package.json` 的 `scripts` 段新增三行（**没有动依赖**）：
+`"test:tools": "node tests/tools-e2e.mjs"`、`"test:terminal": "node tests/terminal-e2e.mjs"`、`"test:sidebar": "node tests/sidebar-e2e.mjs"`。
+`scripts/test-all.mjs` 把 i2 内联的 `step('tools-e2e', process.execPath, ['tests/tools-e2e.mjs'])` 换成
+`npm('tools-e2e', ['run','test:tools'])`，并在后面加 `terminal-e2e`、`sidebar-e2e` 两步（都排在 `package` 之后，它们跑的是打包产物）。
+`summary.md` 的 `skipped` 名单由 `step()` 的 `SKIPPED:` 标记自动生成，本单元只增加步骤、**没有让任何一步变成 skip**。
+
+### 2.4 MIGRATION.md 的两个「集成阶段」小节——已合并
+
+原来是 `## 集成阶段 I1–I7：并行单元`（表头齐全，I3/I2/I4/I6 四行）+ `---` + `## 集成阶段 I1 起：各单元一行`
+（**缺分隔行**，所以 I1 那一行根本不渲染成表格）。
+现在是一个 `## 集成阶段：各单元记录（2026-09-16）` + 一张 `| 单元 | 产出 | 用户可见的变化 / 记录 |` 的表，
+五行原文逐字保留（I1 那行的第三列本来是「用户可见的变化」，补了它的记录路径；其余四行第三列本来就是记录路径），
+再 append 本单元一行。
+
+### 2.5 `desktop/renderer/README.md` 的目录树——已补
+
+补 `tools/`、`tool-browser/`、`terminal/`、`orchestration/`、`features/`、`settings/` 六个模块（settings 的四行用 i6 §6 给的原文），
+`app/` 下补 `slots.tsx` 与 models 的「功能模型注册表」。逐个 `ls` 核对过，与真实目录一致：
+`features/` 与 `settings/` **没有** `slot.tsx`（注册项分别从 `orchestration/slot.tsx` 与 `settings/components/entry.tsx` 导出），已在树里注明。
+「依赖与文件约定」加一条解释 `slot.tsx` 是什么；「验证」一节补上三个打包 E2E 的跑法。
+
+### 2.10 侧栏活动灯认 Worker（i4 记录「没做」第 3 条）——已修
+
+BD `renderer/sidebar.js:63`：`window.beingOrchestration?.hasActiveWorkers(item.id) ? 'talking' : state.chatSessionActivity?.[item.id]`
+——**有 Worker 在跑就是「进行中」，优先于「等待回复」**，而且和它下面那组 Worker 计数读同一份快照（源码第 62 行的注释说的就是这件事）。
+
+规则抽成纯函数 `desktop/renderer/app/components/session-activity.ts`（`sessionActivity` / `sessionActivityLabel` / `sessionActivityClass`），
+`sidebar.tsx` 的 `SessionRow` 改调它，数据来自 `app.features.orchestration?.hasActiveWorkers(session.id) === true`
+（编排单元没落地时是 `undefined`，即「没有 Worker」）。
+**为什么抽出来**：本仓库的 vitest 没有 DOM 环境，规则写在 JSX 里就没有任何东西能执行它。
+新增 `tests/sidebar-activity.test.ts`（4 例）：Worker 压过 `waiting`、原有三态不变、无编排模型时的退化、三个文案与三个 class 与 0.8.26 逐字一致。
+

@@ -23,6 +23,7 @@ import type { ConversationModel } from "../../conversation/models/conversation";
 import type { ChatSessionSummary } from "../../../shared/desktop-types";
 import { sidebarSections } from "../slots";
 import { NO_SHELL_STATE } from "../../settings/models/shell-state";
+import { sessionActivity, sessionActivityClass, sessionActivityLabel } from "./session-activity";
 
 /** A folded project folder is remembered per Being, exactly as 0.8.26 remembers
  * it: `localStorage` under `being-sidebar-v1:${scope}:folder:${path}`
@@ -310,8 +311,12 @@ function SessionRow({ session, app, conversation, busy, editing, menuOpen, onMen
   const organizer = conversation.organizer;
   const value = organizer.metadata(session.id);
   const active = session.id === conversation.activeId && app.view === "chat";
-  const activity = session.busy ? "talking" : session.inFlight ? "waiting" : "";
-  const label = activity === "talking" ? "进行中" : activity === "waiting" ? "等待回复" : "";
+  // A session with a worker still running is「进行中」even when its Being is idle
+  // (BeingDesktop 0.8.26 renderer/sidebar.js:63). `hasActiveWorkers` reads the same
+  // snapshot the worker group under this row counts, so the light and the count
+  // cannot disagree; an absent orchestration model simply means no workers.
+  const activity = sessionActivity(session, app.features.orchestration?.hasActiveWorkers(session.id) === true);
+  const label = sessionActivityLabel(activity);
   const menu = useRef<HTMLDivElement>(null);
   // The close callback is read through a ref rather than depended on: a reply
   // streaming into another conversation re-renders this row several times a
@@ -354,7 +359,7 @@ function SessionRow({ session, app, conversation, busy, editing, menuOpen, onMen
           void conversation.select(session.id);
         }}
       >
-        <span className={`session-activity-light ${activity || "inactive"}`} aria-hidden="true" />
+        <span className={sessionActivityClass(activity)} aria-hidden="true" />
         <span className="session-title">{session.title || "新会话"}</span>
         <span className="task-age">{age(session, Date.now(), value.touchedAt)}</span>
       </button>
