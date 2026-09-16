@@ -225,3 +225,32 @@ TownPairing 的 5 个用例（全部移植）：
 - `prepareTownAssistance(value, getContext)`：严格 1 字段 `{operation}`（data descriptor），且 `ASSISTANCE.has(operation)`，否则 `'请选择有效的 Being 协助操作。'`。
 - `prepareFiresideDraft(value, getContext)`：严格 2 字段 `{draft, connectionRevision}`；`draft` 为非空 string 且 ≤32000；`connectionRevision` 为 `Number.isSafeInteger` 且 ≥0；否则 `'请填写有效的围炉协助草稿。'`。随后 `requireCurrentContext(getContext)`；`context.generation !== connectionRevision` → `'连接身份已变化，草稿未转交，请在当前身份下重新确认。'`；前缀文案见源码第 166 行。
 - 注入化方案：`WebContentsLike { isDestroyed(); isLoadingMainFrame(); getURL(); mainFrame }`、`WebFrameLike { isDestroyed(); detached; executeJavaScript(code) }`，不 import electron。
+
+### test/town.test.cjs（278 行，17 个 test）
+`fixture({draft='', readyState='complete', url='https://loom.example/being/?token=not-for-the-catalog'})`：
+- `field = {tagName:'TEXTAREA', value:draft, disabled:false, readOnly:false, dispatchEvent(e){events.push({type,bubbles}); return true;}, focus(){events.push({type:'focus'});}}`；`send = {click(){submissions++;}}`；`messages = {}`；`row.contains(v) = v===field||v===send`；`app.contains(v) = v===row||v===messages`。
+- `sandbox = {document:{readyState, documentElement:{dataset:{}}, getElementById(id)}, location:new URL(url), crypto:{randomUUID}, Event: class{...}}`，脚本用 `vm.runInNewContext(script, sandbox)` 执行。
+- `connection = {displayUrl:'https://loom.example/being/', url}`；`frame = {isDestroyed:()=>false, detached:false, async executeJavaScript(script){assert.equal(this, frame); executions++; return vm.runInNewContext(...);}}`（**断言 this === frame**）。
+- `contents = {mainFrame:frame, isDestroyed:()=>false, isLoadingMainFrame:()=>false, getURL:()=>url, executeJavaScript(){assert.fail('Drafts must execute on the captured frame, not WebContents');}}`。
+- `context = {connection, view:{webContents:contents}, generation:4, revision:2, configured:true, status:'connected', exiting:false}`；`getContext:()=>({...context})`；`change(patch)`。
+
+用例名（顺序）：
+1. `Town catalog exposes nine navigation features and only public static URLs`
+2. `Town public page whitelist rejects URLs, credential parameters and prototype keys`
+3. `draft preparation rejects unknown and non-being IDs before evaluating page code`
+4. `each Being feature fills a fixed draft and only emits input without sending`
+5. `moved capabilities retain legacy draft IPC without restoring old navigation entries`
+6. `Channel and Bonfire cannot fall back to asking Being through legacy draft IPC`
+7. `each native module assistance operation prepares only its fixed draft without sending`
+8. `module assistance preserves existing drafts and requires a connected Loom document`
+9. `module assistance rejects arbitrary prompts, extra keys and accessor objects before page evaluation`
+10. `Fireside handoff treats the exact user draft as data and only fills a Loom draft`
+11. `Fireside handoff strictly validates its two data fields without invoking accessors`
+12. `Fireside handoff preserves existing Loom drafts and rejects stale connection revisions`
+13. `Fireside handoff rejects a connection change during the document handshake before filling text`
+14. `existing text and whitespace drafts are preserved with no input or focus event`
+15. `draft requires an active editable Loom document with the known structure`
+16. `disconnected, loading, exiting and foreign pages never receive a draft script`
+17. `an asynchronous result from an old view, generation or document is never accepted`
+18. `page execution errors cannot leak page content or secrets through the native error`
+（实为 18 个 test。）
