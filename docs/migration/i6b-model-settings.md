@@ -396,3 +396,71 @@ BD `test/model-config.test.cjs` 13 条 → `tests/model-settings-config.test.ts`
 - 不进日志与文案：`onError` 只收到 scope 与 error，本路径的错误文案全是 `MESSAGES` 里的作者常量或
   `${name}格式无效。`（密钥值靠"不写进去"而不是"写进去再删"）；同一测试断言 errors 与包络 message 都不含密钥。
 - 内存里不多停一拍：渲染端 `save()` 的 `finally` 里 `delete payload.apiKey`（BD 同款），换 Being 时连草稿一起清空。
+
+---
+
+## 7. 门槛与冒烟结果（2026-09-16 实跑）
+
+| 项 | 结果 |
+| --- | --- |
+| `npm run typecheck` | **绿**（无输出） |
+| `npx vitest run` | **绿**：112 文件 / 1244 通过 / 34 跳过。基线是 109 / 1197 / 34，本单元新增 47 条（17 config + 9 ipc + 21 renderer），跳过数未变（`1197 + 47 = 1244` ✓） |
+| `tests/sbs-refresh.mjs`（重写后实跑） | **绿**：`PASS … 26 checks`。`npm run test:sbs-refresh`（含 `prepare:desktop`）同样通过 |
+| `test:all` 的 skipped 名单 | **少一项**：`sbs-refresh` 不再打印 `SKIPPED:`，`scripts/test-all.mjs` 会把它记为 passed（只减不增 ✓） |
+| 打包 | **成功**：`resources/heart-portal` 放 I2 留下的 clang stub（`--version` → `heart-portal 0.0.0`），`PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package`（绕代理）产出 `out/Being Desktop-darwin-arm64/Being Desktop.app`，`codesign --force --deep --sign -` 重签成功 |
+| 打包产物真机启动 | **成功**（见下） |
+
+打包客户端冒烟（`launchDesktop` + 产物路径，独立临时 profile，`PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN=1`）：
+
+```
+OK: 模型 entry present in the sidebar footer
+OK: model settings page rendered
+   status  : 连接 Being 后即可配置模型。
+   sbs     : 未知 | running: 未知
+   sbs btn : disabled=true aria-pressed=null
+   save btn: disabled=true
+   key type: password
+OK: dialog closes
+OK: no renderer errors
+```
+
+全部是未连接 Being 时**应该**出现的状态：不谎称已关闭（两处都是「未知」）、开关无 `aria-pressed`、
+保存禁用、密钥框是 password。
+
+两条与冒烟有关的实测记录：
+
+- **第一次启动超时是钥匙串，不是代码**。ad-hoc 重签的产物向真实钥匙串要授权会挂住，30 秒等窗口超时。
+  `tests/support/electron-lifecycle.mjs` 早就为这种情况留了 `PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN=1`（`--use-mock-keychain`），
+  加上就过。**这条只覆盖 UI，不覆盖真实钥匙串授权**。
+- **E2E 锁被别的 worktree 占过一次**，按铁律等待重试（脚本里写了最多 30 次 × 60 秒），没有 kill 任何进程、没有删任何锁文件。
+  期间 `pgrep` 看到 I5 的 worktree 正在 `electron-forge package`。
+
+`npm run start` **没有单独跑**：一是 `electron-forge package` 这一趟已经把两个 Vite 目标都构建过了
+（`✔ Building renderer targets` / `✔ [plugin-vite] Building production Vite bundles`），
+二是开发实例的单实例锁按**默认 userData** 计，与其它三个 worktree 共用，当时 I5 正在打包，
+起一个开发实例既可能被静默退出、也可能干扰对方。打包产物启动是更强的那一项，已经做了。
+
+---
+
+## 8. 未做 / 存疑（openIssues）
+
+1. **引导巡检**（`onboarding-inspection.cjs`）：任务书列为 P5，不在本单元范围。
+2. **Town 页的 SBS 状态行文案**：属 Town 页（I1 的目录），本单元没碰。Town 若要显示 SBS，应读
+   `beings:model-settings-state` 而不是自己再开一条 `/api/llm/config` 读——本仓库应当只有一个该路由的读者。
+3. **`sideBySide.active` 永远是 `null`**：本壳层没有来源（BD 靠已删除的 Loom 页面消息）。
+   页面照实显示「未知」。要真做，得让原生对话层在 `/api/stream/active` 的读里顺带回报，属对话层（I5）的范围。
+4. **`CHAT_ERROR_CODES` 是第七处共享文件触碰**（方案只列了六处）。追加一行 `'NEEDS_KEY', 'ROLLED_BACK',`。
+   合回时如果与 I5 在同一数组上冲突，取并集即可；语义上加码只放宽不改既有行为。
+5. **BD 的响应式/几何 check 没有移植**（`*-no-horizontal-overflow`、`*-fits`、`fixture-window-never-shown`）。
+   BD 用隐藏 Electron 窗口量 `getBoundingClientRect` 并截图，本壳层没有对应的回归脚本，model 层也答不了几何。
+   模型页的 CSS 用的是壳层变量与 flex，窄窗下应当自然折行，但**没有自动化证据**。
+6. **`npm run start` 未单独执行**（理由见 §7）。
+7. **真实钥匙串授权未覆盖**：冒烟用 `--use-mock-keychain`（§7）。
+8. **`PROVIDERS` 会随 Loom 漂移**。`docs/architecture.md` §11 把它标为硬耦合点。本单元逐字节移植了
+   Loom 1.8.0（2026-09-12 revision）的表。**更新方式是重读 Loom，不是推理这些值应该是什么。**
+9. **`connectionCleared` 的既有缺口**（I0/I6 都记过）：`main.ts` 从来没有调用过 `extensions.connectionCleared()`。
+   本单元实现了它并由 `tests/model-settings-ipc.test.ts` 直接驱动断言，但**生产路径上它不会被调用**；
+   实际切 Being 走 `beings:save` → `verifyConnection` → `connectionVerified`，那条是通的（纪元会 ++、状态会重置）。
+   要真正修得回 I0/main.ts。
+10. **`beings:model-config-get` 不在 `ctx.exclusive` 里**（同 BD：`getModelConfig` 不在它的 `serialized` 集合里）。
+    并发读之间的保护由 `ModelConfig` 自己的 `busy` / `revision` 提供，不靠队列。
