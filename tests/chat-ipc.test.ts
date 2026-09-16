@@ -10,7 +10,8 @@ import { expect, test } from "vitest";
 import { createTrustedHandle } from "../desktop/main/app/ipc";
 import { sceneId } from "../desktop/main/chat/being-chat";
 import { beingIdentityKey } from "../desktop/main/chat/connection";
-import { installDesktopExtensions } from "../desktop/main/extensions";
+import { installSubsystems } from "../desktop/main/extensions";
+import { installChatSubsystem } from "../desktop/main/subsystems/chat";
 import { chatErrorEnvelope, chatErrorFromEnvelope, isChatErrorEnvelope } from "../desktop/shared/chat-errors";
 import { publicErrorMessage } from "../desktop/shared/errors";
 import type { Connection } from "../desktop/main/chat/connection";
@@ -73,11 +74,18 @@ async function fixture({ desktopId = DESKTOP, address = ADDRESS }: { desktopId?:
     quitting: () => quitting, recoveryBlocked: () => false,
     report: (_channel, error) => publicErrorMessage(error),
   });
-  const extensions = installDesktopExtensions({
+  // `installSubsystems` with just this one installer, not `installDesktopExtensions`
+  // with all of them: the assertions below name the conversation layer's exact
+  // channel set and require every push to be one of its two, and both are claims
+  // about THIS subsystem. Installing the whole list would make them a claim about
+  // whichever integration units happen to be landed, which is a different (and
+  // much weaker) thing to assert. The registry machinery is production's own —
+  // `installDesktopExtensions` is one line around this function.
+  const extensions = installSubsystems({
     handle, exclusive: operation => operation(),
     window: () => window, store, secretStorage, userData: directory, desktopId,
     clientVersion: "0.9.0", fetchImpl, onError: (scope, error) => { errors.push({ scope, error }); },
-  });
+  }, [installChatSubsystem]);
   // The application only ever notifies after `verifyBeingConnection` resolved,
   // which is exactly when the address it verified is the one saved in the store.
   const connect = async (value = address) => {
