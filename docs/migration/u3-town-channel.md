@@ -384,3 +384,47 @@ TownPairing 的 5 个用例（全部移植）：
   - `context.portalExecutable || context.portalConfig` → `existing_configuration`（`'已保留现有程序与配置，请在原有连接设置中启动。'`）。
   - 全新安装：`preparePortalWorkspace({workspace: context.portalWorkspace, defaultWorkspace})` → `configFactory({workspace, name:'being-desktop'})` → `_requireCurrent` → `_update({status:'installing',phase:'checking',detail:'正在核对官方安装包。',recovery:null})` → `installer.install({onProgress})`（只接受 phase ∈ download/hash/install/not_started，`receivedBytes` 夹在 `[0, release.size]`，`totalBytes = release.size`）→ `_requireCurrent` → `configPath = path.join(path.dirname(installed.executable), 'desktop-<uuid>.toml')` → `fs.writeFile(configPath, toml, {encoding:'utf8', flag:'wx', mode:0o600})` → `configOwned=true` → `_requireCurrent` → `deployment={executable, configPath, version: release.version, workspace: configuration.capabilities.workspace}` → `saveDeployment(deployment)` → `saved=true` → `_requireCurrent({...context, portalWorkspace, portalExecutable, portalConfig})` → `_update({status:'installed', version, verified: installed.verified===true, executable, phase:'starting', capabilities, detail:'程序与配置已保存，正在启动 Portal。'})` → `startPortal()` → 最终 `_update`（未启动文案 `started.detail || 'Portal 已安装，尚未启动。'`）。
   - catch：`configuration = saved ? 'saved' : 'not_created'`；`configOwned && configPath && !saved` 时尝试 `fs.unlink`，成功 `'removed'`，失败按 `cleanupError.code==='ENOENT'` 判 `'removed'` 否则 `'cleanup_failed'`；`detail = DEPLOY_ERRORS.has(error?.message) ? error.message : '部署未能完成，请检查网络、工作区及本机目录后重试。'`；`processStatus = ['running','stopped','external','error'].includes(portal.state.status) ? portal.state.status : 'unknown'`；`_update({status:'error', phase:'failed', detail, recovery:{program: installed?.verified===true ? 'retained_verified' : 'not_confirmed', configuration, process: processStatus}})`；`throw new Error(detail)`。
+
+### src/portal-config.cjs（88 行）与 src/portal-installer.cjs 的发布表
+本单元把这两块作为 TownController 的直接依赖一并移植（portal-desktop 的 `desktop/main/portal/*` 是完全不同的模型，没有对应物；并行单元列表里也没有它们）。
+- `PORTAL_RELEASE = {version:'0.8.3', apiUrl:'https://api.github.com/repos/d5z/heart-portal/releases/assets/557419976', url:'https://github.com/d5z/heart-portal/releases/download/v0.8.3/heart-portal-windows-x86_64.exe', size:12004864, sha256:'5aec4a09…'}`；`PORTAL_RELEASES`：`win32-x64` 即 PORTAL_RELEASE；`darwin-arm64`（size 12205520，asset 557419975）；`darwin-x64`（size 12767152，asset 557419978）；`portalRelease(platform, arch) = PORTAL_RELEASES[`${platform}-${arch}`] || null`。
+- `portal-config.cjs`：`absolutePath`（必须绝对路径且无控制字符，否则 `'请选择有效的绝对工作区路径。'`）、`validatePortalWorkspace`（逐级 lstat，禁止符号链接与非目录，返回 realpath；任何失败统一 `'工作区必须是现有实际目录，不能包含符号链接。'`）、`preparePortalWorkspace({workspace, defaultWorkspace})`（有 workspace 就校验；否则 `mkdir(defaultWorkspace, {mode:0o700})`，EEXIST 以外失败为 `'无法创建默认 Portal 工作区，请检查目录权限。'`）、`DEFAULT_PERMISSIONS = {exec:false,file:true,screenshot:false,web_fetch:false,search:true,custom_tools_enabled:false}`、`normalizePortalPermissions`（键集必须完全一致且都是 boolean，否则 `'Portal 权限必须是完整的开关设置。'`）、`createPortalConfig({workspace, name='being-desktop', kitsDir, permissions})`（name 须匹配 `^[a-zA-Z0-9._-]{1,64}$`，否则 `'Portal 名称无效。'`；toml 行序见源码 57–67；capabilities 见 70–84，`strictSandbox:false`、`kitsEnabled:false`、`coworkRequiresPortalToken:true`）。
+- `grove-portal.cjs` 的 `grovePortalConfigText` / `enableGrovePortal` 属于 Grove/Kits 单元，本单元**注入** `groveConfigText`，缺省 undefined。
+
+### test/town-controller.test.cjs（456 行，32 个 test）
+夹具 `harness(t, overrides)`：真实 `fs.mkdtemp(os.tmpdir() + '/being-town-controller-test-')`；建 `workspace` 与 `managed-portal/v0.8.0/heart-portal.exe`；context `{configured:true, connected:true, exiting:false, workspace, portalWorkspace: workspace, portalExecutable:'', portalConfig:'', beingName:'fixture-being', connectionId:'private-identity-fixture', credential:'private-credential-fixture'}`；portalState `{status:'not_configured', owned:false, detail:''}`；installation `{status:'installed', phase:'not_started', version:'0.8.0', executable, verified:true, started:false}`；installer.install 依次 onProgress download/hash/install（totalBytes 12193280 只是夹具噪音，控制器用 `release.size`）；`saveDeployment` 断言 configPath 是文件并把 deployment 写回 context（含 `managedPortal`）；`startPortal` 默认返回 `{status:'running', health:'unknown'}`；`onChange` 把 `state().portalInstall` 推进 `h.progress`；platform 默认 `win32`/`x64`。`confirmation() = {confirmed:true, permissions:{files:true, exec:false, web:false}}`。
+
+用例名（顺序，共 32）：
+1. `deployment requires exact confirmation and the supported permission combination`
+2. `inherited, accessor, symbol, and hidden confirmation fields are not accepted`
+3. `unsupported platform or architecture fails before inspecting processes or installing`
+4. `Mac deployment supports both architectures and retains external Portal ownership`
+5. `Mac fresh deployment persists the selected release metadata before starting`
+6. `unconfigured, disconnected, and exiting contexts cannot begin deployment`
+7. `missing real workspace fails before any download or persistence`
+8. `one-click configuration previews and creates a dedicated default workspace, then reuses it`
+9. `an owned Portal for a previous identity is preserved without reporting it as the current connection`
+10. `identity changes while inspecting processes prevent workspace creation and installation`
+11. `external and owned Portal instances are reused without installer, config writes, or new launch`
+12. `any existing program or configuration selection is preserved without automatic start`
+13. `uncertain process state blocks installer and launch`
+14. `deployment validates workspace, installs, writes config, saves, then starts once`
+15. `save failure cleans the new configuration, retains the binary and unrelated files, and never launches`
+16. `exclusive-create collision must not delete the preexisting configuration`
+17. `startup failure preserves an already saved configuration for retry`
+18. `one-click deployment restarts its verified saved configuration without another install`
+19. `one-click retry preserves changed configurations and does not start them`
+20. `one-click Portal retry accepts the verified Grove configuration extension`（需 grove-portal.cjs 的 enableGrovePortal → skip）
+21. `one-click retry rejects modified binaries and workspace changes before launch`
+22. `identity, workspace, or selected paths changing during download leave the installed binary unstarted`
+23. `loss of connected or configured state during download prevents saving and starting`
+24. `identity and workspace are checked again after asynchronous persistence before start`
+25. `duplicate deployment clicks share one workflow and a failed workflow can be retried`
+26. `public state does not publish credential-bearing failure text or unknown progress fields`
+27. `observer exceptions do not interrupt deployment or leave serialization stuck`
+28. `a stale refresh cannot overwrite deployment progress after installation begins`
+29. `a refresh started before deployment cannot overwrite its completed state with an old failure`
+30. `unsupported room management directs users to Being without claiming Town pairing is unavailable`
+31. `Desktop project changes never replace a deployed Portal workspace or config`
+32. `external configuration is authoritative even while the process is stopped`
+注：用例 16 用 `t.mock.method(crypto,'randomUUID',…)` 固定 UUID → 移植为注入的 `randomUUID` 选项。
