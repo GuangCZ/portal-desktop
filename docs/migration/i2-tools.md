@@ -50,3 +50,20 @@
   `extras` / `saveExtra(patch)`（不是方案写的交叉类型）。
 - `ElectronBindings.WebContentsView` / `session` / `net.request` 是 `unknown`，使用处 `as` 一次并写明理由。
 - `PANEL_SLOTS` 排序：`order` 升序、`key` 兜底；建议 order 取百位。`visiblePanels(app)` 已由 page.tsx 调用。
+
+### docs/migration/u4-tools.md + desktop/main/tools/desktop-tools.ts
+
+- `DesktopTools` 构造面与 §3.2 一致；`Browser` 与 `desktopPortalName` 必填，`Console`/`ToolLink` 有默认值。
+- `snapshot()` = `{browser, console（jobs 补 origin）, link, workspace, requestResult, requests}`。
+- `perform(action, value)` 的 15 个动作：`browser.new/activate/close/navigate/back/forward/reload/stop`、
+  `console.run/stop/clear`、`link.connect`（无连接 → `请先连接 Being。`）、`link.disconnect`、
+  `request.allow`、`request.deny`；未知 → `未知桌面工具操作。`；disposed → `桌面工具已关闭。`。
+- `changed()` 用 `setImmediate` 合并一次 `onChange`。
+- `link` 的 `toolAllowed` 已经守住 `desktop_terminal_*`：编排模式关时要求 `Boolean(getTerminal())` 且
+  `['win32','darwin'].includes(process.platform)`。→ **`getTerminal` 返回 null 时终端工具自然不进目录**，
+  I2 不需要额外过滤。
+- `ws` 的 PACKAGING CONTRACT：默认传输是 `createRequire(import.meta.url)('ws')`；
+  「静态 import 让 Vite 内联 ws」实测第一帧崩（`bufferUtil.mask is not a function`），不要再试。
+  I0 已把 `ws` 提到 dependencies 并写了 `packagerConfig.ignore`。**唯一有效验证是打包后冒烟。**
+- `tests/tools-portal-loopback.ts`（非 `.test.ts`）已有 `LoopbackRelay` / `frame` / `until`，
+  是 I2 的 e2e 假 relay 的现成底座。
