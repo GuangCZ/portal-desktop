@@ -849,3 +849,28 @@ const townSession = new TownSession({
 
 - `npm run typecheck`：通过。
 - `npx vitest run`：`Test Files  48 passed | 7 skipped (55)` / `Tests  394 passed | 16 skipped (410)`（基线 309 通过 16 跳过，本单元新增 85 条）。
+
+### 门槛原文（2026-09-16 终验）
+
+```
+$ npm run typecheck
+> portal-desktop@0.1.3 typecheck
+> tsc --noEmit
+（无输出，通过）
+
+$ npx vitest run
+ Test Files  48 passed | 7 skipped (55)
+      Tests  394 passed | 16 skipped (410)
+```
+
+基线（d5z/portal-desktop main @ 4921932）为 `Test Files  44 passed | 7 skipped (51)` / `Tests  309 passed | 16 skipped (325)`，
+本单元新增 4 个测试文件、85 条用例，既有测试一条未删、未弱化。
+
+### 额外的差分核验（不进测试文件）
+
+为覆盖移植后测试触达不到的分支，用同一组夹具分别跑 BeingDesktop 原模块与移植版，逐字节比对 JSON 输出，结果完全一致：
+
+- 第一组 16 项：`libraryQuery`（含 getter 拒绝、limit 边界、`/api/beings` 空白名单）、`detailId`、`scrollListDto`、`scrollDto`（emoji 按码点）、`beingsDto`、`validateTownToolResult` 的全部路由分支（`/api/scrolls`、`/api/scrolls/:id`、`/api/beings`、`/api/bonfire/hear` 的 `full_length` 截断判定、`being` 不符、`/api/fireside/members`、`/api/bonfire/mentions`）。
+- 第二组 17 项：`validId`、`memberId`、`normalizeTownResponse` 的五条路由分支与标量输入、`matchesTownIdentity` 的十种组合、`sanitizeText` 的九类脱敏、`candidates` 的去重/非法 ID/截断、`messagesDto` / `directMessagesDto` / `firesideMessagesDto` 的过滤、去重、排序与错误分支。
+
+核验脚本只读 BeingDesktop 工作树，未写入任何文件；脚本本身留在会话 scratchpad，不进仓库。
