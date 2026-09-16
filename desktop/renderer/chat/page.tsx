@@ -79,7 +79,9 @@ function ChatView({
     setSelection(null);
     setHighlighted(null);
     state.changed();
-    void runtime.refreshHistory();
+    // The desktop bridge needs a fresh server view when switching scenes.
+    // Standalone Loom keeps one IndexedDB cursor and filters that cache locally.
+    if (window.parent !== window) void runtime.refreshHistory();
   }
   const dragDepth = useRef(0),
     composing = useRef(false),

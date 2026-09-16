@@ -4,7 +4,9 @@ import { createServer } from 'node:http';
 import { mkdir, readFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 const assets = new Map(await Promise.all(['loom.html', 'chat.js', 'chat.css', 'highlight.css'].map(async file => ['/' + file, await readFile('desktop/generated/' + file)])));
-const markdownSource = (await readFile(new URL('./fixtures/markdown-code.md', import.meta.url), 'utf8')).trimEnd();
+// DOM textContent normalizes line endings; keep the fixture expectation stable
+// when the checkout preserves CRLF on Windows.
+const markdownSource = (await readFile(new URL('./fixtures/markdown-code.md', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n').trimEnd();
 const markdownPrefix = markdownSource.split('\n')[0];
 const markdownFence = language => `\`\`\`\`${language}\n${markdownSource}\n\`\`\`\``;
 let seq = 1;

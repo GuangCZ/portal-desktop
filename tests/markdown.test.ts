@@ -5,7 +5,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "../desktop/renderer/shared/components/markdown";
 
-const markdown = readFileSync(new URL("./fixtures/markdown-code.md", import.meta.url), "utf8").trimEnd();
+// React/DOM serialization uses LF; normalize checkouts that preserve CRLF.
+const markdown = readFileSync(new URL("./fixtures/markdown-code.md", import.meta.url), "utf8").replace(/\r\n?/g, "\n").trimEnd();
 const renderCode = (text: string, language: string, closed = true) =>
   renderToStaticMarkup(createElement(Markdown, {
     content: `\`\`\`\`${language}\n${text}${closed ? "\n````" : ""}`,

@@ -33,7 +33,8 @@ describe('Portal supervision', () => {
       { TOOL_FIXTURE_SETTING: 'preserved', HEART_PORTAL_SUPERVISED: '0' });
     const call = f.spawn.mock.calls[0] as unknown as [string, string[], any];
     expect(call[1]).toContain(config);
-    expect(call[1]).toEqual(expect.arrayContaining(['--exec-enabled', 'false', '--kits-enabled', 'false']));
+    expect(call[1]).toEqual(['--config', expect.any(String), '--name', settings.portalName,
+      '--exec-enabled', 'false', '--kits-enabled', 'false']);
     if (process.platform === 'win32') expect(call[2].env.PATH.split(';')[0]).toBe('/custom/bin:/usr/bin');
     else expect(call[2].env.PATH).toBe('/custom/bin:/usr/bin');
     expect(call[2].env.TOOL_FIXTURE_SETTING).toBe('preserved');
