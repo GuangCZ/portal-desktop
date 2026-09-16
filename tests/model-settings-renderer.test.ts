@@ -62,9 +62,13 @@ function fixture() {
   let readAnswer: ModelConfigDto | Error = dto();
   let saveAnswer: ModelConfigDto | Error | null = null;
   /** Requests the test can hold open, which is the only way to see what the page
-   * looks like while one is in flight. */
-  let holdRead: ((value: ModelConfigDto) => void) | null = null;
-  let holdSave: ((value: ModelConfigDto) => void) | null = null;
+   * looks like while one is in flight. Queues rather than single slots: a Being
+   * that binds while the page is open starts a read of its own, so two can be
+   * outstanding at once and the test has to answer them separately, oldest first. */
+  let holdReads = false;
+  let holdSaves = false;
+  const pendingReads: ((value: ModelConfigDto) => void)[] = [];
+  const pendingSaves: ((value: ModelConfigDto) => void)[] = [];
 
   const answer = <T,>(value: T | Error): Promise<T> =>
     value instanceof Error ? Promise.reject(value) : Promise.resolve(value);
@@ -81,14 +85,14 @@ function fixture() {
     modelSettings: {
       modelConfig: () => {
         reads += 1;
-        if (holdRead) return new Promise<ModelConfigDto>(resolve => { holdRead = resolve; });
+        if (holdReads) return new Promise<ModelConfigDto>(resolve => pendingReads.push(resolve));
         return answer(readAnswer);
       },
       saveModelConfig: (patch: ModelPatchInput) => {
         // Copy: the model deletes `apiKey` from the payload in `finally`, and the
         // test has to be able to see what was actually sent.
         saved.push({ ...patch });
-        if (holdSave) return new Promise<ModelConfigDto>(resolve => { holdSave = resolve; });
+        if (holdSaves) return new Promise<ModelConfigDto>(resolve => pendingSaves.push(resolve));
         return answer(saveAnswer ?? readAnswer);
       },
       setSideBySide: (enabled: boolean, connectionId: number) => {
@@ -114,10 +118,13 @@ function fixture() {
     reads: () => reads,
     answers: (next: ModelConfigDto | Error) => { readAnswer = next; },
     answersSave: (next: ModelConfigDto | Error | null) => { saveAnswer = next; },
-    holdRead: () => { holdRead = () => {}; },
-    releaseRead: (value: ModelConfigDto) => { const resolve = holdRead; holdRead = null; resolve?.(value); },
-    holdSave: () => { holdSave = () => {}; },
-    releaseSave: (value: ModelConfigDto) => { const resolve = holdSave; holdSave = null; resolve?.(value); },
+    holdReads: (value = true) => { holdReads = value; },
+    holdSaves: (value = true) => { holdSaves = value; },
+    outstandingReads: () => pendingReads.length,
+    /** Answer the oldest outstanding request, so a stale reply and the reply that
+     * replaced it can be delivered in the order they were issued. */
+    releaseRead: (value: ModelConfigDto) => { pendingReads.shift()?.(value); },
+    releaseSave: (value: ModelConfigDto) => { pendingSaves.shift()?.(value); },
     /** Bind a Being and let the first read settle — the page's normal opening. */
     open: async () => {
       push();
@@ -153,6 +160,27 @@ describe("the model settings page", () => {
     // The refresh button is (list-retry-loads-through-preload).
     await f.model.refresh();
     expect(f.reads()).toBe(2);
+    f.stop();
+  });
+
+  it("populates itself when a Being binds while the page is already open", async () => {
+    const f = fixture();
+    // The page is opened with nothing connected: no read, and it says so.
+    f.push({ connected: false, connectionId: 0, runtime: runtime({ configStatus: "unknown", model: "", provider: "", baseUrl: "" }) });
+    f.model.activate();
+    await settle();
+    expect(f.reads()).toBe(0);
+    // The Being arrives. 0.8.26's `setState` reads here (renderer/model-settings
+    // .js line 201) rather than making the user close and reopen the page.
+    f.push();
+    await settle();
+    expect(f.reads()).toBe(1);
+    expect(f.model.modelName()).toBe("fixture-model-a");
+    // Closed again, a further binding costs no request nobody asked for.
+    f.model.deactivate();
+    f.push({ connectionId: 3 });
+    await settle();
+    expect(f.reads()).toBe(1);
     f.stop();
   });
 
@@ -277,7 +305,7 @@ describe("the model settings page", () => {
     f.model.setCustomName("custom/fixture-model:latest");
     f.model.setBaseUrl("https://custom.fixture.invalid/v1");
     f.model.setApiKey("fixture-only-key");
-    f.holdSave();
+    f.holdSaves();
     const saving = f.model.save();
     expect(f.model.busy).toBe("save");
     expect(f.model.canSave).toBe(false);
@@ -357,19 +385,31 @@ describe("the model settings page", () => {
   it("drops an answer that belongs to the previous Being (previous-identity-load-cannot-replace-new-config)", async () => {
     const f = fixture();
     await f.open();
-    f.holdRead();
+    f.holdReads();
     const stale = f.model.refresh();
-    // The Being changes while the read is open.
+    // The Being changes while that read is still open. The page is cleared, and
+    // — because it is on screen — it starts a read of its own for the new Being.
     f.push({ connectionId: 2, runtime: runtime({ model: "new-being-model", baseUrl: "https://new-being.fixture.invalid/v1" }) });
+    await settle();
     expect(f.model.snapshot).toBe(null);
-    expect(f.model.busy).toBe("");
-    f.releaseRead(dto());
+    expect(f.outstandingReads()).toBe(2);
+
+    // The previous Being's answer arrives first and must change nothing at all:
+    // no configuration, no message, and `busy` not cleared by a request that no
+    // longer owns it.
+    f.releaseRead(dto({ config: { ...initialConfig, model: "previous-being-model" } }));
     await stale;
-    // Nothing from the previous Being reached the page: no configuration, no
-    // message, and `busy` was not cleared by a request that no longer owns it.
     expect(f.model.snapshot).toBe(null);
+    expect(f.model.customName).toBe("");
     expect(f.model.feedback).toBe("");
     expect(f.model.failed).toBe(false);
+    expect(f.model.busy).toBe("load");
+
+    // The new Being's own answer is the one that lands.
+    f.releaseRead(dto({ connectionId: 2, config: { ...initialConfig, model: "new-being-model" } }));
+    await settle();
+    expect(f.model.customName).toBe("new-being-model");
+    expect(f.model.snapshot?.connectionId).toBe(2);
     expect(f.model.runtime.model).toBe("new-being-model");
     f.stop();
   });
@@ -378,14 +418,25 @@ describe("the model settings page", () => {
     const f = fixture();
     await f.open();
     f.model.setApiKey("fixture-only-key");
-    f.holdSave();
+    f.holdSaves();
     const stale = f.model.save();
+    // The new Being's read is the one the page will show; hold it so the stale
+    // save has an empty page to try to fill.
+    f.holdReads();
     f.push({ connectionId: 2, runtime: runtime({ model: "latest-being-model" }) });
+    await settle();
     f.releaseSave(dto({ config: { ...initialConfig, model: "replaced-by-a-stale-save" } }));
     await stale;
+    // The save that belonged to the previous Being changed nothing, and said
+    // nothing — not even that it succeeded.
     expect(f.model.snapshot).toBe(null);
+    expect(f.model.customName).toBe("");
     expect(f.model.feedback).not.toMatch(/已保存/);
+    expect(f.model.apiKey).toBe("");
     expect(f.model.runtime.model).toBe("latest-being-model");
+    f.releaseRead(dto({ connectionId: 2, config: { ...initialConfig, model: "latest-being-model" } }));
+    await settle();
+    expect(f.model.customName).toBe("latest-being-model");
     f.stop();
   });
 

@@ -29,7 +29,10 @@ export function ModelSettingsPage({ app }: { app: AppModel }) {
   // 0.8.26's `activate()`: read once per Being, the first time the page is seen.
   // `model` is stable for the life of the shell, so this runs on mount and the
   // model itself refuses a second read (`attempted`).
-  useEffect(() => { model.activate(); }, [model]);
+  useEffect(() => {
+    model.activate();
+    return () => model.deactivate();
+  }, [model]);
 
   const editable = model.editable;
   return (

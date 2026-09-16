@@ -224,7 +224,7 @@ BeingDesktop **没有** SBS 写入路径（`validateModelPatch` 白名单里没�
 | `desktop/renderer/settings/components/model-settings.tsx` | 模型页（DOM id 与 BD `renderer/index.html:300-316` 一一对应） |
 | `tests/model-settings-config.test.ts` | 17 条（BD 13 条逐条 + SBS 3 条 + 运行时失败半边 1 条） |
 | `tests/model-settings-ipc.test.ts` | 9 条（真 `SettingsStore` + 真 `createTrustedHandle` + 假 Being） |
-| `tests/model-settings-renderer.test.ts` | 21 条（BD `test/model-settings-ui.cjs` 26 条 check 的映射，见 §5） |
+| `tests/model-settings-renderer.test.ts` | 22 条（BD `test/model-settings-ui.cjs` 26 条 check 的映射，见 §5） |
 
 ### 2.2 重写的既有文件
 
@@ -331,17 +331,25 @@ BD **没有** SBS 写入路径。wire shape 来自两处独立实测且一致（
 确认方式与 `save()` 一致（PATCH 后重读），但**只确认 `sbs_enabled` 一项**——不带 model 的 PATCH 无法用 `patch.model` 校验。
 Loom 自己的注释也写明「不做乐观翻转，以服务端回声为准」，渲染端照此实现。
 
-### 4.6 `sideBySide.active` 恒为 null，并且照实说
+### 4.6 页面开着时 Being 才连上，也要自己去读
+
+BD `setState` 的最后一行是 `if (active && connected && !attempted) void load();`（`renderer/model-settings.js:201`）。
+第一版移植漏了这条：组件只在 mount 时 `activate()`，用户先开页面再连 Being 就只能关掉重开。
+补上 `active` 标志（`activate()` / `deactivate()`，组件的 `useEffect` 负责成对调用），
+`accept()` 末尾照 BD 补同一条。由 `tests/model-settings-renderer.test.ts`
+「populates itself when a Being binds while the page is already open」钉住（页面关着时不发请求，也一并断言）。
+
+### 4.7 `sideBySide.active` 恒为 null，并且照实说
 
 BD 的「运行中」来自 Loom 页面 post 的 `beings:sbs-state` 消息，该页已被原生对话取代，本壳层没有来源。
 页面显示「未知」而不是「已关闭」——把不知道说成已关闭是在撒谎。
 
-### 4.7 BiDi 覆写字符改成 `\uXXXX` 转义
+### 4.8 BiDi 覆写字符改成 `\uXXXX` 转义
 
 `plainText` 的正则在 BD 里写作 `‪-‮⁦-⁩`；移植稿里一度是**字面不可见字符**（hexdump 核实码位一致）。
 改回显式转义：字面 U+202E 出现在源码里本身就是 trojan-source 的经典手法，而且审阅者看不见。语义不变。
 
-### 4.8 身份串不从 `main/chat/` 取
+### 4.9 身份串不从 `main/chat/` 取
 
 `connectionVerified` 需要身份串。`chat/connection.ts` 的 `beingIdentityKey` 可用，但那是 I5 的目录。
 改用 `main/common/loom-connection.ts` 的 `sessionPartition(parseConnection(address))`——
@@ -352,26 +360,27 @@ BD 的「运行中」来自 Loom 页面 post 的 `beings:sbs-state` 消息，该
 ## 5. 测试映射：BD `test/model-settings-ui.cjs` 26 条 check 去哪了
 
 BD 那套在隐藏 Electron 窗口里驱动真实 DOM。本壳层没有 `renderer/index.html`，vitest 也没有 DOM，
-所以规则搬进 `settings/models/model-settings.ts`，check 搬进 `tests/model-settings-renderer.test.ts`（21 条，按名对应）。
+所以规则搬进 `settings/models/model-settings.ts`，check 搬进 `tests/model-settings-renderer.test.ts`（22 条，按名对应）。
 
 | BD check | 去处 |
 | --- | --- |
 | `disconnected-cannot-load-or-save` | renderer #1 |
 | `list-retry-loads-through-preload` | renderer #2 |
-| `supported-list-and-custom-option`、`self-hosted-group-is-listed-first-with-provider-names`、`existing-key-is-never-filled` | renderer #3 |
-| `same-provider-model-keeps-configured-proxy`、`periodic-state-preserves-model-selection` | renderer #4 |
-| `supported-model-save-omits-blank-key` | renderer #5 |
-| `self-hosted-model-fills-default-endpoint-with-key-optional`、`self-hosted-save-sends-default-endpoint-without-key`、`saved-self-hosted-model-stays-selected` | renderer #6 |
-| `provider-without-default-clears-previous-endpoint`、`duplicate-model-and-preset-ids-select-correct-provider` | renderer #7 |
-| （BD 没单独命名的 provider 切换带走模型名） | renderer #8 |
-| `periodic-state-preserves-entire-custom-draft`、`explicit-list-refresh-preserves-custom-draft` | renderer #9 |
-| `pending-save-disables-submit`、`duplicate-submit-does-not-duplicate-save`、`custom-save-sends-config-and-new-key`、`saved-custom-stays-editable-with-key-cleared` | renderer #10 |
-| `save-error-keeps-draft-and-allows-retry`、`error-feedback-hides-electron-wrapper` | renderer #11 |
-| `initial-read-error-disables-editing-and-allows-retry`、`read-error-offers-retry` | renderer #12 |
-| `empty-list-allows-custom-model`、`list-error-keeps-custom-configuration-available` | renderer #13 |
-| `previous-identity-load-cannot-replace-new-config` | renderer #14 |
-| `previous-identity-save-cannot-replace-new-config` | renderer #15 |
-| `disconnect-clears-draft-and-secret` | renderer #16 |
+| （BD `setState` 末行：页面开着时 Being 才连上） | renderer #3 |
+| `supported-list-and-custom-option`、`self-hosted-group-is-listed-first-with-provider-names`、`existing-key-is-never-filled` | renderer #4 |
+| `same-provider-model-keeps-configured-proxy`、`periodic-state-preserves-model-selection` | renderer #5 |
+| `supported-model-save-omits-blank-key` | renderer #6 |
+| `self-hosted-model-fills-default-endpoint-with-key-optional`、`self-hosted-save-sends-default-endpoint-without-key`、`saved-self-hosted-model-stays-selected` | renderer #7 |
+| `provider-without-default-clears-previous-endpoint`、`duplicate-model-and-preset-ids-select-correct-provider` | renderer #8 |
+| （BD 没单独命名的 provider 切换带走模型名） | renderer #9 |
+| `periodic-state-preserves-entire-custom-draft`、`explicit-list-refresh-preserves-custom-draft` | renderer #10 |
+| `pending-save-disables-submit`、`duplicate-submit-does-not-duplicate-save`、`custom-save-sends-config-and-new-key`、`saved-custom-stays-editable-with-key-cleared` | renderer #11 |
+| `save-error-keeps-draft-and-allows-retry`、`error-feedback-hides-electron-wrapper` | renderer #12 |
+| `initial-read-error-disables-editing-and-allows-retry`、`read-error-offers-retry` | renderer #13 |
+| `empty-list-allows-custom-model`、`list-error-keeps-custom-configuration-available` | renderer #14 |
+| `previous-identity-load-cannot-replace-new-config` | renderer #15 |
+| `previous-identity-save-cannot-replace-new-config` | renderer #16 |
+| `disconnect-clears-draft-and-secret` | renderer #17 |
 | `model-settings-never-send-being-messages` | 结构性成立：本单元只注册 3 条通道，`tests/model-settings-ipc.test.ts` 断言通道集合；渲染端 model 只调 `api.modelSettings.*` |
 | `model-panel-is-selected-and-other-panels-are-hidden` | `tests/sbs-refresh.mjs`（真窗口里点 `#open-models`，等 `#model-settings-page`） |
 | `*-no-horizontal-overflow`、`*-fits`、`fixture-window-never-shown` | **未移植**：几何与截图规则，model 层答不了；本壳层没有对应的响应式回归脚本。写进 openIssues |
@@ -404,7 +413,7 @@ BD `test/model-config.test.cjs` 13 条 → `tests/model-settings-config.test.ts`
 | 项 | 结果 |
 | --- | --- |
 | `npm run typecheck` | **绿**（无输出） |
-| `npx vitest run` | **绿**：112 文件 / 1244 通过 / 34 跳过。基线是 109 / 1197 / 34，本单元新增 47 条（17 config + 9 ipc + 21 renderer），跳过数未变（`1197 + 47 = 1244` ✓） |
+| `npx vitest run` | **绿**：112 文件 / 1245 通过 / 34 跳过。基线是 109 / 1197 / 34，本单元新增 48 条（17 config + 9 ipc + 22 renderer），跳过数未变（`1197 + 48 = 1245` ✓） |
 | `tests/sbs-refresh.mjs`（重写后实跑） | **绿**：`PASS … 26 checks`。`npm run test:sbs-refresh`（含 `prepare:desktop`）同样通过 |
 | `test:all` 的 skipped 名单 | **少一项**：`sbs-refresh` 不再打印 `SKIPPED:`，`scripts/test-all.mjs` 会把它记为 passed（只减不增 ✓） |
 | 打包 | **成功**：`resources/heart-portal` 放 I2 留下的 clang stub（`--version` → `heart-portal 0.0.0`），`PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package`（绕代理）产出 `out/Being Desktop-darwin-arm64/Being Desktop.app`，`codesign --force --deep --sign -` 重签成功 |

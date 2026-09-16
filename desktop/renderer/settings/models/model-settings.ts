@@ -111,6 +111,11 @@ export class ModelSettingsModel extends Store {
   sbsFeedback = "";
 
   private generation = 0;
+  /** The page is on screen. 0.8.26 keeps the same flag (renderer/model-settings
+   * .js line 9) for the same reason: a Being that binds while the page is open
+   * should populate it, and one that binds while it is closed should not cost a
+   * request nobody asked for. */
+  private active = false;
 
   constructor(private readonly api: DesktopAPI, private readonly app: unknown) { super(); }
 
@@ -130,6 +135,10 @@ export class ModelSettingsModel extends Store {
     this.runtime = state.runtime;
     if (changedBeing) this.reset();
     this.changed();
+    // 0.8.26's last line of `setState` (renderer/model-settings.js line 201): a
+    // Being that arrived while the page was open populates it, without the user
+    // having to close and reopen.
+    if (this.active && this.connected && !this.attempted) void this.refresh();
   }
 
   private reset() {
@@ -156,8 +165,14 @@ export class ModelSettingsModel extends Store {
   /** The page was opened. 0.8.26's `activate()`: read once per Being, on first
    * sight, and never again on its own. */
   activate() {
+    this.active = true;
     if (this.connected && !this.attempted) void this.refresh();
   }
+
+  /** The page was closed. Nothing in flight is cancelled — a reply for the
+   * current Being is still the current Being's — it only stops the page asking
+   * again on its own while nobody is looking at it. */
+  deactivate() { this.active = false; }
 
   // ── Derived state the component renders from ────────────────────────────────
 
