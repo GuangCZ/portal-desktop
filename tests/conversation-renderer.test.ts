@@ -452,7 +452,7 @@ describe("publishing a mention", () => {
     draft(test, `@t_m0 ${"字".repeat(4001)}`);
     await test.model.send(true);
     expect(test.toasts.at(-1)).toContain("不能超过 4000 字");
-    draft(test, "@t_m0  ");
+    draft(test, "@t_m0 \0");
     await test.model.send(true);
     expect(test.toasts.at(-1)).toContain("不能包含空字符");
     expect(test.sends).toHaveLength(0);
