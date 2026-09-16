@@ -141,6 +141,32 @@ describe("the conversation layer", () => {
     expect(test.model.view).toBe(null);
   });
 
+  // 0.8.26 wrote a failed read straight into the phase line above the composer
+  // (chat-app.js line 325, `error?.message || '记录读取失败'`), where it stayed
+  // until the next `setState`. A notice that clears itself after six seconds
+  // would leave a conversation looking empty with nothing to say why.
+  it("says in the line above the composer that a conversation could not be read, until the next state update", async () => {
+    const test = fixture();
+    test.view = async () => { throw new Error("chat-cache 打不开"); };
+    test.model.accept(chatState({ recovery: { phase: "streaming" } }));
+    await settle();
+    expect(test.model.status).toBe("chat-cache 打不开");
+    expect(test.toasts).toEqual([]);
+    test.view = projection({ version: 2 });
+    test.model.accept(chatState({ version: 2, recovery: { phase: "streaming" } }));
+    expect(test.model.status).toBe("Being 正在回复…");
+    await settle();
+    expect(test.model.status).toBe("Being 正在回复…");
+  });
+
+  it("falls back to its own words when a failed read has nothing to say", async () => {
+    const test = fixture();
+    test.view = async () => { throw new Error(""); };
+    test.model.accept(chatState());
+    await settle();
+    expect(test.model.status).toBe("记录读取失败");
+  });
+
   it("moves the composer's draft with the active conversation and clears what was on screen", async () => {
     const test = fixture();
     test.model.accept(chatState({ active: "s1" }));
@@ -336,6 +362,43 @@ describe("the conversation layer", () => {
     expect(test.calls.filter(call => call.method === "stop")).toHaveLength(1);
     expect(test.model.confirm).toBe(null);
     expect(test.model.stopping).toBe(false);
+  });
+
+  // The dialog belongs to the conversation page, which the shell unmounts as
+  // soon as the settings lose their token; this model outlives it. Nobody is
+  // left to click either button, and an unanswered confirmation would keep
+  // `stopping` true — and the stop button disabled — for the life of the window.
+  it("answers a confirmation the page took away with it, and gives the stop button back", async () => {
+    const test = fixture();
+    test.stop = { stopped: false, reason: "unknown", scene: "", ownerTitle: "" };
+    const release = test.model.start();
+    await settle();
+    const stopping = test.model.stop();
+    await settle();
+    expect(test.model.confirm).not.toBe(null);
+    expect(test.model.stopping).toBe(true);
+    // What the dialog's own cleanup calls (`cancelConfirm`), through the path
+    // that also runs when the window goes away.
+    release();
+    await stopping;
+    expect(test.model.confirm).toBe(null);
+    expect(test.model.stopping).toBe(false);
+    expect(test.calls.filter(call => call.method === "stop")).toHaveLength(1);
+  });
+
+  it("answers it as well when the conversation layer closes underneath", async () => {
+    const test = fixture();
+    test.stop = { stopped: false, reason: "other-scene", scene: "desktop:s2", ownerTitle: "昨天的事" };
+    test.model.accept(chatState());
+    await settle();
+    const stopping = test.model.stop();
+    await settle();
+    expect(test.model.confirm).not.toBe(null);
+    test.model.accept(chatState({ version: 2, open: false }));
+    await stopping;
+    expect(test.model.confirm).toBe(null);
+    expect(test.model.stopping).toBe(false);
+    expect(test.calls.filter(call => call.method === "stop")).toHaveLength(1);
   });
 
   it("explains a stop it cannot attribute", async () => {

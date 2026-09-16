@@ -4,7 +4,7 @@
 // notice bar, the drop target) and the `window.confirm` calls in `stop`;
 // 2026-09-16 — the browser dialog becomes the shell's own modal, which is the
 // only change of substance.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Dialog } from "../../shared/components/dialog";
 import { useModel } from "../../shared/hooks/use-model";
 import type { PlaceTarget } from "../../shared/lib/navigation";
@@ -57,6 +57,10 @@ export function ConversationPage({ model, onPlace }: {
 function StopConfirmDialog({ model }: { model: ConversationModel }) {
   const conversation = useModel(model);
   const confirm = conversation.confirm;
+  // The page goes away when the settings lose their token, taking the <dialog>
+  // element with it — no close event, no answer. Answer for it, or the model
+  // waits forever and the stop button never comes back.
+  useEffect(() => () => model.cancelConfirm(), [model]);
   return (
     <Dialog
       className="utility-dialog"

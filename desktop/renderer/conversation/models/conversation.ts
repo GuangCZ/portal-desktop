@@ -8,7 +8,7 @@
 //
 // Nothing here talks to the Being. Every action is an IPC call on
 // `window.beings.chat`, every byte shown came back through one.
-import { Store } from '../../shared/models/store';
+import { Store, errorText } from '../../shared/models/store';
 import type {
   ChatAPI, ChatEventPayload, ChatLiveReply, ChatSessionSummary, ChatState, ChatView,
 } from '../../../shared/desktop-types';
@@ -100,6 +100,12 @@ export class ConversationModel extends Store {
   pinned = true;
   /** A row the search panel asked us to show, cleared once scrolled to. */
   jumpTo = '';
+  /** A projection this conversation could not read. It stays in the line above
+   * the composer until the next state update, which is where 0.8.26 put it
+   * (chat-app.js line 325 wrote it straight into the phase line, and `setState`
+   * overwrote it on the next broadcast). A notice that disappears after six
+   * seconds would leave a conversation looking empty with nothing to say why. */
+  readError = '';
   confirm: StopConfirm | null = null;
   readonly composer: ComposerModel;
   /** Pins, projects and archives — the sidebar's own view of the same list. */
@@ -131,6 +137,7 @@ export class ConversationModel extends Store {
       stopEvent();
       // Nothing in flight may land on the next mount's screen.
       ++this.generation;
+      this.cancelConfirm();
     };
   }
 
@@ -145,6 +152,7 @@ export class ConversationModel extends Store {
   /** The line under the composer. A hint about another conversation's breath
    * belongs under that conversation, not this one (chat-app.js line 306). */
   get status(): string {
+    if (this.readError) return this.readError;
     const recovery = this.state.recovery;
     const hint = ((!recovery.sessionId || recovery.sessionId === this.active) && recovery.hint) || PHASES[this.phase] || '';
     if (!this.connected) return '尚未连接';
@@ -196,6 +204,12 @@ export class ConversationModel extends Store {
    * it is recomputed here, in 0.8.26's order (`setState`, chat-app.js line 275). */
   accept(state: ChatState) {
     this.state = state;
+    // A state update replaces whatever the last failed read left in the line
+    // above the composer, exactly as 0.8.26's `setState` did.
+    this.readError = '';
+    // The layer closed under an unanswered confirmation: there is no breath
+    // left to stop, and the page that drew the dialog may already be gone.
+    if (!state.open) this.cancelConfirm();
     const active = state.open ? state.active : '';
     if (active !== this.active) {
       this.active = active;
@@ -226,10 +240,13 @@ export class ConversationModel extends Store {
       if (ticket !== this.generation || view.sessionId !== this.active) return;
       this.view = view;
       this.version = version;
+      this.readError = '';
       this.live = view.live ? { text: view.live.text, think: view.live.think, at: view.live.at } : null;
       this.changed();
     } catch (error) {
-      if (ticket === this.generation) this.options.toast(error);
+      if (ticket !== this.generation) return;
+      this.readError = errorText(error, '记录读取失败');
+      this.changed();
     }
   }
 
@@ -341,6 +358,17 @@ export class ConversationModel extends Store {
       this.stopping = false;
       this.changed();
     }
+  }
+
+  /**
+   * Answer a confirmation nobody can see any more with "no". The dialog belongs
+   * to the conversation page, which the shell unmounts as soon as the settings
+   * lose their token, while this model lives as long as the window: without
+   * this the promise in `ask` never settles, `stop`'s `finally` never runs, and
+   * the stop button stays disabled until the window is closed.
+   */
+  cancelConfirm() {
+    this.confirm?.resolve(false);
   }
 
   private ask(message: string): Promise<boolean> {
