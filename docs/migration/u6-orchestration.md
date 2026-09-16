@@ -444,6 +444,43 @@ Cases (names preserved):
 
 (24 `test(...)` blocks; two of them — #2 and #16 — belong to the desktop-tool-link/desktop-tools unit.)
 
+### test/orchestration-policy.test.cjs (63 lines, 7 cases)
+
+`fixture()` — mutable `id=randomUUID()`, `identity='shared-being'`, `mode={enabled:false}`,
+`bridge={place:desktopPortalName(id),status:'connected',tools:['desktop_worker_start','desktop_worker_status']}`;
+the policy is also handed `readConfig`/`saveConfig`/`fetchImpl` that `assert.fail` — the point is that the policy never touches
+Being's shared model settings or a gateway (the current implementation ignores those options entirely).
+Returns `{gate,mode,bridge,setId,setIdentity}`.
+
+Cases:
+1. `Desktop mode switches and preflight never read or mutate Being model settings` — configure(true)+enabled -> `enforced`/`desktop`;
+   configure(false)+disabled -> `disabled`; `assertEnforced()` then rejects `/未启用/`.
+2. `one Being can have a direct Desktop and an orchestrator Desktop independently` — two fixtures stay independent; places differ.
+3. `another Desktop bridge cannot satisfy local preflight even on the same Being` — a foreign `bridge.place` rejects `/本机 Worker/` and blocks.
+4. `missing dispatch and direct tools in an orchestrator bridge fail closed` — empty tools `/未连接/`; a `desktop_console_run` tool `/范围未生效/`;
+   disconnected status `/未连接/`.
+5. `chat readiness reports an unavailable or invalid bridge without authorizing local execution` — four mutations each give
+   `inspectForMessage()` -> `blocked`/`desktop`, `assertEnforced()` -> `{code:'ORCHESTRATION_NOT_ENFORCED'}`, mode still enabled;
+   a fresh fixture reports `disabled` while off and `enforced` once enabled.
+6. `invalid identity cannot configure mode; a disconnected Being cannot dispatch` — `setId('malformed')` -> `/身份/`;
+   empty identity -> `/连接 Being/`; then `assertEnforced()` -> `/身份/`.
+7. `automatic configuration follows bridge initialization and loss without a chat or manual save` — connecting -> `pending`;
+   connected with no tools -> `pending` + detail `/初始化/`; tools present -> `enforced`; disconnected -> `blocked` + throws;
+   mode off -> `disabled`.
+
+### test/agent-process.test.cjs (44 lines, 4 cases)
+
+1. `workers preserve local CLI authentication and proxy routing without Desktop credentials or code injection` — `agentEnvironment` fixture in/out
+   (PATH, HTTPS_PROXY, http_proxy, NO_PROXY, ALL_PROXY, CODEX_HOME, OPENAI_API_KEY survive; NODE_OPTIONS, ELECTRON_RUN_AS_NODE and a NUL-bearing
+   `https_proxy` are dropped).
+2. `native worker transport preserves prompt text as data without shell evaluation` — spawns `process.execPath` on a generated `echo-input.cjs`
+   that echoes stdin as JSON; input contains quotes, backticks and `$(throw "must not run") & echo unsafe`; asserts exit 0 and the text round-trips
+   (after normalising CRLF and trailing newline).
+3. `each Desktop passes only its own CLI environment through the real child transport` — a `probe.cjs` prints selected env vars;
+   two synthetic desktops each see only their own OPENAI_API_KEY/BASE_URL/CODEX_HOME/HTTPS_PROXY, and never BEING_LOOM_URL or NODE_OPTIONS.
+4. `CLI configuration directories and trusted certificates survive without disabling TLS verification` — `NODE_TLS_REJECT_UNAUTHORIZED`,
+   `BEING_TOKEN` and `AWS_SECRET_ACCESS_KEY` are dropped while XDG/CA/cert vars survive.
+
 ---
 
 ## 进度
