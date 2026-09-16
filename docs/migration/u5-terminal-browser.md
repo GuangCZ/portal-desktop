@@ -124,3 +124,77 @@
 18. `natural shell exit releases its pinned node-pty worker and pipe without touching another session` — 建两个会话；给 `calls[0].handle` 挂 `_agent = { inSocket: {destroy}, _conoutSocketWorker: {dispose} }`；`end(0)` 后 pipes/workers 各 1、第二个会话 kills 0；再 `end(0)` 不重复（didExit 守卫），pipes 仍为 1。
 
 （`test(` 出现次数 = 18，与上表一一对应；移植后 vitest 用例数必须 ≥ 18。）
+
+### src/desktop-browser.cjs（590 行）
+
+依赖：只有 `node:crypto.randomUUID`；electron 对象（WebContentsView、session、窗口）全部由构造参数传入 —— 模块本身不 require('electron')。
+
+导出面：`module.exports = {DesktopBrowser, BROWSER_PARTITION, MAX_BROWSER_TABS, normalizeBrowserUrl}`。
+
+常量：
+- `BROWSER_PARTITION = 'persist:being-desktop-browser-v1'`
+- `MAX_BROWSER_TABS = 16`
+- `MAX_URL_LENGTH = 8192`
+- `INSPECTION_WORLD = 1004`
+- `PRIVATE_PARAMETER = /(?:token|password|passwd|secret|api[_-]?key|authorization|credential|signature|^code$|^key$)/i`
+- `OPERATION_ERRORS = {document_changed:'页面已变化，请重新读取后重试。', target_changed:'请求已过期：页面或操作目标已变化。', invalid_selector:'网页元素选择器无效。', ambiguous_target:'请选择唯一且可见的网页元素。', unavailable_target:'该元素不支持此操作，请在浏览器中手动操作。'}`
+
+模块级函数（除 normalizeBrowserUrl 外未导出）：
+- `object(value, label)` — 非对象或数组 → `TypeError(label + '格式无效。')`；否则原样返回。
+- `navigationUrl(value)` — 非 string / 长度 > 8192 / 含 C0 与 DEL 控制字符 → `TypeError('请输入有效的网页地址。')`；trim 后不以 `https?://` 开头 → `TypeError('浏览器仅支持 HTTP 和 HTTPS 网页。')`；`new URL` 失败 → `TypeError('请输入有效的网页地址。')`；协议不在 http/https、无 hostname、有 username 或 password → `TypeError('网页地址不能包含登录凭据。')`；返回 `url.href`。
+- `normalizeBrowserUrl(value)` — 同样的长度与控制字符检查（'请输入有效的网页地址。'）；`https?://` 开头直接走 navigationUrl；否则 localhost / 127.x.x.x / [::1]（可带 :port，后面要么结束要么是 `/?#`）→ 前缀 `http://`；否则形如域名（允许 `-￿` 的 IDN 字符，至少一个点，可带 :port）→ 前缀 `https://`；再否则 `TypeError('请输入 HTTP 或 HTTPS 地址，例如 localhost:3000。')`。
+- `safeUrl(value)` — 空值 → `''`；`new URL(navigationUrl(value))` 失败 → `''`；命中 PRIVATE_PARAMETER 的查询参数 key 用 `searchParams.set(key, '[redacted]')`；若 `PRIVATE_PARAMETER.test(url.hash)` 则 `url.hash = '[redacted]'`；返回 `url.href`。
+- `safeTitle(value, fallback)` — string 时：控制字符换空格、内嵌 `https?://...` 换成 `safeUrl(match)`、`(token|password|secret|api[_-]?key|authorization|credential)\s*[:=]\s*` 后的值换成 `[redacted]`、trim、slice(0,180)；空则退回 `new URL(fallback).hostname`，再失败 → `'新标签页'`。
+- `normalizeBounds(value)` — `object(value, '浏览器显示区域')`；x/y/width/height 必须是有限数且 0..100000，否则 `TypeError('浏览器显示区域无效。')`；各自 `Math.floor`。
+- `pageOperation(token, operation, args)` — 注入到页面隔离世界执行的函数（通过 `pageOperation.toString()` 序列化成源码）。
+  - `globalThis.__beingBrowserDocument !== token` → `{error:'document_changed'}`
+  - `visible(element)`：`getBoundingClientRect()` 宽高 > 0、`isConnected`、`style.visibility === 'visible'`、`style.display !== 'none'`，再 `element.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})`
+  - `read`：选择器优先唯一 `#id`（`CSS.escape`，长度 ≤ 512 且 querySelectorAll 唯一），否则逐级 `tag` 或 `tag:nth-of-type(n)` 用 ` > ` 连接，超过 512 返回 `''`；候选 `a[href],button,input,textarea,select,[contenteditable="true"],[role="button"],[role="link"],[role="textbox"]`；跳过不可见与 password/file/hidden 输入；上限 80 个（超过置 omitted 并 break）；label 取 aria-label → labels 的 innerText → title → placeholder → innerText，trim().slice(0,180)；返回 `{title:document.title, text:innerText.slice(0,20000), elements, truncated: text.length > 20000 || omitted}`
+  - 其它操作：querySelectorAll 抛错 → `{error: args.targetToken ? 'target_changed' : 'invalid_selector'}`；可见匹配数不等于 1 → `{error: args.targetToken ? 'target_changed' : 'ambiguous_target'}`
+  - `kind = operation === 'prepare' ? args.kind : operation`；`unavailable()` → `{error: args.targetToken && operation !== 'prepare' ? 'target_changed' : 'unavailable_target'}`
+  - password/file/hidden 输入、disabled、`aria-disabled === 'true'` → unavailable
+  - click：`a[download]` 祖先 → unavailable；祖先 `a[href]` 协议非 http/https → unavailable；`element.click` 非函数 → unavailable
+  - fill：readOnly 或（非 HTMLInputElement/HTMLTextAreaElement 且非 isContentEditable）→ unavailable；HTMLInputElement 的 type 不在 text/search/email/url/tel/number → unavailable
+  - 其它 kind → `{error:'invalid_operation'}`
+  - `operation === 'prepare' || args.targetToken` 时做指纹：`control = element.closest('button,a,input,textarea,select') || element`；`form = control.form || control.closest('form')`；`fields = form ? [...form.elements] : []`；`describe(target)` 收集 tag/type/name/href/text/value/disabled/readOnly/checked/role/label/title/action/method/ariaDisabled，password 与 file 的 value 置空，value > 16000 或 text > 8000 抛 'Large target'；`fields.length > 80` → unavailable；指纹 JSON 长度 > 100000 → unavailable；异常 → unavailable
+  - `globalThis.__beingBrowserTargets` 不是 Map → `{error:'target_changed'}`
+  - prepare：`while (targets.size >= 32) targets.delete(最早 key)`；存 `{element,control,form,fields,kind,selector,fingerprint,handler:control.onclick}`；返回 `{targetToken, summary: control.localName + (control.type ? ' (' + control.type + ')' : '') + ' · ' + label.trim().slice(0,180)}`（label 取 aria-label → title → placeholder → innerText → name → selector）
+  - 执行态：取出并 `targets.delete`；element/control/form/kind/selector/fingerprint/handler/fields 全等校验，任一不符 → `{error:'target_changed'}`
+  - click → `element.click()`，返回 `{clicked:true}`
+  - fill → 再次校验 readOnly 与 type；用 `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(element, args.text)`（textarea 同理），contentEditable 用 `innerText`；派发 `new InputEvent('input',{bubbles:true,inputType:'insertText',data:args.text})` 与 `new Event('change',{bubbles:true})`；返回 `{filled:true}`
+  - 兜底 `{error:'invalid_operation'}`
+
+`class DesktopBrowser`：
+- `constructor(options)` — `const {WebContentsView, session, getWindow, onChange = () => {}} = object(options, '浏览器选项')`；校验 `typeof WebContentsView === 'function'`、`typeof session?.fromPartition === 'function'`、`typeof getWindow === 'function'`、`typeof onChange === 'function'`，否则 `TypeError('浏览器依赖无效。')`。字段：View、getWindow、onChange、`tabs = new Map()`、`activeTabId = null`、`visible = false`、`bounds = {x:0,y:0,width:0,height:0}`、`attached = null`、`destroyed = false`、`session = session.fromPartition(BROWSER_PARTITION)`。随后 `setPermissionRequestHandler((_c,_p,callback) => callback(false))`、`setPermissionCheckHandler(() => false)`、`setDevicePermissionHandler(() => false)`；`downloadHandler = (event,_item,contents) => { event.preventDefault(); 找到 view.webContents === contents 的 tab → _notice(tab, '此浏览器暂不支持下载文件。') }`，`session.on('will-download', downloadHandler)`；`session.webRequest.onBeforeRequest((details, callback) => { cancel = ['mainFrame','subFrame'].includes(details.resourceType) 且 navigationUrl(details.url) 抛错; callback({cancel}) })`。
+- 标签页对象：`{id:'browser-' + randomUUID(), view, url:'', title:'', error:'', notice:'', committedUrl:'', isLoading:false, canGoBack:false, canGoForward:false, listeners:[], revision:0, requestRevision:0, documentToken:'', contextPromise:null}`，另有动态字段 blockedRequestRevision、blockedRevision。
+- `snapshot()` → `{tabs:[{id, title:safeTitle(tab.title, tab.url), url:safeUrl(tab.url), isLoading, canGoBack, canGoForward, error, notice, revision}], activeTabId, visible}`
+- `newTab(options = {})` — `_alive()`；`object(options,'标签页选项')`；active 非 undefined 且非 boolean → `TypeError('标签页选项无效。')`；`tabs.size >= 16` → `Error('最多打开 16 个标签页，请先关闭一个。')`（模板串用 MAX_BROWSER_TABS）；url 为 undefined 或 `''` → `''`，否则 normalizeBrowserUrl；`new this.View({webPreferences:{session, nodeIntegration:false, nodeIntegrationInSubFrames:false, nodeIntegrationInWorker:false, contextIsolation:true, sandbox:true, webSecurity:true, allowRunningInsecureContent:false, webviewTag:false, navigateOnDragDrop:false, safeDialogs:true, disableDialogs:true, spellcheck:true}})`；`view.setVisible(false)`；`view.setBackgroundColor('#171717')`；`tabs.set`；`_bind(tab)`；`if (options.active !== false || !this.activeTabId) this.activeTabId = tab.id`；有 url 则 `_load`；`_syncView()`；`_emit()`；返回 snapshot。
+- `activateTab(id)`、`closeTab(id)`、`navigate({id,url})`、`goBack(id)`、`goForward(id)`、`reload(id)`、`stop(id)`、`setViewport({visible,bounds})` 均返回 snapshot。
+  - closeTab：先记 ids 与 index；若关的是 attached 则 `_detach()`；`tabs.delete`；`requestRevision++`；逐个 removeListener；未销毁则 `close({waitForBeforeUnload:false})`；active 转移到 `ids[index+1] || ids[index-1] || null`。
+  - reload：仅当 tab.url 非空才清 error 与 notice、`reload()`、`_syncTab`、`_emit`。
+  - stop：`requestRevision++`；`webContents.stop()`；`isLoading = false`；`_emit()`。
+  - setViewport：`_alive()`；visible 必须 boolean，否则 `TypeError('浏览器显示选项无效。')`；`bounds === undefined && !visible` 时沿用旧 bounds，否则 `normalizeBounds(options.bounds)`；仅当 visible 变化才 `_emit()`（`_syncView()` 总是调）。
+- `async readPage(id, expectedRevision)` → `{tabId, revision, title:safeTitle(result.title, tab.url), url:safeUrl(tab.url), text, elements, truncated}`
+- `async prepareAction({id,selector,kind,expectedRevision})` — object、`_selector`、kind 属于 click/fill 否则 `TypeError('操作确认类型无效。')`；`targetToken = randomUUID()`；返回 `{targetToken, summary:safeTitle(result.summary, '')}`
+- `async click({id,selector,targetToken,expectedRevision})` → `{tabId, clicked:true}`
+- `async fill({id,selector,text,targetToken,expectedRevision})` — text 必须是 string、长度 ≤ 8000、不含 NUL，否则 `TypeError('填写内容无效或超过 8000 个字符。')` → `{tabId, filled:true}`
+- `async screenshot(id, expectedRevision)` — `_operationTarget`；`view.getBounds()` 宽或高 ≤ 0 → `'请先在浏览器中打开此标签页再截图。'`；`capturePage({x:0,y:0,width,height},{stayHidden:true,stayAwake:true})` 抛错 → `'无法截取当前网页，请重试。'`；`_sameDocument`；`bitmap.isEmpty()` → `'网页截图暂不可用，请重试。'`；最长边 > 1600 则按比例 resize（各边至少 1）后重新 getSize；`toPNG()` 超过 8 MiB → `'网页截图过大，请缩小浏览器区域后重试。'`；返回 `{tabId, revision, mimeType:'image/png', data:base64, width, height}`
+- `destroy()` — 幂等；`_detach()`；`destroyed = true`；每个 tab `requestRevision++`、移除监听、`close({waitForBeforeUnload:false})`；`tabs.clear()`；`activeTabId = null`；`visible = false`；`session.removeListener('will-download', downloadHandler)`；`session.webRequest.onBeforeRequest(null)`。
+- `_alive()` → `Error('浏览器已经关闭。')`
+- `_tab(id = this.activeTabId)` — `_alive()`；id 非 string / 长度 > 80 / 不存在 → `Error('请选择一个有效的浏览器标签页。')`；`webContents.isDestroyed()` → `Error('此标签页已经关闭，请重新打开。')`
+- `_emit()` — 未销毁才 `onChange(snapshot())`（不吞观察者异常）
+- `_load(tab, url)` — `revision = ++tab.requestRevision`；重置 url/title/error/notice，`isLoading = true`；`Promise.resolve(loadURL(url)).catch(...)`：若 tab 已删 / requestRevision 变了 / destroyed / `tab.blockedRequestRevision === revision` / `error?.code === 'ERR_ABORTED'` / `error?.errno === -3` 则忽略，否则置 `'网页未能加载，请检查地址或网络后重试。'`、`isLoading = false`、`_emit()`；同步抛错走同样文案但不 `_emit()`。
+- `_history(direction, id)` — 用 `webContents.navigationHistory.canGoBack()/canGoForward()`，可用时清 error 与 notice、`goBack()/goForward()`、`_syncTab`、`_emit`。
+- `_syncTab(tab)` — 已销毁直接返回；`getURL()` 非空且非 about:blank 时尝试 `navigationUrl` 更新 tab.url（失败静默）；同步 isLoading、canGoBack、canGoForward。
+- `_bind(tab)` — 注册监听（全部记入 tab.listeners 以便移除）：`will-navigate` / `will-frame-navigate` / `will-redirect` 共用 guard（url 取 `event.url` 或 legacy 参数；非法则 preventDefault，主框架时置 `blockedRequestRevision = requestRevision`、`blockedRevision = revision`，已有 committedUrl 则 `_syncTab` + `_notice('已阻止不受支持的页面跳转，仅允许 HTTP 和 HTTPS。')`，否则 `tab.error = message` + `_emit()`）；`will-attach-webview` → preventDefault；`did-start-navigation` 主框架时 `revision++`、清 documentToken、清 contextPromise；`dom-ready` → `_prepareDocument`；`did-start-loading` 与 `did-stop-loading` → update（`_syncTab` + `_emit`，仅当 tab 还在）；`did-navigate` → 尝试 `committedUrl = navigationUrl(getURL())` 并清 notice，再 update；`did-navigate-in-page` 主框架时 `_prepareDocument` + update；`page-title-updated` → `tab.title = safeTitle(title, tab.url)` + `_emit()`；`did-fail-load`（isMainFrame === false 或 code === -3 忽略；`blockedRevision === revision` 时只 `isLoading=false` + `_emit()`；否则清 committedUrl、code === -105 → `'找不到此网站，请检查地址。'` 否则 `'网页未能加载，请检查地址或网络后重试。'`）；`render-process-gone` → 清 committedUrl、`'此标签页意外关闭，请刷新重试。'`、`isLoading=false`、`_emit()`。另外 `contents.setWindowOpenHandler(details => ...)`：url 非法 → `_notice('已阻止不受支持的弹出窗口。')` 并返回 `{action:'deny'}`；合法时 `queueMicrotask` 里 `newTab({url, active: details.disposition !== 'background-tab'})`，失败 `_notice('无法新建标签页，请关闭一个标签页后重试。')`，同样返回 `{action:'deny'}`。
+- `_notice(tab, message)` — 设 notice；若 `committedUrl && !error && !documentToken` 则 `_prepareDocument(tab)`；`_emit()`。
+- `_selector(value)` — 非 string / 空白 / > 512 / 含控制字符 → `TypeError('网页元素选择器无效。')`
+- `_targetToken(value)` — 非 undefined 时必须匹配 `/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/`，否则 `TypeError('操作确认标识无效。')`
+- `_operationTarget(id, expectedRevision)` — `_tab(id)`；expectedRevision 非 undefined 时必须是 ≥ 0 的安全整数否则 `TypeError('页面版本无效。')`；与 `tab.revision` 不等 → `Error(OPERATION_ERRORS.document_changed)`；`!tab.url || tab.isLoading || webContents.isLoading() || !tab.documentToken` → `Error('网页正在加载或尚未准备好，请稍后重试。')`；返回 `{tab, revision:tab.revision}`
+- `_sameDocument(tab, revision)` — destroyed / tab 已换 / webContents 已销毁 / revision 变了 → `Error(OPERATION_ERRORS.document_changed)`
+- `async _operate(id, expectedRevision, operation, args)` — `_operationTarget` 抛错时，若 `args.targetToken && operation !== 'prepare'` 改抛 target_changed；code 为 `'(' + pageOperation.toString() + ')(' + JSON.stringify(documentToken) + ',' + JSON.stringify(operation) + ',' + JSON.stringify(args) + ')'`；`executeJavaScriptInIsolatedWorld(INSPECTION_WORLD, [{code}], operation === 'click' || operation === 'fill')` 抛错 → `Error('网页操作未完成，请重新读取页面后重试。')`；`operation !== 'click' || !result?.clicked` 时做 `_sameDocument`（同样的 target_changed 改写）；`args.targetToken && operation !== 'prepare' && result?.error === 'document_changed'` → target_changed；`result?.error || !result` → `Error(OPERATION_ERRORS[result?.error] || '网页操作未完成。')`；返回 `{tab, revision, result}`
+- `_prepareDocument(tab)` — 记录 revision 与新 token；执行 `globalThis.__beingBrowserDocument = "<token>"; globalThis.__beingBrowserTargets = new Map(); true;`（userGesture false）；成功且 tab 未变、revision 未变时写入 `tab.documentToken`；`.catch(() => {})`。
+- `_detach()` — 取出 this.attached 并置 null；view 未销毁则 `setVisible(false)`；window 未销毁则 `window.contentView.removeChildView(view)`。
+- `_syncView()` — `tab = tabs.get(activeTabId)`，`window = getWindow()`；不可见 / 无 tab.url / webContents 已销毁 / 无窗口 / 窗口已销毁 → `_detach()`；`const [width, height] = window.getContentSize()`；`x = min(bounds.x, width)`、`y = min(bounds.y, height)`，宽高按窗口剩余空间截断；任一 ≤ 0 → `_detach()`；attached 的 tab 或 window 变了则先 `_detach()` 再 `window.contentView.addChildView(view)` 并记录 attached；最后 `view.setBounds(bounds)`、`view.setVisible(true)`。
+
+移植注意：所有 electron 触点（WebContentsView 构造器、session.fromPartition 及其 handler、webContents.*、view.*、window.contentView.*、window.getContentSize()、window.isDestroyed()、capturePage 返回的 NativeImage）都要在 tools/browser/host.ts 里声明成接口，browser.ts 只依赖接口。
