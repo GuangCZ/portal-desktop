@@ -202,3 +202,39 @@ and says why only once」：断言 12 次布局发 12 次（不再封顶）、`f
 `const presenter: WorkerPresenter = f.presentation;` 这一行**赋值本身就是断言**（类型回退即 typecheck 红），
 再用一个真的 `WorkerRecord` 走一遍 `open`/`describe`，断言 `openedAt`、`artifactPath`、`requestedUrl:null` 与 `describe(undefined) === null`。
 
+### 2.7 `#browser-panel` 的 flex-shrink（i3 记录第 8 条）——已修
+
+`desktop/renderer/app/styles.css:92` 的 `#browser-panel{flex:0 0 49%;min-width:0}` 改成 `{flex:0 1 49%;min-width:240px}`，
+与工具浏览器 / 终端两个面板（`flex:0 1 42%` + `min-width:240px`）一致。
+拖拽自己的下限在 `browser/hooks/use-browser-split.ts` 的 `Math.min(360, total/2)`，比 240px 大，
+所以手拖不会到 240px，只有「三个面板同时打开、窗口很窄」的自动压缩会到。
+
+### 2.8 `main/town/channel/` 的 u3 副本收敛（i1 记录遗留 4）——**已核实：该收敛的早已收敛，i1 的这条记录是过时的**
+
+实测（不是推断）：`git show a6877ef --stat -- desktop/main/town/channel/` 显示 I0 的
+「wip(i0-seams): shared main/common modules and converge the duplicate copies」这一提交里
+**已经删掉** `town/channel/loom-connection.ts`（45 行）与 `town/channel/sanitize.ts`（30 行），
+并把 `channel-being.ts`、`pairing-probe.ts` 的 import 改指 `../../common/*`。
+当前 `desktop/main/town/channel/` 只剩 being-client / channel-being / errors / pairing-probe / sse / town-background / town-catalog / types 八个文件。
+
+把 `common/*` 的全部导出名在 `desktop/main/town/` 下 grep 了一遍，**唯一的重名**是
+`town/channel/being-client.ts:41` 的 `parseConnection`。逐行对照两个上游后确认**它不是副本**：
+
+| | `town/channel/being-client.ts` | `main/common/loom-connection.ts` |
+| --- | --- | --- |
+| 上游 | `extensions/being-anywhere/being-client.mjs:34`（逐字一致，只差 TS 类型与尾逗号） | `src/security.cjs` |
+| 额外校验 | 控制字符、反斜杠、`api`/`token`/`secret`/`relay_secret` 重复参数、token ≤4096、`api` 值格式 | 无 |
+| 返回 | `{url, apiBase, token, displayUrl, beingName(≤100), origin}` | `{url, apiBase, token, **secret**, displayUrl, beingName}` |
+| 失败 | `ClientError` + `code`（`ChannelBeing` 按 `MESSAGES.auth` 分支） | 普通 `Error` |
+
+两者互不为超集，且 `secret` 是 `sessionPartition` 的输入之一（**磁盘格式**），这个 client 压根没有这个字段。
+**不合并**，并在 `being-client.ts` 的文件头写清楚为什么不合并，免得下一个人照 i1 的记录去"收敛"。
+
+`channel-being.ts` 的 `clean(value, secrets)` 是 `common/sanitize` 的**包装**（先无长度门槛地 redact secrets，再 `sanitizeText`，再去 bidi 控制字符），
+与 BD `src/channel-being.cjs` 一致，不是副本。三份 SSE 解析按 I0 的结论保持不合并。
+
+**真正还剩的一份副本在测试里**：`tests/orchestration-worker-callbacks.test.ts` 第 19-45 行内联了
+`src/security.cjs` 的 `parseConnection` + `sessionPartition`（注释写着「copied verbatim」）。
+已删除，改成 `import { parseConnection, sessionPartition } from "../desktop/main/common/loom-connection"`——
+这条测试断言的正是回调请求里的 `sessionPartition` 值，注入真实实现之后这些断言才真的在测正式实现。
+
