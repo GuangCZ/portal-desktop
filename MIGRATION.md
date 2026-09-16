@@ -304,6 +304,20 @@ P1 的 chat 子系统原样搬进 `subsystems/chat.ts`，成为这套注册方�
 
 三份 SSE 解析**没有**合并：上限与错误码语义不同（Town 1MB + `INVALID_RESPONSE`，chat 自带码表）。
 
+### 依赖与打包：一个推翻方案的实测
+
+`ws` 从 devDependencies 移到 dependencies（8.21.3，与 BeingDesktop 0.8.26 一致），新增 `node-pty` 1.1.0、
+`@xterm/xterm` 6.0.0、`@xterm/addon-fit` 0.11.0，以及 `@electron-forge/plugin-auto-unpack-natives`。
+
+**提级到 dependencies 并不足够。** `@electron-forge/plugin-vite` 会把 `packagerConfig.ignore` 设成
+`file => !file.startsWith('/.vite')`，于是 `node_modules` 整棵树都不进包——第一次打出来的 asar 只有 15 个条目。
+`forge.config.ts` 因此自带一个 `packagerIgnore`：放行 `.vite`、放行 `node_modules` 目录本身、放行 `ws` / `node-pty` / `node-addon-api`，
+其余一律排除，并只保留打包主机平台的 node-pty prebuilds（asar 因此从 63 MB 降到 7.1 MB）。
+
+本机（darwin-arm64）实测 `electron-forge package` 通过，并用干净的 Electron 44.2.0 对打出来的 asar 验证了
+`require('ws')` 与 `require('node-pty')` 都能解析，node-pty 的原生模块从 `app.asar.unpacked/.../build/Release/` 加载。
+`tests/packaging-contract.test.ts` 把这一整套钉住——这是 typecheck 与 vitest 都看不见的那部分。
+
 ### 本阶段没做的事
 
 - **没有接任何一个子系统。** 注册表里只有 chat；`PANEL_SLOTS` / `SIDEBAR_SLOTS` / `TOPBAR_SLOTS` / `SHEET_SLOTS` / `FEATURE_MODELS` 都是空数组。
