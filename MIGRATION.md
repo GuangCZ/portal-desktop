@@ -335,6 +335,7 @@ P1 的 chat 子系统原样搬进 `subsystems/chat.ts`，成为这套注册方�
 
 - **没有接任何一个子系统。** 注册表里只有 chat；`PANEL_SLOTS` / `SIDEBAR_SLOTS` / `TOPBAR_SLOTS` / `SHEET_SLOTS` / `FEATURE_MODELS` 都是空数组。
 - **`connectionCleared()` 依然没有调用方。** 接口和扇出都在，`main.ts` 从来没有接过它——这是 P1 就有的缺口，I0 没有顺手改。
+  （IM 2026-09-16 核实结论：**本外壳没有解绑路径**，所以不是「忘了接」而是「没有可接的时刻」。`SettingsStore.connection` 只被赋非空值，从不回到 null；`save()` 的 `resolveConnection` 在没有链接且没有既有连接时抛「请先输入 Being 链接。」，空链接保留原 Being；61 条 `beings:` 通道里没有一条解绑，渲染层也没有入口。BeingDesktop 0.8.26 的 `handle('disconnect')`（src/main.cjs:1476）就是这个缺失的调用方，portal-desktop 从来没有这条命令。**换 Being 不走这个钩子**：0.8.26 在 `storeConnection`（src/main.cjs:704-716）里一步完成「掉旧绑新」，本外壳的各子系统 `connectionVerified` 按 `sessionPartition` 比对后做同一件事。证据与规则钉在 `tests/connection-cleared.test.ts`。）
 - **`npm run start` 的人工冒烟没做**（本机缺 Rust 工具链，`resources/heart-portal` 不存在；打包验证用的是临时 stub）。
 - **Linux 的 node-pty 没有 prebuild**，`MakerZIP` 的 linux 目标需要构建机上有 python3 + make + g++，本次未验证。
 

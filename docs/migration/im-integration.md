@@ -288,3 +288,24 @@ BD `renderer/sidebar.js:63`：`window.beingOrchestration?.hasActiveWorkers(item.
 **为什么抽出来**：本仓库的 vitest 没有 DOM 环境，规则写在 JSX 里就没有任何东西能执行它。
 新增 `tests/sidebar-activity.test.ts`（4 例）：Worker 压过 `waiting`、原有三态不变、无编排模型时的退化、三个文案与三个 class 与 0.8.26 逐字一致。
 
+### 2.11 `connectionCleared()` 的调用方（P1/I0/I4/I6 四份记录都提到）——**本外壳没有可接的时刻，未加调用；结论已写进 MIGRATION.md 与 openIssues**
+
+逐条核实（全部是读真实代码，不是推断）：
+
+1. **没有解绑路径**。`SettingsStore.connection` 起始 `null`，`desktop/` 里只有四处赋值（`app/settings.ts:72/90/127/150`），
+   **没有任何一处赋回 null**。`save()` 经 `resolveConnection`：没有 `connectionLink` 就回退到当前连接，两者都没有时抛「请先输入 Being 链接。」——
+   **空链接保留原 Being，不能清除**。`grep -rho "handle('beings:[a-z-]*'" desktop/main | sort -u | wc -l` = **61** 条通道，没有一条解绑；渲染层也没有入口。
+   BD 0.8.26 的 `handle('disconnect')`（`src/main.cjs:1476`，清 `disk.credential` + `orchestration.selectOwner('')` + `chatSessions.end()` + …）
+   就是这个缺失的调用方，**portal-desktop 从来没有这条命令**。
+2. **换 Being 不应该走这个钩子**。BD 的换 Being 在 `storeConnection`（`src/main.cjs:704-716`）里一步完成：
+   `if (!connection || sessionPartition(connection)!==sessionPartition(parsed)) {identityRevision++; desktopTools?.disconnectLink(); …}` 然后绑新的，
+   **没有 disconnect 这一步**。本外壳的 I2/I4/I6 三个 `connectionVerified` 都是按 `sessionPartition` 比对后做同一件事。
+   在 `beings:save` 里插一行 `connectionCleared()` 会在两个都已绑定的状态之间推一次空账本、空侧栏、断一次工具桥，
+   几微秒后又被 `connectionVerified` 撤销——BD 没有这个闪烁。
+
+所以**没有加这行调用**。新增 `tests/connection-cleared.test.ts`（2 例）把结论钉住：
+一条走真实 `SettingsStore` 断言「空链接 / 不给链接都清不掉，换 Being 是一步替换，重启后仍是新的那个」——
+**哪天有人加了解绑路径，这条会先红并指向 `connectionCleared()`**；
+另一条用三个假子系统跑真实 `installSubsystems`，断言 cleared 扇出仍按安装顺序、单个抛错记 `beta-cleared` 且不打断其余
+（钩子本身没坏，不能当死代码删掉）。
+
