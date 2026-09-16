@@ -1,22 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TownClient, townRoute } from '../desktop/main/town/client';
+import { TownCatalog, townRoute } from '../desktop/main/town/catalog';
 import type { DesktopAPI, TownQuery, TownResult } from '../desktop/shared/types';
 import { TownModel } from '../desktop/renderer/town/models/town';
 import { SceneStore } from '../desktop/renderer/shared/models/scene';
 import { placeFromURL, validPlaceTarget } from '../desktop/renderer/shared/lib/navigation';
-import { registerTownIpc, type TownIpcOptions } from '../desktop/main/town/ipc';
 
 const success = (data: Record<string, unknown>): TownResult => ({ ok: true, data, fetchedAt: '2026-09-14T00:00:00Z' });
+/** The Seed Garden is part of the PUBLIC catalogue, so the model needs the
+ * catalogue channel and nothing else. `townDesktop` is present but never reached
+ * from a seed view; a call to it here would be the bug. */
 function model(query: DesktopAPI['town']) {
   const navigate = vi.fn();
-  const town = new TownModel({ town: query, townAuth: async () => ({ configured: false }) } as DesktopAPI, vi.fn(), navigate, new SceneStore(), vi.fn(), vi.fn());
+  const townDesktop = new Proxy({}, { get: (_target, key) => () => { throw new Error(`公开目录不应调用 townDesktop.${String(key)}`); } }) as DesktopAPI['townDesktop'];
+  const town = new TownModel({ town: query, townDesktop } as DesktopAPI, vi.fn(), navigate, new SceneStore(), vi.fn(), vi.fn());
   return { town, navigate };
 }
 
 describe('Seed Garden public protocol', () => {
   it('encodes server search, filters and pagination without exposing stored credentials', async () => {
     const fetcher = vi.fn(async () => Response.json({ count: 34, seeds: [] }));
-    const client = new TownClient(() => 'must-not-send-this', fetcher as typeof fetch);
+    const client = new TownCatalog(fetcher as typeof fetch);
     await client.query({ kind: 'seeds', offset: 24, q: '修复 & 经验', tag: '远程运维', domain: '文件管理', kit: 'my kit', lifecycle: 'stale' });
     const [url, init] = (fetcher.mock.calls as unknown as [string, RequestInit][])[0];
     expect(Object.fromEntries(new URL(url).searchParams)).toEqual({ limit: '24', offset: '24', q: '修复 & 经验', tag: '远程运维', domain: '文件管理', kit: 'my kit', lifecycle: 'stale' });
@@ -43,17 +46,19 @@ describe('Seed Garden public protocol', () => {
     for (const url of ['https://evil.test/seeds/Seed_A-1', 'https://beings.town/seeds/x?token=secret', '/api/seeds/help', '/api/seeds/x/absorb']) expect(placeFromURL(url)).toBeNull();
   });
 
-  it('does not invalidate paired credentials when a public seed read is denied', async () => {
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    const rejectAuth = vi.fn();
-    registerTownIpc({ handle: (name: string, callback: (...args: any[]) => unknown) => handlers.set(name, callback),
-      town: { query: async () => ({ ok: false, code: 'auth', message: 'fixture' }) },
-      townLive: { state: { generation: 1 }, rejectAuth }, townCredentials: { token: 'paired' },
-    } as unknown as TownIpcOptions);
-    await handlers.get('beings:town')!({ kind: 'seeds' });
-    expect(rejectAuth).not.toHaveBeenCalled();
-    await handlers.get('beings:town')!({ kind: 'inbox' });
-    expect(rejectAuth).toHaveBeenCalledTimes(1);
+  it('cannot reach a private feed at all, so a denied public read has no credential to invalidate', async () => {
+    // 2026-09-16: the old shape of this case asserted that a 401 on a PUBLIC read
+    // did not invalidate the paired credential, because one anonymous client
+    // served both halves and could confuse them. It now cannot: the private
+    // kinds left this route table with the credential (desktop/main/town/catalog.ts),
+    // and a denied public read carries no identity to reject.
+    const fetcher = vi.fn(async () => Response.json({ error: 'nope' }, { status: 401 }));
+    const client = new TownCatalog(fetcher as typeof fetch);
+    expect(await client.query({ kind: 'seeds' })).toMatchObject({ ok: false, code: 'auth' });
+    expect((fetcher.mock.calls as unknown as [string, RequestInit][])[0][1].headers).toEqual({ Accept: 'application/json' });
+    for (const kind of ['bonfire', 'firesides', 'fireside', 'inbox', 'sent', 'my-scrolls']) {
+      expect(() => townRoute({ kind } as unknown as TownQuery)).toThrow();
+    }
   });
 });
 

@@ -1,7 +1,7 @@
 import { Store, errorText } from "../../shared/models/store";
 import { type SceneStore, type SceneResource } from "../../shared/models/scene";
 import { feedMessages, inboxMessages, type FeedFilters, type FeedMessage, type FeedReply } from "./feed";
-import { mentionNames, withSelf, type MentionNames } from './mentions';
+import { mentionNames, mentionWarnings, withSelf, type MentionNames } from './mentions';
 import type {
   DesktopAPI,
   KitLibrary,
@@ -15,6 +15,7 @@ import type {
   TownDesktopAppState,
   TownDesktopEnvelope,
   TownDesktopFeed,
+  TownDesktopReadResult,
   TownDesktopMember,
   TownDesktopPush,
   TownDesktopRefreshStatus,
@@ -535,38 +536,41 @@ export class TownModel extends Store {
       // No cache yet is the normal first run; a real failure still shows the read.
       if (this.codeOf(error) === "SESSION_CHANGED") return;
     }
-    const pending = this.reads.get(key);
-    if (pending) { await pending; return; }
+    // The read is shared, its RESULT is not: whoever joins an in-flight read
+    // applies the answer under their own generation. Sharing the applied effect
+    // instead would mean a second open of the same feed silently discarded the
+    // page it opened, because the first opener's generation is no longer current.
+    let shared = this.reads.get(key) as Promise<TownDesktopReadResult> | undefined;
+    const owner = !shared;
+    if (!shared) {
+      shared = this.town.read({
+        kind: feed.kind,
+        ...(feed.kind === "fireside" ? { firesideId: feed.firesideId, selectionRevision: this.connectionRevision } : {}),
+      });
+      this.reads.set(key, shared);
+    }
     this.reading = true;
     this.changed();
-    const started = (async () => {
-      try {
-        const result = await this.town.read({
-          kind: feed.kind,
-          ...(feed.kind === "fireside" ? { firesideId: feed.firesideId, selectionRevision: this.connectionRevision } : {}),
-        });
-        if (generation !== this.request) return;
-        if (result.envelope) this.applyTimeline(result.envelope);
-        if (result.rooms) this.roomDirectory = result.rooms;
-        if (result.members) this.roomMembers = result.members.members;
-        this.status = this.timelineStatus?.lastSuccessAt
-          ? `来自 beings.town · ${date(new Date(this.timelineStatus.lastSuccessAt).toISOString())} 已刷新`
-          : "来自 beings.town";
-        this.error = undefined;
-      } catch (error) {
-        if (generation !== this.request) return;
-        // A readable cached timeline stays on screen; only an empty feed becomes
-        // an error page.
-        if (this.timeline?.messages.length) this.status = errorText(error);
-        else this.fail(errorText(error), this.codeOf(error) === "AUTH_REQUIRED");
-      }
-    })();
-    this.reads.set(key, started);
-    try { await started; }
-    finally {
-      // Only the read that is still the registered one clears the slot; a later
-      // open that started its own must not have this one's completion free it.
-      if (this.reads.get(key) === started) this.reads.delete(key);
+    try {
+      const result = await shared;
+      if (generation !== this.request) return;
+      if (result.envelope) this.applyTimeline(result.envelope);
+      if (result.rooms) this.roomDirectory = result.rooms;
+      if (result.members) this.roomMembers = result.members.members;
+      this.status = this.timelineStatus?.lastSuccessAt
+        ? `来自 beings.town · ${date(new Date(this.timelineStatus.lastSuccessAt).toISOString())} 已刷新`
+        : "来自 beings.town";
+      this.error = undefined;
+    } catch (error) {
+      if (generation !== this.request) return;
+      // A readable cached timeline stays on screen; only an empty feed becomes
+      // an error page.
+      if (this.timeline?.messages.length) this.status = errorText(error);
+      else this.fail(errorText(error), this.codeOf(error) === "AUTH_REQUIRED");
+    } finally {
+      // Only the opener that registered this read frees the slot, and only while
+      // it is still the registered one.
+      if (owner && this.reads.get(key) === shared) this.reads.delete(key);
       if (generation === this.request) { this.reading = false; this.changed(); }
     }
   }
@@ -912,7 +916,10 @@ export class TownModel extends Store {
     try {
       const state = await this.town.appState();
       if (revision !== this.authRequest) return;
-      this.townApp = state;
+      // Through `receiveState`, never by assignment: a panel opened after the
+      // connection changed must go through the same identity reset every other
+      // state transition does, or the timeline on screen would outlive its Being.
+      this.receiveState(state);
       this.authState = this.pairingSentence(state);
     } catch (error) {
       if (revision === this.authRequest) this.authError = errorText(error);
@@ -1055,9 +1062,14 @@ export class TownModel extends Store {
       if (target !== this.sendTarget) return;
       this.drafts.delete(JSON.stringify(target));
       this.content = "";
-      const warnings = Array.isArray(receipt.mention_warnings) ? receipt.mention_warnings.length : 0;
-      this.sendNotice = warnings
-        ? "消息已发送，但部分 @ 提及未解析成功。请核对目标，无需重复发送原消息。"
+      // The message was accepted. A mention that Town could not resolve is
+      // reported with the choices it would have accepted instead, and those are
+      // offered — BeingDesktop renderer/town-mentions.js `renderReceipt`. Picking
+      // one edits the next draft; it never republishes this message.
+      const warnings = mentionWarnings(receipt.mention_warnings);
+      this.sendCandidates = warnings.flatMap(warning => warning.candidates);
+      this.sendNotice = warnings.length
+        ? `消息已发送，但部分 @ 提及未解析：${warnings.map(warning => (warning.mention ? "@" + warning.mention : "未命名提及")).join("、")}。可从候选中选择完整 Town ID 用于下一条，不要重发原消息。`
         : "";
       this.sendOpen = Boolean(this.sendNotice);
       await this.refresh();

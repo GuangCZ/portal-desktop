@@ -132,14 +132,17 @@ export function TownComposer({ model }: { model: TownModel }) {
         <p id="town-send-notice" className="field-help" role="status" hidden={!town.sendNotice}>
           {town.sendNotice}
         </p>
-        {/* An ambiguous recipient is refused with NOT_SENT and the choices Town
-            offered. They are shown so the user can pick one; none is selected
-            automatically and nothing is resent behind their back. */}
+        {/* Two sources, one list: an ambiguous DM recipient refused with
+            NOT_SENT, and the choices Town offered for a mention it could not
+            resolve in a message it DID accept. Picking one addresses the next
+            draft — it never resends what was already published (BeingDesktop
+            renderer/town-mentions.js `insertMention`). */}
         <ul id="town-send-candidates" className="field-help" hidden={!town.sendCandidates.length}>
           {town.sendCandidates.map(candidate => (
             <li key={candidate.town_id}>
               <button type="button" className="text-button" disabled={town.sendBusy} onClick={() => {
-                town.recipient = candidate.town_id;
+                if (town.sendTarget?.kind === "dm") town.recipient = candidate.town_id;
+                else town.content = `${town.content}${town.content && !/\s$/.test(town.content) ? " " : ""}@${candidate.town_id} `;
                 town.sendCandidates = [];
                 town.sendError = "";
                 town.changed();

@@ -53,3 +53,40 @@ export function mentionParts(text: string, names: MentionNames): { text: string;
 
 export const mentionText = (text: string, names: MentionNames) =>
   mentionParts(text, names).map(part => part.text).join('');
+
+/** One `mention_warnings` entry Town returned with an accepted message.
+ *
+ * Ported from BeingDesktop renderer/town-mentions.js `warnings()`/`renderReceipt()`.
+ * Town has sent this in several shapes across versions — a bare string, and
+ * objects keyed `mention`/`name`/`display_name`/`query`/`token`/`input` with the
+ * explanation under `message`/`reason`/`warning` — so the shapes are all read
+ * here rather than assumed. The message itself was ACCEPTED: a warning is never
+ * a reason to resend, only a reason to address the mention differently.
+ */
+export interface MentionWarning {
+  mention: string;
+  detail: string;
+  candidates: { town_id: string; display_name: string }[];
+}
+
+const warningText = (value: unknown, cap = 120) => normalizeTownDisplay(value).slice(0, cap);
+
+export function mentionWarnings(value: unknown): MentionWarning[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 20).map(item => {
+    if (typeof item === 'string') return { mention: '', detail: warningText(item, 500), candidates: [] };
+    const entry = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+    const offered = Array.isArray(entry.candidates) ? entry.candidates : [];
+    return {
+      mention: warningText(entry.mention ?? entry.name ?? entry.display_name ?? entry.query ?? entry.token ?? entry.input),
+      detail: warningText(entry.message ?? entry.reason ?? entry.warning, 500),
+      // Only a real Town ID is offered as a choice; a candidate without one
+      // could not be used as an address and would only invite a second send.
+      candidates: offered
+        .map(choice => (choice && typeof choice === 'object' ? choice : {}) as Record<string, unknown>)
+        .filter(choice => validTownIdentity(choice.town_id) && String(choice.town_id).startsWith('t_'))
+        .slice(0, 10)
+        .map(choice => ({ town_id: String(choice.town_id), display_name: warningText(choice.display_name) || String(choice.town_id) })),
+    };
+  });
+}

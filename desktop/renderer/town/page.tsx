@@ -180,14 +180,17 @@ export function Town({ model }: { model: TownModel }) {
 /** The one sentence that says where the feed stands. The paired client reports
  * its own status and the background reader reports the feed's, and they are
  * different facts: a stale feed on a live connection is not a disconnection. */
-function liveMessage(town: TownModel): string {
+export function liveMessage(town: TownModel): string {
   const client = town.townApp?.client;
   if (!client) return "正在读取 Town 连接状态";
   if (client.pairingPending) return "配对已完成但未能写入本机密钥库，请在连接面板重试保存。";
   if (!client.paired) return "尚未配对 Town。点右侧按钮，用 Being 提供的六位配对码连接。";
   if (client.status === "connected") return town.timelineStatus?.stale ? "已连接 Town · 当前内容可能不是最新" : "已连接 Town";
-  if (client.status === "auth_required") return "Town 拒绝了本机凭据，请重新配对。";
-  if (client.status === "identity_mismatch") return "Town 返回的身份与已保存的配对不一致，读取已停止。";
+  // A refused credential stops the reads; it does not take back what was already
+  // read. Saying so is the difference between a page that looks broken and one
+  // that is merely no longer refreshing.
+  if (client.status === "auth_required") return "Town 拒绝了本机凭据，请重新配对；已读取的内容仍可阅读。";
+  if (client.status === "identity_mismatch") return "Town 返回的身份与已保存的配对不一致，读取已停止；已读取的内容仍可阅读。";
   if (client.status === "paused") return "Town 连接已暂停（离线或休眠）。";
   return "正在连接 Town…";
 }

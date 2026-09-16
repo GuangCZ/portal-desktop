@@ -1,18 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { collectMentionNames, mentionParts, mentionText } from '../desktop/renderer/town/models/mentions';
+import { mentionNames, mentionParts, mentionText, withSelf } from '../desktop/renderer/town/models/mentions';
 import { MentionText } from '../desktop/renderer/town/components/mention-text';
 import { Markdown, markdownText } from '../desktop/renderer/shared/components/markdown';
 
-const names = collectMentionNames([
-  { town_id: 't_NNzQHl8Icb7E8E1e', speaker_name: 'Neo', at: '2026-09-14' },
-  { sender_town_id: 't_RiverA', sender_display: '河流 (t_RiverA)', recipient_town_id: 't_RiverB', recipient_display: '河流 (t_RiverB)' },
-  { reply_to_sender: 't_Other', reply_to_sender_display: '<img src=x onerror=alert(1)> (t_Other)' },
+// 2026-09-16: the source of names changed and the rules did not.
+//
+// The shell used to mine display names out of message envelopes, because an
+// anonymous Town read was all it had. The paired client has a real member
+// directory (`beings:town-members`), so the map is built from that. Every case
+// below is the one it was before — exact case-sensitive ids, unknown ids left
+// alone, URLs and emails untouched, names rendered as inert text — restated
+// against the directory instead of against a pile of envelope spellings.
+const names = mentionNames([
+  { id: 't_NNzQHl8Icb7E8E1e', name: 'Neo', description: '' },
+  { id: 't_RiverA', name: '河流 (t_RiverA)', description: '' },
+  { id: 't_RiverB', name: '河流 (t_RiverB)', description: '' },
+  { id: 't_Other', name: '<img src=x onerror=alert(1)> (t_Other)', description: '' },
 ]);
 
 describe('Town mentions are a display projection of the original text', () => {
-  it('maps exact IDs from server names across bonfire, mail and reply metadata', () => {
+  it('maps exact IDs from the member directory', () => {
     const source = '@t_NNzQHl8Icb7E8E1e 刚发现一个私信寻址 bug，@t_RiverA 和 @t_RiverB 一起看。';
     expect(mentionText(source, names)).toBe('@Neo 刚发现一个私信寻址 bug，@河流 和 @河流 一起看。');
     expect(mentionParts(source, names).filter(part => part.id).map(part => part.id)).toEqual(['t_NNzQHl8Icb7E8E1e', 't_RiverA', 't_RiverB']);
@@ -23,14 +32,30 @@ describe('Town mentions are a display projection of the original text', () => {
     const source = '@t_Unknown @t_riverA @t_River @t_RiverA_more user@t_RiverA https://example.com/@t_RiverA';
     expect(mentionText(source, names)).toBe(source);
     expect(mentionText('中文@t_RiverA，(@t_RiverB)', names)).toBe('中文@河流，(@河流)');
-    expect(mentionText('@t_RiverA', collectMentionNames([{ content: 't_RiverA is Alice' }]))).toBe('@t_RiverA');
   });
 
-  it('retains newer server name snapshots across pages without mutating the previous cache', () => {
-    const newer = collectMentionNames([{ town_id: 't_NNzQHl8Icb7E8E1e', display_name: '新名字', at: '2026-09-15' }], names);
-    const older = collectMentionNames([{ town_id: 't_NNzQHl8Icb7E8E1e', display_name: '旧名字', at: '2026-09-13' }], newer);
-    expect(mentionText('@t_NNzQHl8Icb7E8E1e', older)).toBe('@新名字');
+  it('refuses a directory entry that is not a Town ID, or whose name is the ID again', () => {
+    // Message prose is never a name directory, and a name that merely repeats the
+    // id would render `@t_RiverA` as `@t_RiverA` through a lookup — a cost with
+    // no effect, and one that hides a directory that has not really loaded.
+    const useless = mentionNames([
+      { id: 't_RiverA', name: 't_RiverA', description: '' },
+      { id: 'legacy_name', name: '旧版 Being', description: '' },
+      { id: 't_Quiet', name: '   ', description: '' },
+    ]);
+    expect(mentionText('@t_RiverA @legacy_name @t_Quiet', useless)).toBe('@t_RiverA @legacy_name @t_Quiet');
+  });
+
+  it('a later directory replaces an earlier name without mutating the previous map', () => {
+    const newer = mentionNames([{ id: 't_NNzQHl8Icb7E8E1e', name: '新名字', description: '' }], names);
+    expect(mentionText('@t_NNzQHl8Icb7E8E1e', newer)).toBe('@新名字');
     expect(mentionText('@t_NNzQHl8Icb7E8E1e', names)).toBe('@Neo');
+  });
+
+  it('adds the paired profile itself, which the directory does not list', () => {
+    const withMe = withSelf(names, 't_Willow', '柳树 (t_Willow)');
+    expect(mentionText('@t_Willow', withMe)).toBe('@柳树');
+    expect(mentionText('@t_Willow', names)).toBe('@t_Willow');
   });
 
   it('renders mention names as React text while leaving code and links intact', () => {
