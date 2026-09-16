@@ -13,6 +13,7 @@
 //   · the sidebar's two primary entries come first, in order;
 //   · a pinned conversation appears exactly once, in 已置顶;
 //   · exactly one conversation is marked current;
+//   · a bound window says nothing about the ledger not being saved;
 //   · a folded project stays folded across a state update, and across a reload;
 //   · a pin made from the context menu is on disk when it is on screen.
 // Plus the switch this unit exists for: a different Being, a different set.
@@ -166,8 +167,11 @@ try {
   check('primary-entry-order', (await page.locator('.sidebar-head > button').allTextContents())
     .slice(0, 2).map(text => text.trim()).join(',') === '新会话,搜索会话');
 
-  // 2. Exactly one conversation is marked current.
+  // 2. Exactly one conversation is marked current, and the sidebar says nothing
+  //    about the ledger: both notes it can show («没有连上侧栏账本», «暂时无法读取»)
+  //    are for a window that is not saving, and this one is.
   check('only-current-task-selected', await page.locator('.session-shortcut[aria-current=page]').count() === 1);
+  check('no-ledger-note-while-bound', await page.locator('.sidebar-note').count() === 0);
 
   // 3. A pin from the context menu: on screen once, in 已置顶, and on disk.
   const target = page.locator(`[data-task-id="${ids[1]}"]`).first();

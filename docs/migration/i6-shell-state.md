@@ -141,8 +141,9 @@
 - [x] `OrganizerModel` 改投影 + `desktop/renderer/settings/models/shell-state.ts` + `tests/shell-state-renderer.test.ts`（8 条）
 - [x] 关于 / 隐私静态页（`renderer/settings/components/{about,privacy,entry}.tsx` + `renderer/settings/styles.css`），挂在侧栏底部插槽
 - [x] `sidebar.tsx` 接线：右键菜单走 IPC、项目菜单、添加项目文件夹、`data-task-id`、两个主入口 id
-- [x] `tests/sidebar-e2e.mjs`（Playwright + 真 renderer/preload/reducer，8 条 check，本机已跑通）
+- [x] `tests/sidebar-e2e.mjs`（Playwright + 真 renderer/preload/reducer，10 条 check，本机已跑通）
 - [x] 门槛：typecheck 通过；`npx vitest run` 1092 通过 / 58 跳过（基线 1071 / 58，本单元 +21）
+- [x] 复审结论逐条处理（§9）：折叠跨 reload 持久化（medium）+ 四条 low
 - [ ] **未做**：SBS 只读显示（原因见 §4.5）
 
 ## 4. 决定与偏差
@@ -254,14 +255,28 @@ BD 的 `selectSavedProject` 做两件事：校验目录在 `sidebar.projects` �
   推送断言从「每一条都是 `beings:chat-state`」改成「每一条都在 `{beings:chat-state, beings:sidebar}` 白名单内」——仍是闭集断言。
 - `tests/renderer-slots.test.ts`：两条「ships empty」改成点名清单（第一条同时钉住 `FEATURE_MODELS` 与 `AppModel.features` 的键），
   第二条保留「注册表为空时壳层不凭空造 model」的性质。后续单元继续在这两处点名。
+  两条都在 case 内先 `shipped()` 还原导入时的注册表再断言，因此不依赖 `afterEach` 的执行顺序（§9.2）。
+- `MIGRATION.md`：**只追加一行表格行**（按任务书）。`## 集成阶段` 的小节标题与 `| 单元 | 产出 | 记录 |` 表头留给合回者补一次——
+  五个单元都只追加行，谁先落地谁补表头。在本分支上这一行因此暂时没有表头。
+- `desktop/renderer/README.md`：**没有改**（§9.6）。它不在允许触碰的六个共享文件里，而且五个单元都会往同一棵目录树里插行。
+  合回者请在 `town/` 之后、`portal/page.tsx` 之前补这四行：
+
+  ```
+  ├─ settings/                侧栏账本的渲染层投影与关于 / 隐私静态页
+  │  ├─ components/           侧栏底部入口、关于、隐私
+  │  ├─ models/               侧栏账本（主进程为真值）
+  │  └─ styles.css            本模块自带样式入口（由 components/entry.tsx 引入）
+  ```
 
 ## 7. 验收
 
 - `npm run typecheck`：通过。
 - `npx vitest run`：**1092 通过 / 58 跳过**（基线 1071 / 58；本单元新增 21 条：ledger 8 + IPC 5 + renderer 8；没有重新启用任何 skip）。
-- `node tests/sidebar-e2e.mjs`：**本机真跑通过**（Electron 44 真窗口 + 生产 renderer/preload + 生产 reducer）。8 条 check：
-  `primary-entry-order`、`only-current-task-selected`、`pinned-task-only-once`、`pin-saved-to-disk`、
-  `only-current-task-still-selected`、`fold-survives-state-update`、`metadata-swaps-with-the-being`、`no-script-errors`。
+- `node tests/sidebar-e2e.mjs`：**本机真跑通过**（Electron 44 真窗口 + 生产 renderer/preload + 生产 reducer）。10 条 check：
+  `primary-entry-order`、`only-current-task-selected`、`no-ledger-note-while-bound`、`pinned-task-only-once`、`pin-saved-to-disk`、
+  `only-current-task-still-selected`、`fold-survives-state-update`、`fold-survives-reload`、`metadata-swaps-with-the-being`、`no-script-errors`。
+  夹具的窗口从 **`beings://desktop/`**（`protocol.handle` + 与生产同样的 `registerSchemesAsPrivileged`）加载，不再是 `file://`：
+  origin 决定渲染层有没有 `localStorage`，而折叠态就存在那里——`file://` 上跑出来的是客户端不会打开的那种窗口（§9.1）。
 - `npm run start`（真机冒烟，本机已跑）：`electron-forge start` 用 Vite 构出 `main.js` 与 `preload.js`，客户端正常打开，
   日志里没有 `subsystem-install:*`、没有渲染层报错；唯一的两条 ERROR 是检查更新走代理时的 TLS 握手失败，退出时一条
   「客户端正在退出，请稍候。」是 quitting 守卫按预期拒绝了关窗过程中的 `beings:snapshot`。
@@ -279,3 +294,83 @@ BD 的 `selectSavedProject` 做两件事：校验目录在 `sidebar.projects` �
    目前的跑法是 `node tests/sidebar-e2e.mjs`。合回后建议由 I0 补一行 `"test:sidebar": "node tests/sidebar-e2e.mjs"` 并加进 `test:all`。
 5. **`npm run package` 后从产物启动**：本机没有 Rust 工具链（`cargo not found`、`resources/heart-portal` 不存在），
    与 I0 记录的情况相同，未做。本单元不碰 `package.json` / `forge.config.ts` / 原生依赖，打包面无改动。
+6. **`MIGRATION.md` 的表头与 `desktop/renderer/README.md` 的目录树**——本单元只留一行表格行、README 一个字没动，
+   两处都留给合回者补一次（§6 给了要粘贴的四行）。
+
+## 9. 复审结论的处理（2026-09-16）
+
+复审给了 1 条 medium + 5 条 low。逐条如下；没有一条被判为「复审判断错误」。
+
+### 9.1 折叠状态跨 reload 保持（medium）——**已修**
+
+复审说得对，而且我原来的注释比漏做本身更糟：`ProjectGroup` 是 `useState(true)`，注释却写「0.8.26 keeps it in
+localStorage for the same reason」，把「每窗口内存态」说成了与 localStorage 同义。BD 那里是两条独立 check
+（`test/sidebar-ui.cjs` 的 `fold-survives-state-update` 与 `fold-survives-reload`），本单元只兑现了前一条。
+
+修法照 BD 的键形：
+
+- `renderer/sidebar.js:9-12` 是 `readPreference`/`savePreference`（前缀 `being-sidebar-v1:`）+ `foldKey = ${scope || 'local'}:${key}`，
+  项目折叠的 key 是 `folder:${project}`（同文件 106、109、115 行），存的是 `JSON.stringify(boolean)`。
+- 本壳层：`sidebar.tsx` 的 `foldKey(scope, path)` = `` `beings:sidebar-v1:${scope || "local"}:folder:${path}` ``，
+  存的文本同样是 `true` / `false`。前缀换成壳层已经在用的 `beings:`（`app/models/app.ts` 的 `beings:reading-size`），
+  没有新增任何能力面，读写都在 `try/catch` 里（无痕窗口、站点数据被清都不能让侧栏挂掉）。
+- 折叠态是**按 Being** 的：`ProjectGroup` 的 React key 带上 `organizer.scope`，切 Being 即重挂载、按新 scope 重读，
+  不把上一个 Being 的折叠带过来——这就是 BD `foldKey` 里那个 scope 的作用。
+
+**实测（不是源码推断）**：`tests/sidebar-e2e.mjs` 补回 `fold-survives-reload`；先用 `git show a790f95:…/sidebar.tsx`
+把旧组件放回去跑同一条 e2e，得到 `AssertionError [ERR_ASSERTION]: fold-survives-reload`，换回新组件 10 条全绿。
+
+顺带修掉夹具的一个失真：它原来 `loadFile` → `file://`，Chromium 在那个 origin 上根本不给 `localStorage`，
+于是这条 check 在 `file://` 上永远测不出真相。夹具改成与生产同样的 `beings://desktop/`
+（`registerSchemesAsPrivileged` + `protocol.handle` + `net.fetch`，对照 `desktop/main/main.ts:47`、`:93`、`app/window.ts:56`）。
+
+### 9.2 `tests/renderer-slots.test.ts` 的顺序依赖（low）——**已修**
+
+「builds exactly the models that are registered」原来靠文件顶层 `afterEach` 先清空真数组才通过，单独跑会失败
+（复审实测，我复跑确认）。现在文件顶层先拍快照 `SHIPPED`（导入时取，`afterEach` 还没跑过），`shipped()` 把五个数组还原，
+两条 roll call 都在 case 内先还原再断言：
+
+- 「registers exactly the surfaces…」不再需要「必须是文件第一条」；
+- 「builds exactly the models…」先断言生产注册表构出的键 == `SHIPPED.models` 的键，再清空注册表断言 `features` 为 `{}`，
+  两个半句都落在实处。
+
+复跑 `npx vitest run tests/renderer-slots.test.ts -t "builds exactly the models that are registered"`：1 passed。
+
+### 9.3 `app.features.shellState` 无条件解引用（low）——**已修**
+
+`AppModel` 对每个 factory 都包了 try/catch（「A broken feature model must not stop the conversation opening」），
+失败时 `features.shellState` 是 `undefined`，而壳层的 `sidebar.tsx` 与插槽组件 `settings/components/entry.tsx` 直接
+`useModel(app.features.shellState)`，会在 `model.subscribe` 上抛——外层只有 `renderer/main.tsx` 的 ErrorBoundary 兜底，
+整窗变成「页面加载未完成，请重新加载。」。这把 I0 的隔离保证在第一处用点上就破掉了。
+
+`settings/models/shell-state.ts` 因此导出一个模块级的 `NO_SHELL_STATE`（`new ShellStateModel(undefined, null)`），
+两个读点都写成 `app.features.shellState ?? NO_SHELL_STATE`（不是条件调用 hook）。它没有 bridge 也没有 host：
+账本是空的、`addProject()` 返回 false、什么都不保存，但关于 / 隐私两个静态页照常打开。
+
+### 9.4 `OrganizerModel.persistent` 没有消费者（low）——**已修**
+
+注释承诺「没绑账本时侧栏会说出来」，实现里却只有测试在读 `persistent`。现在 `sidebar.tsx` 在 `!organizer.persistent` 时
+渲染一条 `.sidebar-note`：「这个窗口没有连上侧栏账本，置顶、归档与项目只在本次打开期间有效。」
+
+时序核对过，不会闪一下：`app/page.tsx` 的 `#client-main` 在 `startup !== "ready"` 时是 `hidden`，而 `startup` 要等
+`AppModel.start()` 里的 `snapshot()` 回来才变 `ready`——`start()` 同步绑账本，所以侧栏可见时 `persistent` 已经是 true。
+e2e 新增 `no-ledger-note-while-bound`（绑上账本的窗口一条 `.sidebar-note` 都不该有）把这个反向性质钉住。
+
+### 9.5 SBS 只读显示与 `beings:sidebar-project-select`（low）——**仍未做，需要人拍板**
+
+复审核实了两条的理由都成立（`Snapshot` 没有 `runtime` 字段、`/api/llm/config` 被本单元明确禁止；
+本壳层 `Settings.workspace` 是 Portal 工作目录且 `beings:save` 会跑接管重启）。这里不改实现，只把去向写清楚：
+
+1. **SBS 整件转 I6b**（连通道带开关一起做）——需要人确认接受。
+2. **`beings:sidebar-project-select`**：账本现在独占 `sidebar.projects`，I2/I3 的 `DesktopTools({getWorkspace})` /
+   `DesktopConsole({getWorkspace})` 若要按项目切换工作目录，就需要补回这条通道（BD `src/main.cjs:574` 是它的原型）。
+   合回 I2/I3 时决定；若决定要，实现落在 `main/shell/ipc.ts`，`updateSidebar` 不用动。
+
+两条都在本单元的 `openIssues` 里如实列出，没有悄悄缩范围。
+
+### 9.6 正式提交范围 / `MIGRATION.md` / `renderer/README.md`（low）——**已按复审调整**
+
+- `MIGRATION.md` 从 6 行小节缩成**一行表格行**（任务书原话「只 append 一行表格项」）。表头与小节标题留给合回者，见 §8.6。
+- `desktop/renderer/README.md` 的 4 行目录树**撤回**（它不在允许触碰的六个共享文件里）；要补的内容原样放在 §6，合回者一次补齐。
+- 提交范围：单元实现在 wip 链上（994fdf9 / cc4c39b / 3202cad / 89027b5 …），a790f95 只是收尾。本轮复审的修改落在
+  `fix(i6-shell-state): address review findings` 一条正式提交里，正文逐条对应上面六节。

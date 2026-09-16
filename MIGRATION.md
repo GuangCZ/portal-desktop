@@ -338,8 +338,4 @@ P1 的 chat 子系统原样搬进 `subsystems/chat.ts`，成为这套注册方�
 - **`npm run start` 的人工冒烟没做**（本机缺 Rust 工具链，`resources/heart-portal` 不存在；打包验证用的是临时 stub）。
 - **Linux 的 node-pty 没有 prebuild**，`MakerZIP` 的 linux 目标需要构建机上有 python3 + make + g++，本次未验证。
 
-## 集成阶段 I6：侧栏持久化 + 关于/隐私（2026-09-16）
-
-| 单元 | 产出 | 记录 |
-| --- | --- | --- |
-| I6 | `main/shell/{sidebar-state,ipc}.ts`、`main/subsystems/shell-state.ts`、`preload/channels/shell-state.ts`、`shared/shell-state-types.ts`、`renderer/settings/`；`OrganizerModel` 改为主进程账本的投影 | `docs/migration/i6-shell-state.md` |
+| I6 | 侧栏持久化 + 关于/隐私：`main/shell/{sidebar-state,ipc}.ts`、`main/subsystems/shell-state.ts`、`preload/channels/shell-state.ts`、`shared/shell-state-types.ts`、`renderer/settings/`；`OrganizerModel` 改为主进程账本的投影 | `docs/migration/i6-shell-state.md` |
