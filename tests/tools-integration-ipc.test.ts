@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { installDesktopExtensions } from "../desktop/main/extensions";
 import { installToolsSubsystem } from "../desktop/main/subsystems/tools";
 import { WorkerPresentation } from "../desktop/main/tools/worker-presentation";
 import { IDLE_TOOLS_STATE } from "../desktop/shared/tools-types";
@@ -483,5 +484,43 @@ describe("the tool subsystem's wiring", () => {
     await expect(f.call("beings:tools-action", "browser.new")).rejects.toThrow("桌面工具已关闭。");
     // …and the snapshot channel still answers, because the panel may still ask.
     expect(await f.call("beings:tools")).toBeTruthy();
+  });
+});
+
+describe("the production installer list", () => {
+  it("registers every subsystem's channels without a collision", async () => {
+    // `ipcMain.handle` THROWS on a second registration of one channel, so two
+    // subsystems claiming the same `beings:` name is a crash at startup — and
+    // nothing else in the tree would catch it. tests/chat-ipc.test.ts installs
+    // only the chat installer (so its exact channel-set assertion stays about the
+    // conversation layer), and tests/subsystem-registry.test.ts installs fakes.
+    // This is the one case that runs the real INSTALLERS list.
+    //
+    // It asserts "no duplicates", not a fixed set, so a later unit appending its
+    // own installer never has to edit this file. I2 review fix, 2026-09-16.
+    const directory = await mkdtemp(path.join(os.tmpdir(), "beings-installers-"));
+    cleanups.push(() => rm(directory, { recursive: true, force: true }));
+    const channels: string[] = [];
+    const extensions = installDesktopExtensions({
+      handle: (channel: string) => { channels.push(channel); },
+      exclusive: <T,>(operation: () => Promise<T>) => operation(),
+      window: () => null,
+      store: { connection: null, connectionAddress: "" },
+      secretStorage: {
+        isEncryptionAvailable: () => true,
+        encryptString: (value: string) => Buffer.from(value),
+        decryptString: (value: Buffer) => value.toString(),
+      },
+      userData: directory,
+      desktopId: DESKTOP_ID,
+      clientVersion: "0.9.0",
+      onError: () => {},
+    });
+    cleanups.push(() => extensions.quitting());
+    expect(channels.length).toBeGreaterThan(0);
+    expect([...new Set(channels)].sort()).toEqual([...channels].sort());
+    // Every one of them is namespaced, which is what makes "no duplicates"
+    // meaningful across units that never see each other's branches.
+    expect(channels.filter(channel => !channel.startsWith("beings:"))).toEqual([]);
   });
 });

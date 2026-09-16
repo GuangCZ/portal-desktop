@@ -86,6 +86,12 @@ try {
   await npm('desktop-e2e', ['run', 'test:e2e']);
   await npm('town-e2e', ['run', 'test:town-ui']);
   await npm('browser-e2e', ['run', 'test:browser']);
+  // The tool bridge against the packaged client and a local fake relay. Run
+  // directly rather than through an npm script because package.json is frozen for
+  // the integration units; the `test:tools` script belongs with its next change.
+  // This is the ONLY verification that `ws` survives packaging — see the header of
+  // tests/tools-e2e.mjs — so it has to be a step here, not a script nobody calls.
+  await step('tools-e2e', process.execPath, ['tests/tools-e2e.mjs']);
   report.status = 'passed';
 } catch (error) { report.status = 'failed'; report.error = String(error); console.error(String(error)); process.exitCode = 1; }
 finally { report.finishedAt = new Date().toISOString(); await persist(); console.log('\n测试报告：test-results/summary.md（结构化结果：summary.json）'); }
