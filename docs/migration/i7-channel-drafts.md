@@ -173,8 +173,15 @@
 `beings:town-catalog` / `beings:town-page` / `beings:town-draft` 不包络（BD 里 `getTownCatalog` / `openTownPage` /
 三个 `prepare*` 都不在 `townMethods` 里）。它们的失败全是一句短中文，`desktop/main/app/ipc.ts` 的
 `publicErrorMessage` 原样带过去（≤110 字、单行、无路径即保留）。
-`prepareTownPairing` 在 BD 里**是**包络的，但它抛的是 `prepareLoomDraft` 的无 code 普通 Error，包络不增加任何信息；
-四种 kind 合成一条通道后统一按不包络处理。
+`prepareTownPairing` 在 BD 里**是**包络的（`docs/interfaces.md:110` 也这么标），但它抛的是 `prepareLoomDraft` 的
+无 code 普通 Error，包络不增加任何信息；四种 kind 合成一条通道后统一按不包络处理。
+
+顺带核对 BD `docs/interfaces.md:134`：那一行把四条渠道方法写在一起，「Town 包络」标记只跟在
+`updateFeishuCredentials(value)` 后面——方案 §3.7 的表应该就是从这里抄的。`src/main.cjs:125/130` 的 `townMethods`
+与 `src/preload.cjs:62` 的成员表是无歧义的，**以代码为准**。同一行确认的其它三点本单元都照做了：
+`channel ∈ feishu|wechat`、返回 `{channel,status,detail,qrCodeDataUrl?,appId?,qrCodeUrl?}`、`inspect` 只读。
+`docs/interfaces.md:27`「纪元字段」要求 `prepareFiresideDraft.connectionRevision` 必须等于当前 `generation`，
+本单元在 `ipc.ts` 的 `prepareDraft` 里比，且在推送之前。
 
 ### D3 · **实测推翻方案与既有实现**：`contextBridge` 会吃掉 `error.code`
 
