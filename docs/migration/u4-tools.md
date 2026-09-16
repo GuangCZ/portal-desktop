@@ -276,11 +276,11 @@ ToolLink=DesktopToolLink}`。
 | browser-links | test/browser-links.test.cjs | tests/tools-browser-links.test.ts | 测试通过（5/5） |
 | network | test/desktop-network.test.cjs | tests/tools-network.test.ts | 测试通过（13/13） |
 | console | test/desktop-console.test.cjs | tests/tools-console.test.ts | 测试通过（12/12） |
-| tool-link | test/desktop-tool-link.test.cjs | tests/tools-tool-link.test.ts | 未开始 |
+| tool-link | test/desktop-tool-link.test.cjs | tests/tools-tool-link.test.ts | 测试通过（86/87，1 skip） |
 | desktop-tools | test/desktop-tools.test.cjs | tests/tools-desktop-tools.test.ts | 测试通过（16/16） |
 | terminal-tools | test/desktop-terminal-tools.test.cjs | tests/tools-terminal-tools.test.ts | 测试通过（4/4） |
 | worker-presentation | test/worker-presentation.test.cjs | tests/tools-worker-presentation.test.ts | 测试通过（6/6） |
-| console 集成 | test/desktop-console-integration.cjs | tests/tools-console-integration.test.ts | 未开始 |
+| console 集成 | test/desktop-console-integration.cjs | tests/tools-console-integration.test.ts | 全部 skip（仅 Windows、需真实 PowerShell） |
 
 ### 移植期补充记录（2026-09-16 第二段）
 - `TerminalScope` 在 TS 里写成 type alias 而非 interface，好让它能直接展开进带索引签名的
@@ -300,3 +300,36 @@ ToolLink=DesktopToolLink}`。
 - `desktop-tools` 测试里的 `desktopPortalName` 夹具逐行抄自 `src/desktop-identity.cjs` 5..10 行。
 - `browser-links` 测试同样内联 `normalizeBrowserUrl` + `navigationUrl` 夹具（src/desktop-browser.cjs 16..34 行）。
 - console 测试里的 `__dirname`/`__filename` 换成 `path.resolve("tests")` 与本测试文件路径（vitest 的 cwd 是仓库根）。
+
+---
+
+## 注入点清单（后续集成阶段要接的线）
+
+| 注入参数 | 来源 BeingDesktop 模块 | 用在哪 |
+| --- | --- | --- |
+| `Browser`（构造器，必填） | `src/desktop-browser.cjs` 的 `DesktopBrowser` | `DesktopTools` |
+| `normalizeUrl` | `src/desktop-browser.cjs` 的 `normalizeBrowserUrl` | `createBrowserLinks`、`WorkerPresentation` |
+| `desktopPortalName`（必填） | `src/desktop-identity.cjs` | `DesktopTools`（只在给了 `desktopId` 时调用） |
+| `getTerminal` / `showTerminal` | `src/desktop-terminal.cjs` 的 `DesktopTerminal` | `DesktopTerminalTools`、`DesktopTools` |
+| `orchestration` | `src/orchestration.cjs`（`desktop_worker_*` 实现） | `DesktopTools`（模式判定 + `tool()`） |
+| `requestImpl` | Electron `net.request` | `portalRequestAdapter` |
+| `WebContentsView` / `session` / `getWindow` | Electron | 透传给 `Browser` |
+| `WebSocketImpl` / `clock` / `timers` / `shouldReconnect` | 默认 `ws`、`performance.now`、`globalThis` | `DesktopToolLink` |
+| `spawnImpl` / `environment` / `platform` / `killGroup` / `shellPath` | `node:child_process`、`process` | `DesktopConsole` |
+| `browser` / `showBrowser` | `DesktopTools.browser` 与窗口显示回调 | `WorkerPresentation` |
+
+`main.cjs` 的 boot() 对应写法（供机械对接参考）：
+`desktopTools=new DesktopTools({desktopId,WebContentsView,session,getWindow:()=>win,getConnection:()=>connection,
+getWorkspace:()=>state.workspace.path,orchestration,…})`；`portalRequestAdapter(net.request.bind(net))`；
+`createBrowserLinks({getBrowser:()=>desktopTools.browser,showBrowser,isCurrent,onError})`；
+`desktopMessageContext({runtime:{…bridge:desktopTools.link.capabilities()…}})`。
+
+## 未完成 / 存疑
+
+- `tests/tools-tool-link.test.ts` 的「a local relay performs real native-WebSocket tool discovery and a fixed call」
+  用 `it.skip`：依赖 BeingDesktop `test/integration/portal-loopback.cjs`（279 行的回环 relay 模拟器），
+  不属于本迁移单元。
+- `tests/tools-console-integration.test.ts` 四条全部 `it.skip`：原文件是仅 Windows 的独立脚本
+  （首行就 `throw`），要真实 PowerShell 与 Windows job object。
+- `DesktopBrowser` / `DesktopTerminal` / `Orchestration` 的真实实现不在本 worktree，
+  `desktop/main/tools/types.ts` 里只有按调用面写的接口；集成阶段要用真实类替换并复核。
