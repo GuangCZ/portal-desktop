@@ -252,6 +252,30 @@ ToolLink=DesktopToolLink}`。
 - **移植注入点**：`normalizeBrowserUrl`（`src/desktop-browser.cjs`，归浏览器单元）改为构造参数注入；
   `browser`/`showBrowser` 本来就是构造参数。
 
+### test/integration/portal-loopback.cjs（279 行）→ tests/tools-portal-loopback.ts（只取 3 个导出）
+导出面：`{LoopbackRelay, frame, until, connectionsFor}`。只有前三个与工具桥有关；`connectionsFor` 与文件
+末尾的 `run()` 走 `PortalService`（`src/services.cjs`）、`TEST_ROOT`、`EXPECTED_HASH`，属于 Portal 安装器单元，
+本单元不移植。`LoopbackRelay/frame/until` 自身只依赖 `node:assert/crypto/http/events`，不碰 PortalService。
+
+- `frame(opcode, value)`：未掩码的服务端帧。body <65536；`header[0]=0x80|opcode`；长度 <126 直接写，
+  否则写 126 + `writeUInt16BE(len, 2)`（4 字节头）。
+- `LoopbackRelay extends EventEmitter`，`constructor(token, {beingId='desktop-integration',
+  portalName='desktop-integration'})`；字段 `sockets:Set, accepted, rejected, metadataReplies,
+  methodsSent:[], toolNames:[], server`；非 upgrade 请求一律 404。
+  `listen(port=0)` 监听 `127.0.0.1` 并记 `this.port`；`pause()` destroy 所有 socket 再 close。
+  `upgrade()`：URL 必须是 `/_relay`、`remoteAddress==='127.0.0.1'`、带 `sec-websocket-key`，否则 destroy；
+  自己算 RFC6455 的 `Sec-WebSocket-Accept`（sha1(key+258EAFA5-E914-47DA-95CA-C5AB0DC85B11) 的 base64）。
+  解帧：要求 FIN 与客户端掩码位都置位，size 127 直接 destroy，opcode 8→回 close 帧，9→回 pong，非 1 跳过。
+  未认证时校验 `being_id/loom_token/portal_name` 三者全等，否则 `rejected++` 并回 `{ok:false}`；
+  通过则 `accepted++`、回 `{ok:true, relay_keepalive:'text-v1'}`，随即主动下发 `initialize`
+  （clientInfo `{name:'desktop-loopback-fixture',version:'1.0.0'}`）；`sendRequest` 断言 method 只能是
+  `initialize`/`tools/list` 并记入 `methodsSent`。
+  已认证后：`{type:'keepalive'}`→回 `{type:'keepalive_ack'}`；`id===1 && result`→记 `runtimeVersion` 并发
+  `tools/list`；`id===2 && Array.isArray(result.tools)`→记 `toolNames` 并 `metadataReplies++`；
+  任何带 `id`+`result` 的帧都 emit `rpc_response`。状态变化 emit `change`。
+- `until(emitter, predicate, label, timeout=25000)`：predicate 已满足则立即 resolve，否则监听 `change`，
+  超时 reject `Timed out: <label>`。
+
 ---
 
 ## 进度
