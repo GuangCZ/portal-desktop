@@ -13,7 +13,7 @@
 //   · the sidebar's two primary entries come first, in order;
 //   · a pinned conversation appears exactly once, in 已置顶;
 //   · exactly one conversation is marked current;
-//   · a folded project stays folded across a state update;
+//   · a folded project stays folded across a state update, and across a reload;
 //   · a pin made from the context menu is on disk when it is on screen.
 // Plus the switch this unit exists for: a different Being, a different set.
 import { _electron as electron } from 'playwright';
@@ -60,8 +60,9 @@ async function build() {
 // nothing else, and the sidebar's three channels go through the real reducer over
 // a JSON file this script reads back — so「落盘」means what it says.
 const MAIN = `
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, net, protocol } = require('electron');
 const { writeFileSync, readFileSync, existsSync } = require('node:fs');
+const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const { sidebarState, updateSidebar, addSidebarProject } = require('./ledger.js');
 const file = ${JSON.stringify(ledgerFile)};
@@ -84,6 +85,12 @@ const snapshot = () => ({ desktopId: '11111111-1111-4111-8111-111111111111',
     projectWorkspace: '', portalBinary: '', portalName: 'sidebar-fixture', autoStart: false, backgroundEnabled: false, allowExec: true, kitsEnabled: true },
   portal: { phase: 'stopped', message: '本机 Portal 未启动（夹具）。', logs: [] } });
 const handle = (channel, callback) => ipcMain.handle(channel, (_event, ...args) => callback(...args));
+// The shell is served from beings://desktop/ here as it is in the client
+// (desktop/main/main.ts line 47 and 93), rather than from a file:// path. The
+// origin is what decides whether the renderer has localStorage at all, and the
+// sidebar's fold lives there — a fixture on file:// would be testing a window the
+// client never opens.
+protocol.registerSchemesAsPrivileged([{ scheme: 'beings', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 
 handle('beings:snapshot', snapshot);
 handle('beings:appearance', () => 'light');
@@ -129,9 +136,13 @@ globalThis.__fixtureSwitchBeing = () => { scope = ${JSON.stringify(SCOPE_B)}; pu
 
 app.whenReady().then(() => {
   if (process.env.SIDEBAR_FIXTURE_PROFILE) app.setPath('userData', process.env.SIDEBAR_FIXTURE_PROFILE);
+  protocol.handle('beings', request => {
+    const name = new URL(request.url).pathname;
+    return net.fetch(pathToFileURL(path.join(__dirname, name === '/' ? 'index.html' : name)).toString());
+  });
   window = new BrowserWindow({ show: true, width: 1280, height: 860,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
-  window.loadFile(path.join(__dirname, 'index.html'));
+  window.loadURL('beings://desktop/');
 });
 app.on('window-all-closed', () => app.quit());
 `;
@@ -177,6 +188,14 @@ try {
   await fixture('__fixtureRepublishChat');
   await page.waitForTimeout(200);
   check('fold-survives-state-update', await page.locator('.sidebar-project-toggle').first().getAttribute('aria-expanded') === 'false');
+
+  //    And across a reload — 0.8.26's second fold check, and the one that makes
+  //    folding a project worth doing: the fold is stored under the Being's own
+  //    key, so restarting the client finds it folded.
+  await page.reload();
+  await page.locator('.session-sidebar').waitFor();
+  await page.locator('.sidebar-project-toggle').first().waitFor();
+  check('fold-survives-reload', await page.locator('.sidebar-project-toggle').first().getAttribute('aria-expanded') === 'false');
 
   // 5. A different Being is a different set of pins, without a reload.
   await fixture('__fixtureSwitchBeing');
