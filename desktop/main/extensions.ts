@@ -21,7 +21,7 @@
 import type { SecretStorage } from './app/settings';
 import type { Connection } from './chat/connection';
 import type { ChatSessions } from './chat/sessions';
-import type { Settings } from '../shared/types';
+import type { PortalState, Settings } from '../shared/types';
 import type {
   DesktopSubsystem, ElectronBindings, ExtensionWindow, SubsystemContext,
   SubsystemInstaller, SubsystemMap, SubsystemRegistry, SubsystemSettings,
@@ -82,6 +82,11 @@ export interface DesktopExtensionsContext {
   /** main.ts's error log. Failures here are reported, never thrown: a broken
    * subsystem must not stop the client opening. */
   onError?: (scope: string, error: unknown) => void;
+  /** A reader for the local Portal's live state (2026-09-17, integration unit
+   * IN). `PortalSupervisor` stays in main.ts's closure; only this passes through.
+   * Optional, and omitted by every test that models no Portal — see
+   * `SubsystemContext.portalState` in ./subsystems/types.ts. */
+  portalState?: () => PortalState | null;
 }
 
 export interface DesktopExtensions {
@@ -159,6 +164,7 @@ export function installSubsystems(ctx: DesktopExtensionsContext, installers: rea
     fetchImpl,
     onError: report,
     registry,
+    ...(ctx.portalState ? { portalState: ctx.portalState } : {}),
     push: (channel, payload) => {
       const target = ctx.window();
       if (target && !target.isDestroyed() && !target.webContents.isDestroyed()) target.webContents.send(channel, payload);

@@ -17,8 +17,7 @@
 // This shell has `PortalState` — `{phase, pid, managed, runtimePath, conflict,
 // message, logs}` (desktop/shared/types.ts) — which is not the same object, so
 // `portalRuntime` below is an explicit mapping with a row per phase, pinned by
-// tests/chat-integration-environment.test.ts. See the note on `getPortalState`
-// for why the live state is not reachable from a subsystem today.
+// tests/chat-integration-environment.test.ts.
 import { DESKTOP_PORTAL_NAME, desktopMessageContext, type DesktopRuntime } from '../common/message-context';
 import { desktopPlatform } from '../common/platform';
 import type { PortalState, Settings } from '../../shared/types';
@@ -55,17 +54,17 @@ export interface DesktopEnvironmentOptions {
   orchestration: () => EnvironmentOrchestration | null | undefined;
   /** `OrchestrationPolicy.inspectForMessage()`. Never throws for a disabled mode. */
   inspectPolicy: () => Promise<unknown>;
-  /** The Portal supervisor's live state.
+  /** The Portal supervisor's live state, read at send time.
    *
-   * MEASURED GAP, recorded rather than papered over: `main.ts` keeps the
-   * `PortalSupervisor` in its own closure and does not pass it to
-   * `installDesktopExtensions`, so no subsystem can read it without widening
-   * `subsystems/types.ts` — an I0-only file. The chat subsystem therefore passes
-   * `() => null` today, and `portalRuntime` maps that to
-   * `status: 'not_configured'`. Everything that does NOT depend on the live
-   * process (`configuredName`, `workspace`) still comes from the saved profile,
-   * because the frame's prose points the Being at
-   * `runtime.portal.configuredName` when the Portal is unconfirmed. */
+   * The gap I5 recorded here is closed (2026-09-17, integration unit IN):
+   * `main.ts` passes a reader for its `PortalSupervisor` as
+   * `SubsystemContext.portalState` and the chat subsystem forwards it. Still
+   * optional, and still `not_configured` when absent — everything that does NOT
+   * depend on the live process (`configuredName`, `workspace`) comes from the
+   * saved profile either way, because the frame's prose points the Being at
+   * `runtime.portal.configuredName` when the Portal is unconfirmed. The seam is
+   * asserted by tests/chat-integration-portal-state.test.ts; the mapping itself
+   * by tests/chat-integration-environment.test.ts. */
   getPortalState?: () => PortalState | null | undefined;
   clock?: () => number;
   platform?: NodeJS.Platform | string;

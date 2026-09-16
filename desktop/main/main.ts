@@ -419,6 +419,7 @@ async function ready() {
       shell: { openPath: target => shell.openPath(target), openExternal: target => shell.openExternal(target) },
     },
     onError: (scope, error) => { errorLog.report(scope, error); },
+    portalState: () => portal.state,
   });
   handle('beings:save', (input: SaveSettings) => exclusive(async () => {
     const previous = { ...store.settings }; const previousConnection = store.connection;

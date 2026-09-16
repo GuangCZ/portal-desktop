@@ -33,7 +33,7 @@
 //   export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem { … }
 import type { SecretStorage } from '../app/settings';
 import type { Connection } from '../chat/connection';
-import type { Settings } from '../../shared/types';
+import type { PortalState, Settings } from '../../shared/types';
 
 /** Structural, so a `BrowserWindow` satisfies it and a test's stub does too. */
 export interface ExtensionWindow {
@@ -111,6 +111,15 @@ export interface SubsystemContext {
    * webContents) is applied here, so a subsystem may call it at any time. Channel
    * names belong to each subsystem's own `preload/channels/<key>.ts`. */
   push: (channel: string, payload: unknown) => void;
+  /** The local Portal's live state, read at call time (2026-09-17, integration
+   * unit IN). `PortalSupervisor` lives in main.ts's closure; this is the one
+   * window onto it, and it exists because the conversation layer must tell a
+   * Being what its Portal is doing — integration decision §5.2, the nine-row
+   * mapping in `main/chat/environment.ts`. Optional so that a test's context need
+   * not model a supervisor; a subsystem reads `ctx.portalState?.() ?? null` and
+   * says「未配置」when nobody is there, which is what it said before this existed
+   * (docs/migration/i5-conversation.md §7.1). */
+  portalState?: () => PortalState | null;
 }
 
 export interface DesktopSubsystem {

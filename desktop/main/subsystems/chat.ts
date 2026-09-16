@@ -111,18 +111,15 @@ export function installChatSubsystem(ctx: SubsystemContext): ChatSubsystem {
           // Integration decision §5.2 assigns this mapping to this unit and
           // `chat/environment.ts` carries it in full — `portalRuntime`, nine
           // rows, pinned line by line by tests/chat-integration-environment.ts.
-          // What is missing is the input: main.ts keeps `PortalSupervisor` in
-          // its own closure and `SubsystemContext` has no field for it, and both
-          // files are outside this unit. The whole of the remaining work is one
-          // field and one line:
-          //
-          //   subsystems/types.ts:  portalState?: () => PortalState | null;
-          //   main.ts:              portalState: () => portal.state,
-          //   here:                 getPortalState: () => ctx.portalState?.() ?? null,
-          //
-          // Nothing else changes — not the mapping, not its tests. Until then
-          // §5.2 is ported but not live (docs/migration/i5-conversation.md §7.1).
-          getPortalState: () => null,
+          // The input arrived on 2026-09-17 (integration unit IN): main.ts keeps
+          // `PortalSupervisor` in its own closure and passes a reader for it as
+          // `SubsystemContext.portalState`. Read at call time, never captured —
+          // the supervisor replaces `state` on every transition, so holding the
+          // object would freeze the frame at whatever the Portal was doing when
+          // this subsystem was installed. Absent in a context that models no
+          // supervisor, and「未配置 / 未知」is what the frame said before this
+          // existed (docs/migration/i5-conversation.md §7.1).
+          getPortalState: () => ctx.portalState?.() ?? null,
         }),
       }),
       // A conversation names itself from its first exchange, through whichever

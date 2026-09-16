@@ -157,3 +157,22 @@ I7 的四条通道以数据形式返回包络、由 `renderer/channel/models/cha
 把「必须自足」这条规则变成会红的测试）、**四个通道族各至少一条真路径**
 （`beings:chat-send`/`beings:chat-detail-open`/`beings:town-speak`/`beings:town-bonfire`/`beings:model-config-save`/`beings:sbs-set`，
 用真的 `desktopChannels` + 真的 bridge 助手 + 真的解码器，只有 `ipcRenderer.invoke` 是夹具）、退路的重建。
+
+### 3.2 【第 2 条】Portal 运行态注入请求帧——已修（定案 §5.2 现在真的成立）
+
+I5 的 openIssue 1 逐字给出的三行，落地时多了一处：**main.ts 构造的不是 `SubsystemContext` 而是
+`DesktopExtensionsContext`**（`extensions.ts` 在中间把它翻译成前者），所以要穿四个点而不是三个。
+
+| 文件 | 改动 |
+| --- | --- |
+| `desktop/main/subsystems/types.ts` | `SubsystemContext` 末尾 append 一个可选成员 `portalState?: () => PortalState | null;`（+ `import type` 里加 `PortalState`）。 |
+| `desktop/main/extensions.ts` | `DesktopExtensionsContext` append 同名可选成员（+ `import type` 加 `PortalState`）；`subsystemContext` 构造里一行 `...(ctx.portalState ? { portalState: ctx.portalState } : {}),`。**INSTALLERS 一字未动。** |
+| `desktop/main/main.ts` | `installDesktopExtensions({…})` 里 append 一行 `portalState: () => portal.state,`（`portal` 是 `main.ts:66` 的 `let portal: PortalSupervisor`，`state` 是 `portal/supervisor.ts:34` 的字段）。**其它一字未动。** |
+| `desktop/main/subsystems/chat.ts` | `getPortalState: () => null` → `getPortalState: () => ctx.portalState?.() ?? null`，上方 13 行的「缺口说明」改写成「已接上 + 为什么按调用时读」。 |
+| `desktop/main/chat/environment.ts` | **只改注释**：`getPortalState` 上方与文件头两处「今天读不到」的说明已成谎话，改写为现状 + 指向两个测试。无行为改动。 |
+
+`tests/chat-integration-portal-state.test.ts`（新，3 条）：真 `installSubsystems` + 真 `installChatSubsystem` +
+真 `createTrustedHandle` + 真 `beings:chat-send`，只有网络是夹具；
+① `connected/managed` 时 wire 帧里的 `runtime.portal` **逐字等于** `portalRuntime(...)` 对应行（断言对着映射表的源，不是它的副本）；
+② **按调用时读、不是安装时捕获**：同一个 fixture 连发五条，`not_configured → starting → external → running+conflict → error` 五行逐条命中；
+③ 不带 `portalState` 的上下文仍然是 `not_configured / unknown`，且 `configuredName`、`workspace` 仍是 profile 里的真值。
