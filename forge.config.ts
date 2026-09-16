@@ -86,6 +86,13 @@ const FOREIGN_PREBUILD = /^\/node_modules\/node-pty\/prebuilds\/([^/]+)/;
 // loader prefers `build/Release` over `prebuilds/`; the prebuilt copy is the
 // fallback and must be outside the archive too.
 //
+// One asymmetry, measured in a real `electron-forge package` on 2026-09-16: the
+// rebuilt helper arrives mode 755 and osx-sign signs it (it is a Mach-O, so
+// scripts/mac-signing.ts does not skip it), while the copies npm unpacks into
+// `prebuilds/` are mode 644. That only matters if node-pty ever falls back to
+// them, which it cannot while Forge's own "Preparing native dependencies" step
+// produces build/Release — if that step is ever disabled, chmod the helper.
+//
 // AutoUnpackNativesPlugin MERGES an existing unpack rather than replacing it —
 // `{<existing>,**/{.**,**}/**/*.node}` (AutoUnpackNativesPlugin.js:21-23) — so
 // declaring this one keeps the `.node` rule as well. tests/packaging-contract.ts

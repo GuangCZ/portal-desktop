@@ -394,3 +394,29 @@ export const NATIVE_UNPACK = '**/node_modules/node-pty/{build/*,prebuilds/*}/spa
 （TS2352：缺索引签名）。也就是说 I1 落地的那一刻，`models/app.ts`——一个任何单元都不许改的文件——会直接编译不过。
 现在收敛成一个 `private get featureModels(): Record<string, FeatureModel>`，内部 `as unknown as`，注释写明原因。
 这条是实测出来的：加完测试里的 `declare module` 块，`npm run typecheck` 立刻报了这两处。
+
+### 打包实测（第二轮，本机真跑了一次 `electron-forge package`）
+
+用一个临时 stub `heart-portal`（编译的 Mach-O，`--version` 输出 0.0.0）+ `PORTAL_DESKTOP_MAC_LOCAL_TEST=1`，darwin-arm64 全绿。产物实测：
+
+```
+app.asar.unpacked/node_modules/node-pty/build/Release/pty.node          -rwxr-xr-x
+app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper      -rwxr-xr-x  Mach-O arm64
+app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/{pty.node,spawn-helper}
+app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-x64/{pty.node,spawn-helper}
+app.asar.unpacked/node_modules/node-pty/bin/darwin-arm64-149/node-pty.node   ← @electron/rebuild 自己的缓存副本
+```
+
+- `codesign -dv` 那个 helper：**已签名**（本地测是 adhoc，flags 含 `runtime`）。`scripts/mac-signing.ts` 按 Mach-O magic 判定，不会跳过它。
+- `codesign --verify --deep --strict "Being Desktop.app"` 退出码 0。
+- asar 7.38 MB，与第一轮持平（helper 只有 ~70 KB）。
+- `build/Release/` 下的中间产物（`obj.target/*.o`、`.deps/`、`*.mk`）仍留在 asar 内，只有两个二进制被 unpack——glob 精确。
+
+**两条顺带的实测，都没改代码，记在这里**：
+
+1. **`prebuilds/` 里那份 helper 在包内是 644，没有执行位**（npm tarball 就是 644；osx-sign 会签它但不会改 mode）。
+   只有在 node-pty 回退到 `prebuilds/` 时才会踩到 EACCES，而 Forge 的「Preparing native dependencies」每次都会产出 `build/Release`
+   （本次日志 `Preparing native dependencies: 1 / 1`），`loadNativeModule` 优先它，所以这条路径当前不可达。
+   已在 `forge.config.ts` 注释里写明：哪天关掉 rebuild，就得补一个 chmod。
+2. **`packagerIgnore` 的 `FOREIGN_PREBUILD` 只按 platform 过滤，不按 arch**，所以 arm64 机器上打包会把 `prebuilds/darwin-x64/` 也带进去（约 170 KB）。
+   这是既有行为，`tests/packaging-contract.test.ts` 第 96–100 条就是这么钉的（foreign 取 win32），不是本轮引入的，没动。
