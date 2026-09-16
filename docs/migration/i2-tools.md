@@ -307,3 +307,106 @@ I0 已经一次收敛完（见上「阅读摘要」）：`tools/platform.ts`、`
 - `node tests/browser-e2e.mjs`（既有、非跳过）：PASS，工具栏新增按钮没有影响壳层浏览器。
 - 注意：`tests/support/electron-lifecycle.mjs` 的锁在 `os.tmpdir()`，**五个 worktree 共用**。
   并行跑 E2E 会互相拒绝，合回后按顺序跑。
+
+---
+
+## 复审修复（2026-09-16，第二轮）
+
+复审结论 `fail`，八条发现。逐条处理如下。
+
+### high · 关闭面板不释放原生视图
+
+**证实，已修。** 面板的 `visible` 是「open 时」，关闭即 **unmount**，
+`#tools-browser-host` 随之消失，于是再没有任何人测量它 ——
+主进程听到的最后一句仍是 `visible:true`，`DesktopBrowser._syncView()` 只在被告知隐藏时才 `_detach()`，
+页面就一直贴在对话上，本次运行内无法消除。0.8.26 没有这个洞：它的面板是 hidden 而不是移除，
+`hide()` 会走 `layout()` 发出 `visible:false`。
+
+修法（两处，互为兜底）：
+
+- `ToolsModel.detachView()`：用**上一次的矩形**发一条 `{visible:false}`（`setViewport` 隐藏时保留矩形，
+  所以重开时视图回到原位）。`browserView()` 与它共用新的私有 `send()`，去重键不变。
+- `ToolsModel.hide()` 调一次；`ToolsBrowserBar` 的 `useEffect` 清理里再调一次，
+  覆盖「不经过 hide() 的 unmount」。第二次被去重键吃掉，不产生多余 IPC。
+
+**验证方式是真机，不是推断**：`tests/tools-e2e.mjs` 加了第 7 步 —— 收起面板后轮询
+`window.beings.tools.state()`，要求 `browser.visible` 变 `false`，再打开要求变回 `true`。
+把两处 `detachView()` 注释掉重新打包，该步骤**如期失败**（`原生视图未在 10 秒内从窗口分离`）；
+恢复后通过。另加一条 vitest 用例（`tools-integration-model`）。
+
+### medium · 失败重试是无节流死循环
+
+**证实，已修。** 两个原因叠加：`useLayoutEffect(send)` 没有依赖数组，每次渲染都跑；
+失败分支把 `lastViewport` 清空 + `fail()` → `changed()` → `AppModel` 版本自增 → 整树重渲染 → 再发。
+持续失败态是真的（退出期 `beings:tools-browser-view` 恒被拒绝）。
+
+修法两层：
+
+- **渲染驱动的那一路也走 rAF**：`browser-bar.tsx` 把 rAF 合并从 `useEffect` 内部提到组件级
+  （`frame` 用 `useRef`），`useLayoutEffect(layout)`、观察者、`resize`、`visibilitychange` 四条路共用，
+  与 0.8.26 的 `layout()` 一致（每帧至多一次）。
+- **重试有上限**：`VIEWPORT_RETRIES = 3`。同一个矩形最多重发 3 次；矩形真的变了就是新预算；
+  一次成功清零。错误只在一段失败的第一次 `fail()`（`fail()` 会触发重渲染，是循环的另一半）。
+  **这是本单元唯一一处刻意不与 0.8.26 逐行一致的行为**，理由写在常量的注释里。
+
+未改 `app/ipc.ts` 的 `QUIT_ALLOWED`（共享文件，且要与 I0 协商）；上限已经让退出期的代价封顶在 3 条。
+
+### medium · `tests/tools-e2e.mjs` 没有运行入口
+
+**证实，已修。** `scripts/test-all.mjs` 末尾加一行
+`await step('tools-e2e', process.execPath, ['tests/tools-e2e.mjs']);`（在 `browser-e2e` 之后，
+因为它要打包产物）。`package.json` 本单元不可改，所以没有 `test:tools` 脚本 —— 列进 openIssues。
+
+方案 §3.2 第 719 行写的是「扩写既有 `tests/browser-e2e.mjs`」，**本单元没有照做，理由**：
+`browser-e2e.mjs` 驱动的是**外壳浏览器**（`ClientBrowser`），按 §5.6 两个浏览器分区不同、可见区域不共用，
+把工具面板的断言塞进去会让一个脚本同时断言两套 UI；而 §6.2 与附录第 1197 行本来就把
+`tests/tools-e2e.mjs` 列为 I2 的产出。所以覆盖放在自己的脚本里，并真的接进流水线。
+
+### low · MIGRATION.md 追加了 6 行
+
+**已改成 1 行**（只剩数据行，落在文件末尾）。表头 / 章节标题留给合并者补一份，
+否则五个 worktree 会各造一份。**副作用**：在表头补上之前，这一行会被 markdown 当成上一个列表项的
+延续文本渲染 —— 合并时补 `## 集成阶段：各单元记录` + 空行 + 表头即可。
+
+### low · 没有任何测试跑过真实的 `INSTALLERS`
+
+**证实，已补。** `tests/tools-integration-ipc.test.ts` 末尾加一条：用 `installDesktopExtensions`
+跑真实列表，断言注册的通道集合**无重复**、且全部以 `beings:` 开头。
+断言的是「无重复」而不是全集，所以后续单元 append 自己的 installer 时不必改这个文件。
+（`ipcMain.handle` 第二次注册同名通道直接抛，只有真机启动才会暴露 —— 现在有了自动检查点。）
+
+### low · 工作区变更不推快照
+
+**证实，已修。** `subsystems/tools.ts` 记住上一次的 `currentWorkspace()`，
+在 `connectionVerified()` 里**先于身份守卫的 early return** 比对，不同就 `tools.changed()`。
+`beings:save` 走的正是 `verifyConnection → connectionVerified`，所以这是本壳层唯一能接到工作区变更的钩子。
+安装成功后用当前值初始化，第一次 verify 不会误判成变更。新增一条用例。
+
+### low · `desktop/shared/types.ts` 追加了 3 行
+
+**已改成 2 行**（import 一行 + 成员一行，去掉文档注释），与其余五个接缝一致。
+
+### low · `tools/security.ts` 与两处文件头
+
+- `tools/security.ts`：**保留**，但把「I2 实测结论」写进文件头 ——
+  工具浏览器加载的是远程 http(s)，壳层唯一的本地文档是 `beings://desktop`，由 `app/protocol.ts`
+  自己做过检查的 join，**本单元用不到 `protocolFile`**。不删的理由：
+  `tests/tools-security.test.ts` 是一条真实的目录穿越守卫测试，而 I3 看不到本分支、无法表态。
+  留给 I3 落地后再判断。
+- `tools/browser-links.ts` 文件头补了「另一套地址解析在 `browser/url.ts`」及两者规则的差别；
+  `browser/url.ts` **原本没有文件头**，现在有了，反向指回 `tools/browser/browser.ts` 的
+  `normalizeBrowserUrl` 与 `tools/browser-links.ts`。两处互相引用，§3.2 的这一项补齐。
+
+### 第二轮的门槛
+
+- `npm run typecheck`：通过。
+- `npx vitest run`：**1122 通过 / 58 跳过**（第一轮 1118/58 + 本轮 4 条：
+  model 2 条、ipc 2 条；skip 一条没增没减）。
+- **打包冒烟（真机，darwin-arm64，2026-09-16）**：`resources/heart-portal` 用 clang 编的 stub
+  （`--version` 打印版本号，`writeRuntimeBundle` 要读），
+  `PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package` 成功
+  （**注意：打包必须绕开代理**，否则 `Copying files` 阶段 TLS 断开），
+  ad-hoc 重签后 `node tests/tools-e2e.mjs` → PASS（含新的第 7 步）；
+  `node tests/browser-e2e.mjs` → PASS（外壳浏览器未受影响）。
+  asar 内 `/node_modules/ws/**` 20 个条目。
+
