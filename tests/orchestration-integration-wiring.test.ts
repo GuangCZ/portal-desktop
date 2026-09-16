@@ -66,7 +66,9 @@ interface ToolsStub {
   connectLink?(): Promise<unknown>;
 }
 
-async function fixture({ tools = null as ToolsStub | null, workspace = "" } = {}) {
+async function fixture({ tools = null as ToolsStub | null, workspace = "", address = "" } = {}) {
+  // `address` is the profile a client is launched with: a saved connection,
+  // present before anything has been verified against the Being.
   const directory = await mkdtemp(path.join(os.tmpdir(), "orchestration-wiring-test-"));
   const calls: string[] = [];
   const fetchImpl = (async (url: string) => {
@@ -86,8 +88,8 @@ async function fixture({ tools = null as ToolsStub | null, workspace = "" } = {}
   const webContents = { mainFrame, isDestroyed: () => false, send: (channel: string, payload: unknown) => { pushes.push({ channel, payload }); } };
   const window = { isDestroyed: () => false, webContents };
   const store = {
-    connection: null as Connection | null,
-    connectionAddress: "",
+    connection: (address ? CONNECTION : null) as Connection | null,
+    connectionAddress: address,
     settings: { projectWorkspace: workspace } as unknown as Settings,
     extras: {} as Record<string, unknown>,
     saveExtra: async (patch: Record<string, unknown>) => { Object.assign(saved, patch); },
@@ -188,6 +190,35 @@ test("the subsystem registers its channels and answers the snapshot before any B
     // Never assigned yet: the policy publishes through `onChange`, and nothing
     // has been checked, so the snapshot says exactly that.
     expect(snapshot.enforcement).toEqual({ status: "unchecked" });
+  } finally { await f.cleanup(); }
+});
+
+test("the callback transport waits for the connection to be VERIFIED, not merely saved", async () => {
+  // BeingDesktop src/main.cjs line 174: `ready` is `Boolean(connection) &&
+  // state.connection.status === 'connected'`. A profile whose Being is
+  // unreachable has the first and not the second, and 0.8.26 sends nothing until
+  // the check passes.
+  //
+  // `pump()` is what this gates (orchestration/worker-callbacks.ts line 160). On
+  // a cold start the manager has just restored every worker from disk and handed
+  // the unnotified ones back to the callbacks, so a `ready` that is true too
+  // early POSTs each of them at once, counts the attempts against the worker and
+  // writes「完成通知未送达，将自动重试」into details that were fine.
+  const f = await fixture({ address: ADDRESS });
+  try {
+    const callbacks = f.subsystem().orchestration.callbacks;
+    await f.extensions.ready; await settle();
+    expect(f.store.connectionAddress).toBe(ADDRESS);
+    expect(callbacks.ready()).toBe(false);
+
+    f.extensions.connectionVerified(f.store.connection!);
+    await f.extensions.ready; await settle();
+    expect(callbacks.ready()).toBe(true);
+
+    // And it stops again at shutdown: a notification the client will not be alive
+    // to finish is worse than one that waits for the next launch.
+    await f.extensions.quitting();
+    expect(callbacks.ready()).toBe(false);
   } finally { await f.cleanup(); }
 });
 

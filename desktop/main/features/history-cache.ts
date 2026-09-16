@@ -26,6 +26,7 @@
 // composition root and a cached copy here would be one notification behind.
 
 import { FeatureTaskHistory } from './feature-task-history';
+import { SESSION_CHANGED } from './methods';
 import { normalizeTownSyncRecords } from './town-sync';
 import type { FeatureTaskLedger, FeatureTasksEvent, NormalizeTownSyncRecords, SafeStorageLike, TownSyncRecord } from './types';
 
@@ -139,7 +140,10 @@ export class FeatureHistoryCache {
       this.opened.add(history);
     }
     await history.restore();
-    if (this.identity() !== identity) throw sessionChanged('连接身份已变化，请重新读取功能任务。');
+    // The same constant the「功能任务」channels refuse with, not a second copy of
+    // the sentence: this is the only place that raises it in production, so a
+    // literal here would leave the wording the user actually sees untested.
+    if (this.identity() !== identity) throw sessionChanged(SESSION_CHANGED.restore);
     this.history = history;
     this.owners.set(history.ledger, history);
     this.syncRecords = history.records;

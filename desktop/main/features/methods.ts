@@ -36,6 +36,12 @@ export interface FeatureMethodsOptions {
   ledger: () => FeatureTaskLedger | null;
   /** main.ts's mutation queue, this shell's `mutationTail`. */
   exclusive: <T>(operation: () => Promise<T>) => Promise<T>;
+  /** BeingDesktop's `exitStarted` (src/main.cjs line 730), re-read AFTER the
+   * mutation queue hands the turn over. `ctx.handle`'s quitting guard covers only
+   * the moment the call arrives, and a serialized body waits behind every other
+   * mutation — shutdown normally starts while one is queued. Optional: a caller
+   * that has no shutdown of its own is not made to invent one. */
+  exiting?: () => boolean;
 }
 
 export interface FeatureMethodOptions {
@@ -61,7 +67,12 @@ export const SESSION_CHANGED = {
   queued: '连接身份已变化，请重新选择功能。',
 } as const;
 
-export function createFeatureMethods({ runner, current, ledger, exclusive }: FeatureMethodsOptions) {
+/** BeingDesktop says「桌面端正在退出。」here (src/main.cjs line 730). This shell
+ * calls itself 客户端 and already refuses queued calls with this exact sentence
+ * in `app/ipc.ts`; the same condition should not have two names. */
+export const EXITING = '客户端正在退出，请稍候。';
+
+export function createFeatureMethods({ runner, current, ledger, exclusive, exiting }: FeatureMethodsOptions) {
   return {
     /**
      * Run one「功能任务」channel's body under the ledger.
@@ -78,6 +89,10 @@ export function createFeatureMethods({ runner, current, ledger, exclusive }: Fea
         if (!serialized) return body();
         const owner: FeatureTaskOwner | null = runner.currentTask();
         return exclusive(async () => {
+          // Both checks are re-read here, in the source's order (src/main.cjs
+          // lines 730-731): what was true when the call arrived says nothing
+          // about what is true when the queue gets to it.
+          if (exiting?.()) throw new Error(EXITING);
           if (owner && owner.ledger !== ledger()) throw sessionChanged(SESSION_CHANGED.queued);
           return body();
         });

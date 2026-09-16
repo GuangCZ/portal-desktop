@@ -100,6 +100,9 @@
 .ft-button{font:inherit;border:0;background:transparent;color:var(--accent);cursor:pointer;padding:3px 0}
 .ft-button:disabled{color:var(--muted);cursor:default}
 .ft-secondary,.ft-quiet{font-size:11px}
+/* The feature-page action of a `needs_input` task: it is the one thing the user
+   has to do, so it is not the same weight as the others. */
+.ft-primary{font-weight:600}
 .ft-task{display:grid;gap:4px;width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--control);color:var(--text);text-align:left}
 .ft-task.is-selected{border-color:var(--accent)}
 .ft-task-top{display:flex;align-items:center;gap:8px}

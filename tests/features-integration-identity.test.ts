@@ -27,7 +27,8 @@ import { createTrustedHandle } from "../desktop/main/app/ipc";
 import { beingIdentityKey } from "../desktop/main/chat/connection";
 import { installSubsystems, type DesktopExtensionsContext } from "../desktop/main/extensions";
 import { installOrchestrationSubsystem, type OrchestrationSubsystem } from "../desktop/main/subsystems/orchestration";
-import { SESSION_CHANGED } from "../desktop/main/features/methods";
+import { EXITING, SESSION_CHANGED, createFeatureMethods } from "../desktop/main/features/methods";
+import { FeatureTaskRunner } from "../desktop/main/features/feature-task-runner";
 import { publicErrorMessage } from "../desktop/shared/errors";
 import type { Connection } from "../desktop/main/chat/connection";
 import type { FeatureTaskContext } from "../desktop/main/features/types";
@@ -140,6 +141,80 @@ test("switching Beings empties the list first, then opens that Being's own ledge
     // Going back reopens the first Being's ledger with its row still in it.
     await f.connect(FIRST);
     expect((await f.invoke("beings:feature-tasks", {}) as any).tasks).toHaveLength(1);
+  } finally { await f.cleanup(); }
+});
+
+test("a rolled-back save leaves the manager and the ledger on the same Being", async () => {
+  const f = await fixture();
+  try {
+    await f.connect(FIRST);
+    // main.ts's `beings:save`, on the path its own comment calls an ordinary one
+    // (lines 449-469): `verifyConnection()` announces the Being being switched
+    // TO, the takeover then fails, the store is rolled back and the previous
+    // Being is announced again. Neither announcement is awaited — and
+    // `Orchestration.selectOwner` decides "already there?" synchronously but
+    // commits the new owner only after `stopAll()` and `flush()` have awaited.
+    // Unless the two are serialized, the FIRST call commits LAST: the manager
+    // ends up holding the Being the user was just refused, while the store, the
+    // ledger and the session partition all say the previous one.
+    f.store.connection = SECOND; f.store.connectionAddress = SECOND.link;
+    f.extensions.connectionVerified(SECOND);
+    f.store.connection = FIRST; f.store.connectionAddress = FIRST.link;
+    f.extensions.connectionVerified(FIRST);
+    await f.extensions.ready; await settle();
+
+    // What every worker completion is checked against (`sessionPartition(...)
+    // !== owner` in orchestration/worker-callbacks.ts): an owner that disagrees
+    // with the connection refuses all of them and retries forever.
+    expect(f.subsystem().orchestration.owner).toBe(beingIdentityKey(FIRST.link));
+    expect(f.subsystem().histories.identity()).toBe(beingIdentityKey(FIRST.link));
+    expect(f.subsystem().histories.currentIdentity()).toBe(true);
+    expect(f.errors).toEqual([]);
+
+    // And the same holds for the plain switch, where the second announcement is
+    // the one that should win.
+    f.store.connection = SECOND; f.store.connectionAddress = SECOND.link;
+    f.extensions.connectionVerified(SECOND);
+    f.extensions.connectionVerified(SECOND);
+    await f.extensions.ready; await settle();
+    expect(f.subsystem().orchestration.owner).toBe(beingIdentityKey(SECOND.link));
+    expect(f.subsystem().histories.currentIdentity()).toBe(true);
+  } finally { await f.cleanup(); }
+});
+
+test("a serialized call that was waiting on the queue when shutdown began is refused", async () => {
+  // BeingDesktop src/main.cjs line 730 re-reads `exitStarted` AFTER the mutation
+  // queue hands the turn over, and before it compares the ledger. The shell's own
+  // quitting guard (app/ipc.ts) only covers the moment the call arrives, which is
+  // the wrong moment: a serialized body waits behind every other mutation, and
+  // shutdown normally begins while one is queued.
+  let exiting = false;
+  let release!: () => void;
+  const queue = new Promise<void>(resolve => { release = resolve; });
+  const methods = createFeatureMethods({
+    // `discussFeatureTask` has no ledger definition, so the runner passes it
+    // straight through — which is what it does in the client too.
+    runner: new FeatureTaskRunner({ getLedger: () => { throw new Error("no ledger in this fixture"); } }),
+    current: () => true, ledger: () => null,
+    exclusive: operation => queue.then(operation),
+    exiting: () => exiting,
+  });
+  let ran = false;
+  const pending = methods.run([], { operation: "discussFeatureTask", serialized: true }, () => { ran = true; });
+  exiting = true;
+  release();
+  await expect(pending).rejects.toThrow(EXITING);
+  expect(ran).toBe(false);
+});
+
+test("the subsystem wires that guard to its own shutdown", async () => {
+  const f = await fixture();
+  try {
+    await f.connect(FIRST);
+    await f.extensions.quitting();
+    // Reached through the real channel: `beings:feature-task-discuss` is the one
+    // 0.8.26 lists as「串行」(src/main.cjs line 134).
+    await expect(f.invoke("beings:feature-task-discuss", "x")).rejects.toThrow(EXITING);
   } finally { await f.cleanup(); }
 });
 

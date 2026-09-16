@@ -101,6 +101,9 @@ export function installOrchestrationSubsystem(ctx: SubsystemContext, deps: Orche
   let generation = 0;
   let bound = '';
   let closed = false;
+  /** BeingDesktop's `state.connection.status === 'connected'`: the address has
+   * been checked against the Being, not merely saved (src/main.cjs line 174). */
+  let verified = false;
 
   // ── The tool bridge, always through the registry ────────────────────────────
   // The tool-bridge subsystem's key is declared by its own file, which is not in
@@ -163,7 +166,12 @@ export function installOrchestrationSubsystem(ctx: SubsystemContext, deps: Orche
       getConnection: connection, getTarget: () => capabilities()?.place,
       fetchImpl: ctx.electron.net.fetch, parseConnection, sessionPartition,
     }),
-    ready: () => !closed && Boolean(bound),
+    // BeingDesktop src/main.cjs line 174: a saved address is not enough. Without
+    // `verified`, a profile that has an address but an unreachable Being pumps
+    // the callback queue on the first tick after launch — POSTing completion
+    // notifications for every worker restored from disk, counting the attempts,
+    // and writing「完成通知未送达，将自动重试」into details that were fine.
+    ready: () => !closed && verified && Boolean(bound),
     toolsReady: () => capabilities()?.tools?.includes('desktop_worker_status') === true,
     // BeingDesktop has two delivery paths here (src/main.cjs lines 171-176): the
     // native sessions object, and `deliverWorkerReview` inside the Loom document.
@@ -205,6 +213,10 @@ export function installOrchestrationSubsystem(ctx: SubsystemContext, deps: Orche
     current: () => histories.currentIdentity(),
     ledger: () => histories.ledger,
     exclusive: ctx.exclusive,
+    // BeingDesktop's `exitStarted` (src/main.cjs line 730). `ctx.handle`'s own
+    // quitting guard only runs before the call is queued; shutdown usually
+    // begins while something is already waiting on the mutation queue.
+    exiting: () => closed,
   });
   let prepareDraft: PrepareFeatureTaskDraft | null = null;
 
@@ -244,13 +256,46 @@ export function installOrchestrationSubsystem(ctx: SubsystemContext, deps: Orche
     await orchestration.inspect().catch(error => report('orchestration-inspect', error));
   });
 
+  // ── Rebinding is serialized ─────────────────────────────────────────────────
+  // `Orchestration.selectOwner` is not atomic: it answers "already there?"
+  // synchronously but commits `this.owner` only after `presentation.dispose()`,
+  // `stopAll()` and `flush()` have each awaited. Two overlapping calls therefore
+  // interleave, and the one that started FIRST can commit LAST.
+  //
+  // `beings:save` reaches exactly that: main.ts's `verifyConnection()` announces
+  // the new Being, the takeover then fails — an ordinary path, as the comment
+  // there says — the store rolls back, and the previous Being is announced
+  // again. The second call sees `this.owner` still holding the previous identity
+  // and returns immediately, after which the first one finishes and leaves the
+  // manager pointed at the Being that was just rejected. The store, the ledger
+  // and the session partition all say otherwise, so every worker completion is
+  // refused by `sessionPartition(connection) !== owner` and retried forever.
+  //
+  // BeingDesktop has no such window: connect, disconnect and reconnect are all
+  // in its `serialized` set (src/main.cjs line 136), so `selectOwner` only ever
+  // runs on `mutationTail`. This queue is that one, kept inside the subsystem
+  // rather than on `ctx.exclusive` because `connectionVerified` is itself called
+  // from inside main.ts's `exclusive` and would deadlock on it.
+  let queue: Promise<void> = Promise.resolve();
+
   /** The identity half of both `connect()` and `restore()`: point the manager at
-   * the current Being's worker history, then load that Being's ledger. */
-  async function bind(): Promise<void> {
-    const next = identity();
-    if (next !== bound) { bound = next; generation++; }
-    await orchestration.selectOwner(next);
-    await histories.load();
+   * the current Being's worker history, then load that Being's ledger.
+   *
+   * `target` is read when the turn actually starts rather than when it is queued,
+   * so the last announcement wins however the store moved while waiting. */
+  function bind(target?: string): Promise<void> {
+    const run = async (): Promise<void> => {
+      if (closed) return;
+      const next = target ?? identity();
+      if (next !== bound) { bound = next; generation++; }
+      await orchestration.selectOwner(next);
+      await histories.load();
+    };
+    // `then(run, run)`: a bind that failed must not stop the next one, and the
+    // tail is kept settled so the queue can never be poisoned.
+    const next = queue.then(run, run);
+    queue = next.then(() => {}, () => {});
+    return next;
   }
 
   return {
@@ -261,20 +306,23 @@ export function installOrchestrationSubsystem(ctx: SubsystemContext, deps: Orche
     setDraftPreparer(prepare) { prepareDraft = prepare; },
     connectionVerified() {
       if (closed) return;
+      verified = true;
       // Fire and forget, like the chat subsystem: this runs inside main.ts's
       // `verifyConnection`, which is already inside `exclusive`, so awaiting the
       // queue here would deadlock and a slow disk read would hold up startup.
+      // Ordering is the queue's job, not the caller's (see `bind` above).
       ready = bind().catch(error => { if (!closed) report('orchestration-bind', error); });
     },
     async connectionCleared() {
-      generation++;
-      bound = '';
-      await orchestration.selectOwner('');
-      await histories.load().catch(error => report('orchestration-cleared', error));
+      verified = false;
+      // Same queue as `bind`: clearing races a verification exactly the way two
+      // verifications race each other.
+      await bind('').catch(error => report('orchestration-cleared', error));
     },
     async quitting() {
       if (closed) return;
       closed = true;
+      verified = false;
       // Stop the CLIs first: a worker still writing events would dirty the
       // history again after it was flushed.
       await orchestration.dispose().catch(error => report('orchestration-dispose', error));

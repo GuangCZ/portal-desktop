@@ -48,7 +48,10 @@ export const EVENT_LABEL: Record<string, string> = {
 export const ACTIVE = ["starting", "running", "queued", "stopping"];
 export const isActive = (worker: { status: string }): boolean => ACTIVE.includes(worker.status);
 
-const COLLAPSED_KEY = "beings:worker-groups-collapsed";
+/** renderer/orchestration.js line 11, verbatim. The renderer's origin differs
+ * from 0.8.x's, so nothing migrates either way; the key is the source's because
+ * there is no reason for it not to be. */
+const COLLAPSED_KEY = "being.workerGroups.collapsed";
 
 /** The two methods the collapse state needs of `localStorage`. */
 export interface CollapseStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }

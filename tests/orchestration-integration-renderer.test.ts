@@ -126,6 +126,10 @@ describe("the worker list", () => {
     expect(model.isCollapsed(SESSION)).toBe(false);
     model.toggleGroup(SESSION);
     expect(model.isCollapsed(SESSION)).toBe(true);
+    // Under the source's own key (renderer/orchestration.js line 11). The origins
+    // differ, so nothing migrates either way — but a key that drifts by accident
+    // is a restart that silently forgets, and this is what says which one it is.
+    expect([...kept.keys()]).toEqual(["being.workerGroups.collapsed"]);
     // A second model reads the same storage, which is what "across a restart"
     // means for a renderer.
     expect(new OrchestrationModel(f.api, storage).isCollapsed(SESSION)).toBe(true);

@@ -48,6 +48,32 @@ export const canEnd = (task: FeatureTask | undefined | null): boolean =>
   Boolean(task && (["waiting", "needs_input"].includes(task.status)
     || (task.status === "running" && task.requestId && task.execution === "being" && READABLE.includes(task.feature))));
 
+/** The detail's execution line (renderer/feature-tasks.js line 100). The three
+ * branches are three different promises to the user, so which one is shown
+ * matters more than it looks.
+ *
+ *「使用 Being」is the warning that the operation shares the chat queue. */
+export const usesBeing = (task: Pick<FeatureTask, "execution" | "mayDelayChat">): boolean =>
+  task.execution === "being" || task.mayDelayChat === true;
+
+export const executionLabel = (task: Pick<FeatureTask, "execution" | "mayDelayChat">): string => {
+  if (usesBeing(task)) return "使用 Being，聊天可能等待";
+  // `native` is the source's spelling for the same thing as `local` and is kept
+  // for the same reason it has it: defensively. It is unreachable through this
+  // client's own ledger — `FeatureTaskLedger.begin` rejects any execution outside
+  // ['being','local'] and `restore()` DROPS a stored row with one (see
+  // main/features/feature-tasks.ts lines 115 and 214, and BeingDesktop's
+  // src/feature-tasks.cjs lines 83 and 182) — so no archive can produce it.
+  const execution: string = task.execution;
+  return execution === "local" || execution === "native" ? "本机执行" : "执行方式待确认";
+};
+
+/** The feature-page action (source line 116). `needs_input` is the primary one:
+ * the task is stopped until the user decides something, and the place to decide
+ * it is the feature's own page. */
+export const navigateLabel = (task: Pick<FeatureTask, "status">): string =>
+  task.status === "needs_input" ? "到功能页处理" : "打开功能页";
+
 /** renderer/feature-tasks.js line 9. */
 export const taskError = (error: unknown): string =>
   String((error as Error | null)?.message || "")
@@ -79,10 +105,24 @@ export class FeatureTasksModel extends Store {
   draftReady = "";
   ending = "";
   trackingError: { id: string; message: string } | null = null;
+  /** Set by whichever unit owns the feature pages; see `setNavigate`. */
+  navigate: ((feature: string, task: FeatureTask) => void) | null = null;
   private sequence = 0;
   private stopped = false;
 
   constructor(private readonly api: DesktopAPI) { super(); }
+
+  /**
+   * Install「打开功能页 / 到功能页处理」(renderer/feature-tasks.js line 116).
+   *
+   * BeingDesktop's page is mounted by the shell that owns every feature page, so
+   * it is simply handed `onNavigate`. Here the pages are spread across
+   * integration units — Town is I1, Portal and Channel are I7 — and none of them
+   * exists in this worktree, so the destination is injected instead of imported.
+   * Until one calls this, the button is not drawn: an action that goes nowhere is
+   * worse than no action, and a `needs_input` task still says what it needs.
+   */
+  setNavigate(handler: ((feature: string, task: FeatureTask) => void) | null) { this.navigate = handler; this.changed(); }
 
   start(): () => void {
     this.stopped = false;

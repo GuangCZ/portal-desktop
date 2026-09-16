@@ -15,7 +15,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  FEATURE_NAMES, FeatureTasksModel, TASK_FILTERS, TASK_STATUS, canEnd, taskError,
+  FEATURE_NAMES, FeatureTasksModel, TASK_FILTERS, TASK_STATUS, canEnd, executionLabel,
+  navigateLabel, taskError,
 } from "../desktop/renderer/features/models/feature-tasks";
 import type { DesktopAPI } from "../desktop/shared/types";
 import type { FeatureTask, FeatureTasksState } from "../desktop/shared/desktop-types";
@@ -168,6 +169,37 @@ describe("the feature-task page", () => {
     f.reply.end = null;
     await model.endTracking("a");
     expect(model.trackingError).toBeNull();
+  });
+
+  it("says how a task is executed, in the source's three branches", () => {
+    // Three different promises to the user, so which one is shown matters:
+    //「使用 Being」is the warning that the operation shares the chat queue.
+    expect(executionLabel(task("a"))).toBe("使用 Being，聊天可能等待");
+    expect(executionLabel(task("a", { execution: "local", mayDelayChat: true }))).toBe("使用 Being，聊天可能等待");
+    expect(executionLabel(task("a", { execution: "local", mayDelayChat: false }))).toBe("本机执行");
+    // `native` is the source's other spelling for a local run
+    // (renderer/feature-tasks.js line 100). It cannot arrive through this
+    // client's ledger — `begin` rejects it and `restore()` drops a stored row
+    // carrying it — but a task that has already run here must never be described
+    // as「执行方式待确认」, so the branch is kept rather than dropped.
+    expect(executionLabel({ execution: "native" as never, mayDelayChat: false })).toBe("本机执行");
+    expect(executionLabel({ execution: "" as never, mayDelayChat: false })).toBe("执行方式待确认");
+  });
+
+  it("offers the feature page only when the shell has somewhere to send the user", () => {
+    const f = harness();
+    const model = new FeatureTasksModel(f.api);
+    // No destination, no button: the feature pages belong to other integration
+    // units, and an action that goes nowhere is worse than no action.
+    expect(model.navigate).toBeNull();
+    const went: [string, string][] = [];
+    model.setNavigate((feature, item) => { went.push([feature, item.id]); });
+    model.navigate!("bonfire", task("a"));
+    expect(went).toEqual([["bonfire", "a"]]);
+    // `needs_input` is the one the user has to act on, and the source says so in
+    // the label (renderer/feature-tasks.js line 116).
+    expect(navigateLabel(task("a"))).toBe("打开功能页");
+    expect(navigateLabel(task("a", { status: "needs_input" }))).toBe("到功能页处理");
   });
 
   it("ignores a reply from a read that a later one replaced", async () => {

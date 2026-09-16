@@ -7,7 +7,7 @@
 // queue;「结束本地跟踪」says in its own hint that the Being keeps going; the
 // persistence notice says the work ran even though the record may not survive.
 import {
-  FEATURE_NAMES, TASK_FILTERS, TASK_STATUS, canEnd, taskTime,
+  FEATURE_NAMES, TASK_FILTERS, TASK_STATUS, canEnd, executionLabel, navigateLabel, taskTime, usesBeing,
 } from "../models/feature-tasks";
 import type { FeatureTasksModel } from "../models/feature-tasks";
 import type { FeatureTask } from "../../../shared/desktop-types";
@@ -83,9 +83,7 @@ export function FeatureTasksPanel({ model }: { model: FeatureTasksModel }) {
 }
 
 function Detail({ model, task }: { model: FeatureTasksModel; task: FeatureTask }) {
-  const usesBeing = task.execution === "being" || task.mayDelayChat === true;
-  const execution = usesBeing ? "使用 Being，聊天可能等待"
-    : task.execution === "local" ? "本机执行" : "执行方式待确认";
+  const being = usesBeing(task);
   const heading = task.status === "needs_input" ? "需要你决定"
     : task.status === "failed" ? "未完成的原因"
       : task.status === "succeeded" ? "结果" : "当前进展";
@@ -107,7 +105,7 @@ function Detail({ model, task }: { model: FeatureTasksModel; task: FeatureTask }
           {TASK_STATUS[task.status] || "状态待确认"}
         </span>
       </div>
-      <p className={`ft-execution${usesBeing ? " ft-execution-being" : ""}`}>{execution}</p>
+      <p className={`ft-execution${being ? " ft-execution-being" : ""}`}>{executionLabel(task)}</p>
       <div className="ft-result">
         <h4>{heading}</h4>
         <p className={task.status === "failed" ? "ft-error" : undefined}>{task.summary || task.detail || fallback}</p>
@@ -119,6 +117,13 @@ function Detail({ model, task }: { model: FeatureTasksModel; task: FeatureTask }
           .map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
       </dl>
       <div className="ft-detail-actions">
+        {model.navigate && task.feature && (
+          <button type="button" data-action="navigate"
+            className={`ft-button ${task.status === "needs_input" ? "ft-primary" : "ft-secondary"}`}
+            onClick={() => model.navigate?.(task.feature, task)}>
+            {navigateLabel(task)}
+          </button>
+        )}
         <button type="button" className="ft-button ft-secondary" data-action="discuss"
           title="把相关结果放入聊天输入框，编辑后由你发送"
           disabled={Boolean(model.drafting) || (!task.summary && !task.detail)}
