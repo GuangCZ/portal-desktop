@@ -274,7 +274,9 @@ initial `state = {status:'unchecked', scope:'desktop', detail:'本机工具绑�
   (string values without NUL only). `WINDOWS_RUNNER` is the large PowerShell job-object script owned by DesktopTerminal (another unit) — injected here.
 - `src/desktop-identity.cjs` — `validDesktopId(v)` = string matching UUIDv4 `/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i`;
   `desktopPortalName(id)` throws `'Desktop 身份无效。'` for an invalid id, else `'being-desktop-tools-' + id.toLowerCase()`. Injected into OrchestrationPolicy.
-- `src/security.cjs#parseConnection(url)` / `#sessionPartition(connection)` — injected into the callback/continuation senders.
+- `src/security.cjs#parseConnection(url)` -> `{url, apiBase, token, secret, displayUrl, beingName}` (HTTPS or loopback HTTP only;
+  `api` query overrides the API base but must share the origin). `#sessionPartition(connection)` ->
+  `` `persist:loom-<V>-<sha256([V,displayUrl,apiBase,token,secret]).slice(0,32)>` ``. Both are injected into the callback/continuation senders.
 
 ### src/worker-callbacks.cjs (218 lines)
 
