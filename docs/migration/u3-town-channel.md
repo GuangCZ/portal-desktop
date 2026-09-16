@@ -209,3 +209,19 @@ TownPairing 的 5 个用例（全部移植）：
 - fetchImpl：`/active` → `active()`；否则若有 `response` 用它；否则从 body 取 `scene_id`，默认帧 `[['meta',{scene_id}],['text',{text:'AB0'}],['text',{text:'1XY'}],['done',{}]]`，拼成 `event: X\ndata: {...}\n\n` 的 `text/event-stream` Response。
 - `switch()`：context → `{revision: 2, connection: 'https://echo.example/bob?token=other'}` 并 `pairing.reset()`。
 - `json(value, status=200)`、`tick = () => new Promise(r => setImmediate(r))`。
+
+### src/town.cjs 补充细节（逐行移植必需）
+- `requireCurrentContext(getContext, expected)`：`contents = current.view?.webContents`；`exiting || !connection || !configured || status !== 'connected' || !contents || contents.isDestroyed()` → `'请先连接并等待 Loom 会话加载完成。'`；expected 存在且 generation/revision/view/connection 任一不同 → `'Loom 会话已变化，请重新选择 Town 功能。'`；`contents.isLoadingMainFrame()` → `'Loom 页面正在加载，请稍后重试。'`；返回 current。
+- `requireCurrentFrame(contents, frame)`：`!frame || frame.isDestroyed() || frame.detached || contents.mainFrame !== frame` → `'Loom 页面已变化，请重新选择 Town 功能。'`。
+- `prepareLoomDraft(prompt, getContext)` 步骤：
+  1. `initial = requireCurrentContext(getContext)`；`expected = new URL(initial.connection.displayUrl)`；`contents = initial.view.webContents`；`frame = contents.mainFrame`；`requireCurrentFrame`。
+  2. `currentUrl = new URL(contents.getURL())`；`normalizedPath = v => v.replace(/\/+$/,'')`；origin 或规范化 pathname 不符 → `'当前页面不是已连接的 Loom 会话。'`。
+  3. `identity = {origin, path}`；再 `requireCurrentContext(getContext, initial)` + `requireCurrentFrame`。
+  4. `frame.executeJavaScript(...)` 取/写 `document.documentElement.dataset.beingDesktopTownDocument`（`crypto.randomUUID()`），异常 → `'无法确认 Loom 当前文档，请检查会话后重试。'`。
+  5. 再校验两次；`documentId` 非 string 或不匹配 `DOCUMENT_ID_PATTERN`（UUID v4）→ 同一条文案。
+  6. `input = JSON.stringify({prompt, ...identity, documentId})`；第二段脚本同步校验 marker + `#app`/`#messages`/`#input-row`/`#input`(TEXTAREA)/`#send-btn` 的包含关系与 disabled/readOnly，返回 `'wrong_document' | 'missing_input' | 'existing_draft' | 'prepared'`；异常 → `'无法填入 Loom 草稿，请检查会话后重试。'`。
+  7. 再校验两次；`existing_draft` → `'Loom 中已有草稿，已保留原文；请先发送或清空后再选择此功能。'`；非 `prepared` → `'未找到可用的 Loom 输入框，草稿未填入。'`；成功返回 `{prepared:true}`。
+- `prepareTownFeature(id, getContext)` = `prepareLoomDraft(fixedDraft(id), getContext)`。
+- `prepareTownAssistance(value, getContext)`：严格 1 字段 `{operation}`（data descriptor），且 `ASSISTANCE.has(operation)`，否则 `'请选择有效的 Being 协助操作。'`。
+- `prepareFiresideDraft(value, getContext)`：严格 2 字段 `{draft, connectionRevision}`；`draft` 为非空 string 且 ≤32000；`connectionRevision` 为 `Number.isSafeInteger` 且 ≥0；否则 `'请填写有效的围炉协助草稿。'`。随后 `requireCurrentContext(getContext)`；`context.generation !== connectionRevision` → `'连接身份已变化，草稿未转交，请在当前身份下重新确认。'`；前缀文案见源码第 166 行。
+- 注入化方案：`WebContentsLike { isDestroyed(); isLoadingMainFrame(); getURL(); mainFrame }`、`WebFrameLike { isDestroyed(); detached; executeJavaScript(code) }`，不 import electron。
