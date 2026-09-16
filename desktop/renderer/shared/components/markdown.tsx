@@ -270,7 +270,18 @@ export const Markdown = memo(function Markdown({
           const link = token as Tokens.Link,
             href = safeLink(unescapeText(link.href)),
             target = onPlace ? placeFromURL(link.href) : null;
-          node = (
+          // In a conversation a link is shown as text with its address in the
+          // title, as 0.8.26 did (renderer/chat-app.js line 60 and `inline`'s
+          // fourth group; test/chat-conversation-ui.cjs line 88 asserts both the
+          // `.chat-link` title and that no `<a>` exists). The visible words of a
+          // link the Being wrote are not the address behind them, and one click
+          // would load that address in the client's own browser. A place link is
+          // navigation inside this window, not a fetch, so it stays a link.
+          node = chat && !target ? (
+            <span className="chat-link" title={unescapeText(link.href)}>
+              {render(link.tokens, false)}
+            </span>
+          ) : (
             <a
               href={href}
               title={

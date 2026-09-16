@@ -91,6 +91,10 @@
 .chat-body table{display:table;margin:0}
 .chat-body .chat-place-link,.chat-body .chat-code-link{display:inline;padding:0;color:var(--accent);font:inherit;line-height:inherit;background:none;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:4px}
 .chat-body .chat-place-link:hover,.chat-body .chat-code-link:hover{text-decoration-style:solid;background:var(--hover)}
+/* A link the Being wrote: its words, with the address under the pointer and
+   nowhere to click (BeingDesktop 0.8.26 renderer/chat-app.css lines 46-47). */
+.chat-body .chat-link{color:var(--accent);text-decoration:none;text-underline-offset:3px;cursor:help}
+.chat-body .chat-link:hover{text-decoration:underline}
 .hljs{background:transparent!important;color:var(--text)}
 .hljs-strong,.hljs-emphasis,.hljs-subst{color:var(--text)}
 .hljs-comment,.hljs-code{color:var(--muted)}

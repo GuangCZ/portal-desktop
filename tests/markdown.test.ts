@@ -55,7 +55,10 @@ describe("chat code blocks", () => {
     }));
     expect(html).not.toMatch(/<script|<img|href="javascript:/);
     expect(html).toContain('&lt;script&gt;');
-    expect(html).toContain('href="https://example.com/"');
+    // A preview inside a conversation is conversation text: its links are shown
+    // the same inert way as the message around it.
+    expect(html).toContain('<span class="chat-link" title="https://example.com">正常</span>');
+    expect(html).not.toContain("<a ");
   });
 
   it("leaves non-chat Markdown code blocks as source", () => {
@@ -91,6 +94,40 @@ describe("chat code blocks", () => {
     for (const text of ["#", "# 标题\n\n- **尚未结束", markdown]) {
       expectCompleteCode(renderCode(text, "markdown", false), text);
     }
+  });
+
+  // BeingDesktop 0.8.26 showed a link in the conversation as text with the
+  // address in its title (renderer/chat-app.js line 60, `inline`'s fourth
+  // group), and test/chat-conversation-ui.cjs line 88 asserted both halves:
+  // `.chat-link` carries the address, and the message contains no `<a>`.
+  it("shows a link the Being wrote as text with its address in the title, never as something to click", () => {
+    const html = renderToStaticMarkup(createElement(Markdown, {
+      content: "看看 [文档](https://example.invalid/doc) 和 [危险](javascript:alert(1))",
+      chat: true,
+      onPlace: () => {},
+    }));
+    expect(html).toContain('<span class="chat-link" title="https://example.invalid/doc">文档</span>');
+    expect(html).toContain('<span class="chat-link" title="javascript:alert(1)">危险</span>');
+    expect(html).not.toContain("<a ");
+    expect(html).not.toContain("href=");
+  });
+
+  it("keeps a link to a place in this window clickable, because it navigates rather than loads", () => {
+    const html = renderToStaticMarkup(createElement(Markdown, {
+      content: "[去篝火](https://beings.town/bonfire)",
+      chat: true,
+      onPlace: () => {},
+    }));
+    expect(html).toContain('class="chat-place-link"');
+    expect(html).toContain('href="https://beings.town/bonfire"');
+  });
+
+  it("leaves links outside a conversation alone", () => {
+    const html = renderToStaticMarkup(createElement(Markdown, {
+      content: "[文档](https://example.invalid/doc)",
+    }));
+    expect(html).toContain('href="https://example.invalid/doc"');
+    expect(html).not.toContain("chat-link");
   });
 
   it.each(["errorRaised", "illegal", "throw"])("falls back to full source on a highlighter %s", failure => {
