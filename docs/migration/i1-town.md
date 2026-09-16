@@ -324,3 +324,35 @@ string / `mention|name|display_name|query|token|input` / `message|reason|warning
 5. 用户需要重新配对（无凭据迁移器），已写进 `MIGRATION.md`。
 6. `MIGRATION.md` 里原本没有「每个集成单元一行」的表，所以本单元建了表头（标题 + 一行说明 + 表头 + 分隔行 + 自己的一行，共 4 行内容）。
    后续单元只需要在表里追加一行。这比约定的「只追加一行」多，记在这里以便合回时知道多出来的是什么。
+
+---
+
+## 9. 复审结论处理（2026-09-16）
+
+复审给了 2 条 high + 2 条 medium。逐条核对源码后的结论与处理：
+
+### R1（high · `subsystems/town.ts` 的 `identityRevision++`）—— 属实，已改
+
+核对：BD `src/main.cjs:455-460` 的 `invalidateTownMembers()` 只做
+`townMemberCache.clear() + townCachedReads.invalidateMembers() + townSession.invalidateMembers() + 推送`，
+**不碰 `identityRevision`**；BD 里只有两处动它——`src/main.cjs:710`（身份分区变化）和 `:1482`（断开）。
+而 `identityRevision` 进了 `background.getIdentity()`，下游三处都会把它当身份变化：
+
+- `town/timeline/refresh.ts:533-540`：`identityKey` 一变就 `_invalidate()` + `_replace(emptyTimeline())` + 清掉
+  `lastSuccessAt/revision/receipt` —— 累积的时间线被抹掉。
+- `town/channel/town-background.ts:163-181`：`lifecycle()` 认为身份变了 → `_bonfire.stop()+reset()`、`clearRoom()`。
+- `town/channel/town-background.ts:258-260`：`_assertCurrent` 让所有在飞的 `requestRead/refresh/loadOlder` 抛 `SESSION_CHANGED`。
+
+也就是说一次 `profile_changed`（改个显示名）会清空篝火时间线并让在飞的读失败，
+正好和它上面两行注释承诺的「feeds 没变，故意不动」相反。成员缓存本身也不需要这个 bump：
+`TownCachedReads.invalidateMembers()` 自己 bump `_membersRevision`，`TownSession.invalidateMembers()` 自己围栏目录。
+
+处理：删掉这一行。新增回归用例见 §10。
+
+### R2（high · 私有卷轴正文读不到）—— 属实，已改（按 visibility 路由）
+
+### R3（medium · `tests/town-identity.test.ts` 的渲染层用例没有去向）—— 属实，已补
+
+### R4（medium · 自己发出的私信无法回复）—— 属实，但成因比复审写的更深一层，已改
+
+详见 §10。
