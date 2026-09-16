@@ -14,7 +14,7 @@
 // The components are not exercised here (there is no DOM in this suite); the
 // browser-side path is tests/tools-e2e.mjs's subject.
 import { describe, expect, it } from "vitest";
-import { ToolsModel } from "../desktop/renderer/tools/models/tools";
+import { ToolsModel, VIEWPORT_RETRIES } from "../desktop/renderer/tools/models/tools";
 import { IDLE_TOOLS_STATE } from "../desktop/shared/desktop-types";
 import type {
   DesktopToolsAction, DesktopToolsState, DesktopToolsViewport,
@@ -252,6 +252,63 @@ describe("the tool panel's model", () => {
     // The main process's rectangle is now unknown, so the same one is sent again.
     model.browserView({ ...RECT, x: 40 }, false);
     expect(bridge.viewports).toHaveLength(3);
+    stop();
+  });
+
+  it("releases the native view when the panel closes, keeping the last rectangle", async () => {
+    // THE REGRESSION THIS PINS: the panel unmounts when it closes
+    // (renderer/tools/slot.tsx), so nothing measures it afterwards and the last
+    // thing the main process heard would be `visible: true` — the page would stay
+    // pinned over the conversation for the rest of the run.
+    const { bridge, model, stop } = started();
+    bridge.push(state());
+    await model.show("browser");
+    model.browserView(RECT, false);
+    expect(bridge.viewports.at(-1)).toMatchObject({ visible: true, bounds: RECT });
+    model.hide();
+    expect(bridge.viewports.at(-1)).toEqual({ visible: false, bounds: RECT });
+    // The panel's own unmount detaches too, and must not cost a second message.
+    const sent = bridge.viewports.length;
+    model.detachView();
+    expect(bridge.viewports).toHaveLength(sent);
+    // Re-opening puts it back where it was.
+    await model.show("browser");
+    model.browserView(RECT, false);
+    expect(bridge.viewports.at(-1)).toMatchObject({ visible: true, bounds: RECT });
+    stop();
+  });
+
+  it("stops re-sending a rectangle the main process keeps refusing", async () => {
+    // `beings:tools-browser-view` is refused for the whole of a quit, and a
+    // failure notifies the shell, which re-renders, which measures and sends
+    // again. Without the bound that is a live loop; with it, one rectangle costs
+    // at most VIEWPORT_RETRIES retries and the error is raised once.
+    const { bridge, model, stop } = started();
+    bridge.push(state());
+    await model.show("browser");
+    bridge.viewports.length = 0;
+    bridge.viewportFailure = new Error("客户端正在退出，请稍候。");
+    for (let attempt = 0; attempt < 12; attempt++) {
+      model.browserView(RECT, false);
+      await Promise.resolve();
+    }
+    expect(bridge.viewports).toHaveLength(VIEWPORT_RETRIES + 1);
+    expect(model.error).toBe("客户端正在退出，请稍候。");
+    // A rectangle that actually changed still gets its own budget…
+    model.browserView({ ...RECT, x: 40 }, false);
+    await Promise.resolve();
+    expect(bridge.viewports.at(-1)).toMatchObject({ bounds: { ...RECT, x: 40 } });
+    // …and one success clears the streak.
+    bridge.viewportFailure = null;
+    model.browserView({ ...RECT, x: 41 }, false);
+    await Promise.resolve();
+    bridge.viewportFailure = new Error("客户端正在退出，请稍候。");
+    const before = bridge.viewports.length;
+    for (let attempt = 0; attempt < 12; attempt++) {
+      model.browserView({ ...RECT, x: 42 }, false);
+      await Promise.resolve();
+    }
+    expect(bridge.viewports.length - before).toBe(VIEWPORT_RETRIES + 1);
     stop();
   });
 

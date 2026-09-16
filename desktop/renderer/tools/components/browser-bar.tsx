@@ -18,6 +18,8 @@ import type { ToolsModel } from "../models/tools";
 export function ToolsBrowserBar({ model }: { model: ToolsModel }) {
   const host = useRef<HTMLDivElement>(null);
   const address = useRef<HTMLInputElement>(null);
+  /** The pending `requestAnimationFrame`, shared by every path that measures. */
+  const frame = useRef(0);
   const active = model.activeTab;
 
   const send = () => {
@@ -31,25 +33,30 @@ export function ToolsBrowserBar({ model }: { model: ToolsModel }) {
     model.browserView(rect, document.hidden || Boolean(document.querySelector("dialog[open]")));
   };
 
-  // Sent after every layout that could have moved it: the panel opening, the
+  // 0.8.26's `layout()`: at most one measurement per animation frame, whatever
+  // asked for it. Every path goes through this, the render below included —
+  // a `send` wired straight to the render is a loop whenever the channel is
+  // refused, because the model reports the failure, the report re-renders the
+  // shell, and the re-render sends again within the same frame.
+  const layout = () => {
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      send();
+    });
+  };
+
+  // Scheduled after every layout that could have moved it: the panel opening, the
   // mode changing, the divider dragging, a tab becoming active. The model drops a
   // rectangle identical to the last one, so a render that changed nothing costs
   // one measurement and no IPC.
-  useLayoutEffect(send);
+  useLayoutEffect(layout);
 
   // Deliberately keyed on the model alone. `send` closes over two stable refs and
   // the model, and reads everything else off it at call time, so the observers
   // are installed once — re-creating a subtree MutationObserver on document.body
   // every render would be a real cost.
   useEffect(() => {
-    let scheduled = 0;
-    const layout = () => {
-      if (!scheduled)
-        scheduled = requestAnimationFrame(() => {
-          scheduled = 0;
-          send();
-        });
-    };
     const resize = new ResizeObserver(layout);
     if (host.current) resize.observe(host.current);
     // A dialog opening or closing changes nothing this component renders, so
@@ -63,7 +70,14 @@ export function ToolsBrowserBar({ model }: { model: ToolsModel }) {
       mutation.disconnect();
       window.removeEventListener("resize", layout);
       document.removeEventListener("visibilitychange", layout);
-      cancelAnimationFrame(scheduled);
+      cancelAnimationFrame(frame.current);
+      frame.current = 0;
+      // THE PANEL IS GOING AWAY, AND THE NATIVE VIEW IS NOT ON THIS PAGE.
+      // `#tools-browser-host` is about to be removed, so nothing will ever
+      // measure it again; the main process has to be told to detach here or the
+      // page stays over the conversation until the client restarts. `hide()`
+      // sends it too — this covers every other way the panel can unmount.
+      model.detachView();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model]);
