@@ -130,3 +130,30 @@
 包络以**普通对象**穿过 contextBridge（走拒绝路径，`DesktopAPI` 的 `Promise<T>` 签名一个字不用改），
 由 `contextBridge.executeInMainWorld` 在**主世界**装一层解码器，把带 `__townError` 的拒绝值重建成
 带 `code` / `candidates` / `detail` 的真 Error。消费者（渲染层 model、E2E 脚本、`errorText`）**一行都不用改**。
+
+---
+
+## 3. 逐条处理
+
+### 3.1 【第 1 条 · 最高优先级】错误码穿过 contextBridge——已修
+
+| 文件 | 改动 |
+| --- | --- |
+| `desktop/preload/main-world.ts` | **新文件**。`installDecodedBridge(raw, name)`：在页面自己的世界里遍历 api（顶层 + 一层深），把每个函数包一层——**只有拒绝路径**上带 `__townError` 的普通对象被重建成带 `code`/`candidates`/`detail` 的真 Error；同步返回值（`subscribe` 的退订函数）、已解析值（Channel 族的 `ChannelAnswer<T>`）、非包络拒绝、普通值一律原样。每层 `Object.freeze`，`Object.defineProperty` 装到 `globalThis[name]`（描述符与 `exposeInMainWorld` 同为 `writable:false, configurable:false`，实测）。**零 import、完全自足**（`func` 会被字符串化后在主世界重新求值，实测引用模块作用域即 `ReferenceError`）。 |
+| `desktop/preload/preload.ts` | `if (process.isMainFrame) contextBridge.exposeInMainWorld('beings', api)` → `if (process.isMainFrame) exposeBridge(api)`；`exposeBridge` 先试 `contextBridge.executeInMainWorld({func: installDecodedBridge, args: [api, 'beings']})`，**失败或该方法不存在**才退回 `rebuildEnvelopesInPreload() + exposeInMainWorld`（0.8.26 的形状：句子还在、码丢失；比给渲染层一个普通对象好——那会显示「[object Object]」）。 |
+| `desktop/preload/channels/bridge.ts` | `enveloped` 由 `throw chatErrorFromEnvelope(result)` 改为 `throw chatErrorPayload(result)`（普通对象）；`townEnveloped` 从 `channels/town.ts` 搬进来，同样改为 `throw townErrorPayload(result)`；新增一个只进不出的 `rebuildHere` 开关与 `rebuildEnvelopesInPreload()` / `envelopesAreRebuiltInPreload()`。 |
+| `desktop/preload/channels/town.ts` | 删掉本地的 `townEnveloped` 与两个 import，改为从 `./bridge` 引入；文件头改写为实测结论。**24 条通道一行未动。** |
+| `desktop/shared/chat-errors.ts` | 新增 `chatErrorPayload(envelope)`（原 `chatErrorFromEnvelope` 的白名单 + 截断，返回普通包络）；`chatErrorFromEnvelope` 改为 `Object.assign(new Error(payload.message), {code})`，**行为逐字不变**，留给退路与测试。 |
+| `desktop/shared/town-desktop-errors.ts` | 新增 `townErrorPayload(envelope)`（白名单 + 截断 + 候选人上限 100 / detail 500）；`townErrorFromEnvelope` 基于它重写，行为不变。另见 §3.3（`TASK_LIMIT_REACHED`）。 |
+
+**渲染层改动：零。** `DesktopAPI` 的 `Promise<T>` 签名一个字没改（包络走拒绝路径），
+所有 `error.code` / `(error).candidates` 的消费点原样工作。`renderer/channel/**` 也没碰：
+I7 的四条通道以数据形式返回包络、由 `renderer/channel/models/channel.ts` 的 `unwrap()` 在渲染层重建——
+**与本机制是同一个思路**，而且已经是绿的；解码器只碰拒绝路径，所以 Channel 族完全不受影响（见 openIssues 收敛建议）。
+
+`tests/preload-envelope-bridge.test.ts`（新，10 条）：包络规范化（白名单/截断/候选人上限/`NEEDS_KEY`/`TASK_LIMIT_REACHED`）、
+拒绝的包络 → 真 Error、`NOT_SENT` 的候选人与 detail、**非包络一律穿透**（已解析包络/普通拒绝/同步返回/同步抛/普通值）、
+桥被冻结、**把解码函数 `toString()` 后用 `new Function` 重新求值再跑一遍**（复刻 Electron 的序列化那一步，
+把「必须自足」这条规则变成会红的测试）、**四个通道族各至少一条真路径**
+（`beings:chat-send`/`beings:chat-detail-open`/`beings:town-speak`/`beings:town-bonfire`/`beings:model-config-save`/`beings:sbs-set`，
+用真的 `desktopChannels` + 真的 bridge 助手 + 真的解码器，只有 `ipcRenderer.invoke` 是夹具）、退路的重建。

@@ -7,30 +7,27 @@
 //
 // Every channel here except none — all of them — is marked「Town 包络」in that
 // table, so every method goes through `townEnveloped` rather than a bare
-// `invoke`: a failure arrives as data and is turned back into an Error carrying
-// its `code`, which is the only way a code survives the trip. `enveloped` from
-// ./bridge does the same for the conversation channels, with the conversation
-// code list; Town needs its own list and, for `NOT_SENT`, the candidate
-// recipients Town offered (desktop/shared/town-desktop-errors.ts).
+// `invoke`: a failure arrives as data and stays data all the way into the page's
+// own world, where `desktop/preload/main-world.ts` rebuilds the Error carrying
+// its `code`. `enveloped` from ./bridge does the same for the conversation
+// channels, with the conversation code list; Town needs its own list and, for
+// `NOT_SENT`, the candidate recipients Town offered
+// (desktop/shared/town-desktop-errors.ts).
+//
+// `townEnveloped` used to be defined here and used to throw an Error. It moved
+// into ./bridge.ts on 2026-09-17 (integration unit IN) and now throws the plain
+// envelope: an Error rebuilt on this side of `contextBridge` arrives in the page
+// with own properties ["message","stack"] and nothing else, so every code and
+// every candidate list died here. MEASURED, twice, on Electron 44.2.0 —
+// docs/migration/in-shell-errors.md §2 and docs/migration/im-integration.md §4.4.
 //
 // The public Town catalogue is NOT here. It stays on `beings:town` /
 // `beings:town-open` and on `window.beings.town(...)` — a different surface, with
 // no credential and no envelope (desktop/main/town/catalog.ts).
-import { ipcRenderer } from 'electron';
-import { subscribe } from './bridge';
-import { isTownErrorEnvelope, townErrorFromEnvelope } from '../../shared/town-desktop-errors';
+import { subscribe, townEnveloped } from './bridge';
 import type {
   TownDesktopAPI, TownDesktopAppState, TownDesktopMemberCacheState, TownDesktopPush,
 } from '../../shared/desktop-types';
-
-/** Invoke a Town channel, restoring the Error the main process turned into an
- * envelope. Identical in shape to `enveloped` in ./bridge, with Town's code
- * catalogue and its one extra field. */
-async function townEnveloped<T>(channel: string, ...args: unknown[]): Promise<T> {
-  const result: unknown = await ipcRenderer.invoke(channel, ...args);
-  if (isTownErrorEnvelope(result)) throw townErrorFromEnvelope(result);
-  return result as T;
-}
 
 export const townDesktop: TownDesktopAPI = {
   appState: () => townEnveloped('beings:town-app'),

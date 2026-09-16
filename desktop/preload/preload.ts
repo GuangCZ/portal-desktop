@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopAPI, PortalState } from '../shared/types';
 import { desktopChannels } from './channels';
+import { rebuildEnvelopesInPreload } from './channels/bridge';
+import { installDecodedBridge } from './main-world';
 const api: DesktopAPI = {
   platform: process.platform,
   clientStartup: enabled => ipcRenderer.invoke('beings:client-startup', enabled),
@@ -52,4 +54,32 @@ const api: DesktopAPI = {
   },
   ...desktopChannels,
 };
-if (process.isMainFrame) contextBridge.exposeInMainWorld('beings', api);
+/** Hand the page its bridge, with the error envelope decoded on ITS side.
+ *
+ * `contextBridge.executeInMainWorld` runs `installDecodedBridge` inside the
+ * page's world and lets it define `window.beings` there, so a failing「Town 包络」
+ * channel rejects with an Error the page itself built — one that still carries
+ * `code`, `candidates` and `detail`. Doing it from here is not a preference: the
+ * name `exposeInMainWorld` defines is `writable:false, configurable:false`, so
+ * the renderer cannot wrap it afterwards, and an Error thrown from this side
+ * arrives with own properties ["message","stack"] and nothing else. Both
+ * measured on Electron 44.2.0 — see ./main-world.ts's header.
+ *
+ * The fallback is for a build without that method (electron.d.ts marks it
+ * experimental). It is what 0.8.26 shipped: the envelope becomes an Error here,
+ * the sentence still reaches the user, and only the code is lost. Silently
+ * handing the renderer a plain object instead would print「[object Object]」
+ * through `publicErrorMessage`, which is worse than the hole it replaces. */
+function exposeBridge(value: DesktopAPI): void {
+  if (typeof contextBridge.executeInMainWorld === 'function') {
+    try {
+      contextBridge.executeInMainWorld({ func: installDecodedBridge, args: [value, 'beings'] });
+      return;
+    } catch {
+      // Fall through: a client with no bridge at all is a client that cannot start.
+    }
+  }
+  rebuildEnvelopesInPreload();
+  contextBridge.exposeInMainWorld('beings', value);
+}
+if (process.isMainFrame) exposeBridge(api);

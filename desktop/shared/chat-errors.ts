@@ -9,8 +9,18 @@
 // line 52 says so in as many words — and on this side main.ts's handle wrapper
 // replaces whatever a handler throws with `new Error(errorLog.report(...))`,
 // which is a message and nothing else. So the main process answers a failure on
-// these channels with data, and the preload turns that data back into an Error
-// carrying the code the renderer branches on.
+// these channels with data, and that data is turned back into an Error carrying
+// the code the renderer branches on.
+//
+// WHERE that rebuild happens changed on 2026-09-17 (integration unit IN). It used
+// to happen in the preload, which undid itself: `contextBridge` strips a custom
+// property off an Error a second time, on the way from the preload's world to the
+// page's. MEASURED on this repo's Electron 44.2.0 with a standalone two-file
+// fixture — a rejected Error arrives with own properties `["message","stack"]`,
+// while the same value rejected as a plain object arrives whole
+// (docs/migration/in-shell-errors.md §2). So the envelope now crosses the bridge
+// as data on the rejection path, and `desktop/preload/main-world.ts` rebuilds the
+// Error inside the page's own world, where nothing is copied.
 //
 // It lives in `shared` because both halves have to agree on the marker, the code
 // allowlist and the truncation, and there is exactly one way for them to agree.
@@ -69,10 +79,21 @@ export function chatErrorEnvelope(error: unknown): ChatErrorEnvelope {
   return { __townError: true, code, message: message || CHAT_ERROR_FALLBACK };
 }
 
-/** Preload half: turn the envelope back into the Error the renderer catches. */
-export function chatErrorFromEnvelope(envelope: ChatErrorEnvelope): Error & { code: ChatChannelErrorCode } {
+/** Bridge half: the envelope the preload rejects with, re-checked on this side.
+ * Same allowlist and same truncation the Error rebuild used to apply — the main
+ * process is trusted, but the code the renderer branches on is validated where it
+ * is consumed, as 0.8.26 validates it twice (src/main.cjs and src/preload.cjs). */
+export function chatErrorPayload(envelope: ChatErrorEnvelope): ChatErrorEnvelope {
   const code: ChatChannelErrorCode = known(envelope.code) ? envelope.code : 'TOWN_ERROR';
   const message = code !== 'TOWN_ERROR' && typeof envelope.message === 'string' && envelope.message
     ? envelope.message.slice(0, MAX_MESSAGE) : CHAT_ERROR_FALLBACK;
-  return Object.assign(new Error(message), { code });
+  return { __townError: true, code, message };
+}
+
+/** The envelope back into the Error the renderer catches. Built in the page's own
+ * world by desktop/preload/main-world.ts; kept here so both halves of the
+ * contract stay in one file, and used directly by the preload's fallback path. */
+export function chatErrorFromEnvelope(envelope: ChatErrorEnvelope): Error & { code: ChatChannelErrorCode } {
+  const payload = chatErrorPayload(envelope);
+  return Object.assign(new Error(payload.message), { code: payload.code });
 }
