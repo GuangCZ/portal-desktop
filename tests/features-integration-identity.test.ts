@@ -221,7 +221,10 @@ test("discussing a task refuses until a composer is installed, then prepares one
     // neither delivers a draft built under the previous Being.
     await expect(f.invoke("beings:feature-task-discuss", task.id))
       .rejects.toThrow(/连接身份已变化，任务内容未转交。|连接已变化，请重新选择任务。/);
-    await settle();
+    // The swap is a file read, not just a microtask drain: wait on the same
+    // promise `connectionVerified` hands production (`extensions.ready`), or a
+    // slow disk leaves the ledger half-swapped and the next line flakes.
+    await f.extensions.ready; await settle();
     // The swap has completed by now, so the channel works again — for the NEW
     // Being's ledger, which has never heard of this task.
     expect(f.subsystem().histories.currentIdentity()).toBe(true);
