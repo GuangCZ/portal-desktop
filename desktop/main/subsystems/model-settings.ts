@@ -19,10 +19,12 @@
 //
 // ── WHAT IT PUBLISHES, AND WHAT IT DOES NOT TOUCH ────────────────────────────
 // `beings:model-settings-state`, its own channel, carrying the configuration half
-// of `state.runtime`. Nothing is added to `beings:snapshot`: that is assembled in
-// main.ts, which integration units must not edit (integration plan §4), and I6
-// made the same choice for the sidebar ledger. `sideBySide.active` stays `null`
-// here — see model-settings/runtime.ts.
+// of `state.runtime`, and `beings:model-settings`, the pull that goes with it —
+// the window exists before the renderer runs, so the push that says a Being is
+// bound is normally sent before anything is listening. Nothing is added to
+// `beings:snapshot`: that is assembled in main.ts, which integration units must
+// not edit (integration plan §4), and I6 made the same choice for the sidebar
+// ledger. `sideBySide.active` stays `null` here — see model-settings/runtime.ts.
 //
 // ── THE API KEY ───────────────────────────────────────────────────────────────
 // This subsystem is the only place in the client where a credential the user
@@ -109,6 +111,7 @@ export function installModelSettingsSubsystem(ctx: SubsystemContext): ModelSetti
   registerModelSettingsIpc({
     handle: ctx.handle,
     exclusive: ctx.exclusive,
+    state,
     read: readConfig,
     save: async (patch: ModelPatchInput) => accept(await model.save(patch)),
     setSideBySide: async (enabled: boolean, id: number) => accept(await model.setSideBySide(enabled, id)),

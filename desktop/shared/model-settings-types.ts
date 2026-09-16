@@ -149,6 +149,12 @@ export interface ModelSettingsAPI {
   saveModelConfig(patch: ModelPatchInput): Promise<ModelConfigDto>;
   /** Turn the Being's waking loop on or off, confirmed the same way. Enveloped. */
   setSideBySide(enabled: boolean, connectionId: number): Promise<ModelConfigDto>;
+  /** The state as it stands right now. The page reads it once on start because
+   * the push below is normally sent before the renderer exists: the window is
+   * created first and the Being is bound one status round trip later (main.ts
+   * `createWindow()` then `restoreStartup()`). Cheap — it touches no network,
+   * only what the main process last confirmed. */
+  modelSettingsState(): Promise<ModelSettingsState>;
   /** The configuration half of the runtime, after every confirmed read or write
    * and after every change of Being. */
   onModelSettings(callback: (state: ModelSettingsState) => void): () => void;

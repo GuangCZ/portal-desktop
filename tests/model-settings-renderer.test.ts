@@ -54,13 +54,27 @@ const runtime = (over: Partial<ModelSettingsState["runtime"]> = {}): ModelSettin
   sideBySide: { configured: false, active: null }, ...over,
 });
 
-function fixture() {
+const DISCONNECTED: ModelSettingsState = {
+  connected: false, connectionId: 0,
+  runtime: runtime({ configStatus: "unknown", model: "", provider: "", baseUrl: "", sideBySide: { configured: null, active: null } }),
+};
+const CONNECTED: ModelSettingsState = { connected: true, connectionId: 1, runtime: runtime() };
+
+/** `held` starts the main process's state where the test wants it BEFORE
+ * `model.start()` runs — the cold start, where the push announcing a bound Being
+ * went out while this window was still loading and nothing was listening. */
+function fixture({ held = DISCONNECTED, failPull = false }: { held?: ModelSettingsState; failPull?: boolean } = {}) {
   const listeners = new Set<(state: ModelSettingsState) => void>();
   const saved: ModelPatchInput[] = [];
   const toggles: { enabled: boolean; connectionId: number }[] = [];
+  let main = held;
+  let pulls = 0;
   let reads = 0;
   let readAnswer: ModelConfigDto | Error = dto();
   let saveAnswer: ModelConfigDto | Error | null = null;
+  /** Set to make the pull fail, the way a main process that is still starting
+   * would. The page must stay usable and try again when it is opened. */
+  let pullAnswer: null | Error = failPull ? new Error("主进程尚未就绪。") : null;
   /** Requests the test can hold open, which is the only way to see what the page
    * looks like while one is in flight. Queues rather than single slots: a Being
    * that binds while the page is open starts a read of its own, so two can be
@@ -83,6 +97,10 @@ function fixture() {
     onTownLive: () => () => {},
     townLive: async () => { throw new Error("no Town in this fixture"); },
     modelSettings: {
+      modelSettingsState: () => {
+        pulls += 1;
+        return pullAnswer instanceof Error ? Promise.reject(pullAnswer) : Promise.resolve(main);
+      },
       modelConfig: () => {
         reads += 1;
         if (holdReads) return new Promise<ModelConfigDto>(resolve => pendingReads.push(resolve));
@@ -111,11 +129,15 @@ function fixture() {
   const stop = model.start();
   const push = (state: Partial<ModelSettingsState> = {}) => {
     const full: ModelSettingsState = { connected: true, connectionId: 1, runtime: runtime(), ...state };
+    // What the main process pushes is also what it would answer a pull with.
+    main = full;
     listeners.forEach(listener => listener(full));
   };
   return {
     app, model, stop, saved, toggles, push,
     reads: () => reads,
+    pulls: () => pulls,
+    allowPull: () => { pullAnswer = null; },
     answers: (next: ModelConfigDto | Error) => { readAnswer = next; },
     answersSave: (next: ModelConfigDto | Error | null) => { saveAnswer = next; },
     holdReads: (value = true) => { holdReads = value; },
@@ -181,6 +203,50 @@ describe("the model settings page", () => {
     f.push({ connectionId: 3 });
     await settle();
     expect(f.reads()).toBe(1);
+    f.stop();
+  });
+
+  it("finds the Being that was already bound before this window existed (cold start)", async () => {
+    // THE ORDER PRODUCTION RUNS IN, and the one no other case here covers: the
+    // main process creates the window and binds its Being one status round trip
+    // later (main.ts `createWindow()` → `restoreStartup()` → `verifyConnection()`
+    // → `connectionVerified`), both before the renderer's bundle has executed.
+    // So `connected: true` is pushed to nobody, and `connectionVerified` will not
+    // publish again for the same Being. Nothing here calls `push()`.
+    const f = fixture({ held: CONNECTED });
+    await settle();
+    expect(f.pulls()).toBe(1);
+    expect(f.model.connected).toBe(true);
+    expect(f.model.connectionId).toBe(1);
+    // The page is not open yet, so nothing was read from the Being — 0.8.26's own
+    // rule: the page reads when it is first seen, not when the client starts.
+    expect(f.reads()).toBe(0);
+
+    f.model.activate();
+    await settle();
+    expect(f.reads()).toBe(1);
+    expect(f.model.modelName()).toBe("fixture-model-a");
+    expect(f.model.canRefresh).toBe(true);
+    expect(f.model.editable).toBe(true);
+    expect(f.model.sideBySide).toBe(false);
+    expect(f.model.statusText).not.toBe("连接 Being 后即可配置模型。");
+    f.stop();
+  });
+
+  it("asks again when the page opens if the first state read did not come back", async () => {
+    const f = fixture({ held: CONNECTED, failPull: true });
+    await settle();
+    expect(f.pulls()).toBe(1);
+    // Nothing is claimed: a read that failed is not evidence that no Being is
+    // bound, and the page must not settle into that belief for the session.
+    expect(f.model.connected).toBe(false);
+    f.allowPull();
+    f.model.activate();
+    await settle();
+    expect(f.pulls()).toBe(2);
+    expect(f.model.connected).toBe(true);
+    expect(f.reads()).toBe(1);
+    expect(f.model.modelName()).toBe("fixture-model-a");
     f.stop();
   });
 

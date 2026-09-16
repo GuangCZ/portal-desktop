@@ -111,6 +111,10 @@ export class ModelSettingsModel extends Store {
   sbsFeedback = "";
 
   private generation = 0;
+  /** Whether any state has reached this model yet, from either direction. Until
+   * it has, `connected: false` is an assumption rather than a fact — which is
+   * why `activate()` reads again rather than showing 连接 Being 后… forever. */
+  private received = false;
   /** The page is on screen. 0.8.26 keeps the same flag (renderer/model-settings
    * .js line 9) for the same reason: a Being that binds while the page is open
    * should populate it, and one that binds while it is closed should not cost a
@@ -120,16 +124,47 @@ export class ModelSettingsModel extends Store {
   constructor(private readonly api: DesktopAPI, private readonly app: unknown) { super(); }
 
   /** Opened here and closed by the returned function: the contract every
-   * registered model follows (app/models/registry.ts). */
+   * registered model follows (app/models/registry.ts).
+   *
+   * SUBSCRIBE, THEN READ — and the read is not a nicety. The main process binds
+   * its Being while this window is still loading (main.ts: `createWindow()`,
+   * then `restoreStartup()` → `verifyConnection()` → `connectionVerified`), so on
+   * a cold start with a Being already saved the push that says so is sent before
+   * anything here is listening and is simply dropped. Without this read the page
+   * would hold `connected = false` for the whole session — every control it
+   * offers is gated on that flag, and nothing would push again until the user
+   * bound a DIFFERENT Being. The order matters too: subscribing first means a
+   * push that arrives while the read is in flight is not the one overwritten,
+   * which is why `pull()` refuses to go backwards. ShellStateModel.start() pairs
+   * the same two calls for the same reason. */
   start() {
     if (!this.api?.modelSettings) return () => {};
-    return this.api.modelSettings.onModelSettings(state => this.accept(state));
+    const stop = this.api.modelSettings.onModelSettings(state => this.accept(state));
+    void this.pull();
+    return stop;
+  }
+
+  /** Read the state the main process holds now. Never applied over something
+   * newer: a push that landed first belongs to a later epoch, or to the same one
+   * after another read confirmed it, and this answer is then history. */
+  private async pull() {
+    if (!this.api?.modelSettings) return;
+    try {
+      const state = await this.api.modelSettings.modelSettingsState();
+      if (this.received && state.connectionId <= this.connectionId) return;
+      this.accept(state);
+    } catch (error) {
+      // Nothing is claimed and nothing is broken: the page keeps saying no Being
+      // is connected, and 刷新 stays available if one arrives later.
+      host(this.app)?.toast(error);
+    }
   }
 
   /** The push. A change of epoch is a change of Being: everything the user was
    * looking at belonged to the previous one and is dropped, including the key. */
   private accept(state: ModelSettingsState) {
     const changedBeing = state.connectionId !== this.connectionId;
+    this.received = true;
     this.connected = state.connected;
     this.connectionId = state.connectionId;
     this.runtime = state.runtime;
@@ -163,10 +198,16 @@ export class ModelSettingsModel extends Store {
   }
 
   /** The page was opened. 0.8.26's `activate()`: read once per Being, on first
-   * sight, and never again on its own. */
+   * sight, and never again on its own.
+   *
+   * If no state has arrived at all — the first read failed, or the bridge was
+   * slower than the click — ask again here rather than render a disconnected
+   * page over a connected client. `pull()` feeds `accept()`, which starts the
+   * configuration read itself now that the page is open. */
   activate() {
     this.active = true;
-    if (this.connected && !this.attempted) void this.refresh();
+    if (!this.received) void this.pull();
+    else if (this.connected && !this.attempted) void this.refresh();
   }
 
   /** The page was closed. Nothing in flight is cancelled — a reply for the

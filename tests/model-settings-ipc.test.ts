@@ -34,7 +34,7 @@ const TOKEN_B = "b".repeat(64);
 const ADDRESS_A = `https://echo.beings.town/cz_being/?token=${TOKEN_A}&relay_secret=private-relay`;
 const ADDRESS_B = `https://echo.beings.town/other_being/?token=${TOKEN_B}&relay_secret=private-relay`;
 const SHELL = "beings://desktop/";
-const CHANNELS = ["beings:model-config-get", "beings:model-config-save", "beings:sbs-set"];
+const CHANNELS = ["beings:model-settings", "beings:model-config-get", "beings:model-config-save", "beings:sbs-set"];
 const SECRET = "sk-private-typed-by-the-user";
 
 const json = (value: unknown, status = 200) =>
@@ -63,6 +63,7 @@ async function fixture({ address = ADDRESS_A }: { address?: string } = {}) {
 
   let saved: Record<string, unknown> = beingConfig();
   const patches: Record<string, unknown>[] = [];
+  let beingReads = 0;
   /** Set to make the next GET fail, the way a Being that is briefly unwell does. */
   let readStatus = 200;
   let dropSbs = false;
@@ -79,6 +80,7 @@ async function fixture({ address = ADDRESS_A }: { address?: string } = {}) {
       if (patch.api_key) saved.has_api_key = true;
       return json({ ok: true, config: saved });
     }
+    beingReads += 1;
     if (readStatus !== 200) return json({ error: "private-detail" }, readStatus);
     const answer: Record<string, unknown> = { ...saved };
     if (dropSbs) delete answer.sbs_enabled;
@@ -142,6 +144,7 @@ async function fixture({ address = ADDRESS_A }: { address?: string } = {}) {
     state: () => pushes.filter(push => push.channel === "beings:model-settings-state").at(-1)?.payload as ModelSettingsState,
     states: () => pushes.filter(push => push.channel === "beings:model-settings-state").map(push => push.payload as ModelSettingsState),
     read: () => call("beings:model-config-get") as Promise<ModelConfigDto>,
+    beingReads: () => beingReads,
     setReadStatus: (value: number) => { readStatus = value; },
     setDropSbs: (value: boolean) => { dropSbs = value; },
     savedConfig: () => saved,
@@ -151,13 +154,19 @@ async function fixture({ address = ADDRESS_A }: { address?: string } = {}) {
   };
 }
 
-test("the three channels register, refuse an untrusted sender, and publish the first read", async () => {
+test("the four channels register, refuse an untrusted sender, and publish the first read", async () => {
   const f = await fixture();
   try {
     expect(CHANNELS.every(channel => f.handlers.has(channel))).toBe(true);
     await expect(f.untrusted("beings:model-config-get")).rejects.toThrow(/Untrusted/);
+    await expect(f.untrusted("beings:model-settings")).rejects.toThrow(/Untrusted/);
     // Nothing has been read yet: the page would say so rather than show a model.
     expect(f.state()).toBe(undefined);
+    // And the pull says the same thing rather than nothing at all.
+    expect(await f.call("beings:model-settings")).toEqual({
+      connected: false, connectionId: 0,
+      runtime: { configStatus: "unknown", configError: "", configCheckedAt: null, model: "", provider: "", baseUrl: "", sideBySide: { configured: null, active: null } },
+    });
     await f.connect();
     // Binding a Being reads `/api/llm/config` once, unasked, so the settings page
     // and the runtime line are populated before either is opened.
@@ -173,6 +182,16 @@ test("the three channels register, refuse an untrusted sender, and publish the f
     expect(state.runtime.baseUrl).toBe("https://upstream.example/v1");
     expect(JSON.stringify(f.pushes)).not.toMatch(/private/);
     expect(f.errors).toEqual([]);
+
+    // THE COLD START. That push went out while the window was still loading, so
+    // the page that eventually subscribes never saw it. The pull answers with the
+    // same state — without it, a client bound to a Being renders a page that
+    // believes nothing is connected, for the whole session.
+    expect(await f.call("beings:model-settings")).toEqual(state);
+    // It reads what is already known and asks the Being nothing.
+    const reads = f.beingReads();
+    expect(await f.call("beings:model-settings")).toEqual(state);
+    expect(f.beingReads()).toBe(reads);
   } finally { await f.cleanup(); }
 });
 
@@ -321,9 +340,15 @@ test("the epoch follows the Being's identity, not the number of verifications", 
     // DEVIATION from 0.8.26, deliberate: its `generation` increments on every
     // `verifyConnection`, which invalidates a form the user is holding. Here
     // re-verifying the same Being is not a change at all.
+    const pushes = f.states().length;
     await f.connect();
     await f.connect();
     expect(f.state().connectionId).toBe(1);
+    // Re-verifying the same Being publishes NOTHING — which is why a page that
+    // only subscribes can never recover a push it missed, and why the pull is
+    // the only way back. The pull answers the current state at any time.
+    expect(f.states().length).toBe(pushes);
+    expect(await f.call("beings:model-settings")).toEqual(f.state());
     expect((await f.read()).connectionId).toBe(1);
 
     // A different Being is a different epoch, a cleared form and a fresh read.
@@ -350,6 +375,9 @@ test("clearing the connection empties the line and refuses everything that follo
     expect(state.runtime.sideBySide.configured).toBe(null);
     await expect(f.read()).rejects.toThrow(/请先配置 Being 连接。/);
     expect((await f.failure("beings:sbs-set", true, 2)).code).toBe("NOT_CONNECTED");
+    // The pull follows it down, so a page opened after the Being went away does
+    // not read a model that is no longer bound.
+    expect(await f.call("beings:model-settings")).toEqual(state);
     expect(f.errors).toEqual([]);
   } finally { await f.cleanup(); }
 });
