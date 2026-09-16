@@ -234,11 +234,11 @@ fixture：`PARENT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`、可控 `historyGat
 | `desktop/main/chat/frame.ts`（并入 wrapMessage） | 已移植（being-chat.ts 改为 import） |
 | `desktop/main/chat/context.ts` | 已移植 |
 | `desktop/main/chat/sessions.ts` | 已移植，测试通过 |
-| `desktop/main/chat/details.ts` | 未开始 |
+| `desktop/main/chat/details.ts` | 已移植，测试通过 |
 | `desktop/shared/desktop-types.ts` | 未开始 |
 | `desktop/main/chat/ipc.ts` | 未开始 |
 | `desktop/preload/desktop-channels.ts` | 未开始 |
 | `desktop/main/extensions.ts` | 未开始 |
 | `tests/chat-sessions.test.ts` | 20 用例通过 |
-| `tests/chat-details.test.ts` | 未开始 |
+| `tests/chat-details.test.ts` | 4 用例通过 |
 | `tests/chat-ipc.test.ts` | 未开始 |
