@@ -236,6 +236,19 @@ describe("tool browser panel model", () => {
     stop();
   });
 
+  it("says why the browser is missing when the first read refuses, and forgets it once one arrives", async () => {
+    const f = fixture();
+    f.failWith(new Error("内置浏览器在当前运行环境不可用。"));
+    const stop = f.model.start();
+    await f.settle();
+    expect(f.model.unavailable).toBe("内置浏览器在当前运行环境不可用。");
+    // A state pushed later means it was built after all.
+    f.failWith(null);
+    f.push(stateOf([tab("t1", "https://example.com/")]));
+    expect(f.model.unavailable).toBe("");
+    stop();
+  });
+
   it("ignores a malformed push rather than emptying the tab strip", () => {
     const f = fixture();
     f.model.accept(stateOf([tab("t1", "https://example.com/")]));

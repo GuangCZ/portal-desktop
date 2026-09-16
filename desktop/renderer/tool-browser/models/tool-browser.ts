@@ -11,7 +11,7 @@
 // typing, and the rectangle the panel occupies — the last of which the main
 // process needs, because a view that is not told where the panel is would cover
 // the conversation.
-import { Store } from "../../shared/models/store";
+import { Store, errorText } from "../../shared/models/store";
 import type { ToolBrowserBounds, ToolBrowserState, ToolBrowserTab } from "../../../shared/desktop-types";
 import type { DesktopAPI } from "../../../shared/types";
 import type { FeatureModelFactory } from "../../app/models/registry";
@@ -29,7 +29,10 @@ export class ToolBrowserModel extends Store {
   /** What is in the address field, which is not the active tab's URL while the
    * user is typing. */
   address = "";
-  /** The browser could not be built at all — no Electron in this process. */
+  /** The browser could not be built at all — no Electron in this process, or
+   * `DesktopBrowser`'s constructor refused. Set from the first read, which is the
+   * only place the reason is learned without the user having to click something;
+   * the panel shows it in place of its empty message. Mirrors `TerminalModel`. */
   unavailable = "";
   private lifecycle = 0;
   /** True while the address field has focus. BeingDesktop stops following the
@@ -55,7 +58,14 @@ export class ToolBrowserModel extends Store {
     void this.api.toolBrowser
       .state()
       .then(state => { if (revision === this.lifecycle) this.accept(state); })
-      .catch(() => { /* The first read fails only when the browser is unavailable; the panel says so on its first action. */ });
+      .catch(error => {
+        // The first read fails only when the browser could not be built at all.
+        // Saying so beats an empty placeholder that invites the user to act on a
+        // browser that is not there — the same shape `TerminalModel` uses.
+        if (revision !== this.lifecycle) return;
+        this.unavailable = errorText(error);
+        this.changed();
+      });
     return () => {
       this.lifecycle++;
       stop();
@@ -81,6 +91,8 @@ export class ToolBrowserModel extends Store {
     // did not move shows something that is not the page. BeingDesktop does the
     // same, with focus as the one exception (renderer/desktop-tools.js).
     if (!this.editing) this.address = this.active?.url || "";
+    // A state to accept means the browser exists after all.
+    this.unavailable = "";
     this.changed();
   }
 

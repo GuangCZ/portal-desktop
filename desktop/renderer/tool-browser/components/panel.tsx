@@ -116,7 +116,8 @@ export function ToolBrowserPanel({ model }: { model: ToolBrowserModel }) {
       </form>
       <div className="tool-browser-viewport" ref={viewport}>
         <p className="tool-browser-message" role="status">
-          {active?.error || active?.notice || (active ? "" : "Being 可以读取和操作这个浏览器里的页面。它与上方的浏览器互不共享登录状态。")}
+          {active?.error || active?.notice || browser.unavailable
+            || (active ? "" : "Being 可以读取和操作这个浏览器里的页面。它与上方的浏览器互不共享登录状态。")}
         </p>
       </div>
     </aside>
