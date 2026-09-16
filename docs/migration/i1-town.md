@@ -78,3 +78,37 @@ u1/u2/u3 的构造签名、portal-desktop 自带 town 模块的重叠判定、�
 `preload/channels/{bridge,chat,index}.ts`（`subscribe` / `enveloped` 两个助手）、`shared/{desktop-types,types}.ts`、
 `renderer/app/slots.tsx`（四数组 + `visiblePanels`/`sidebarSections`/`topbarActions`/`viewSheets`）、
 `renderer/app/models/registry.ts`（`FEATURE_MODELS` + `AppFeatureModels` + `FeatureModel`）。
+
+### 1.8 基线门槛数字（本 worktree 实测）
+
+`npm run typecheck` 绿；`npx vitest run` → **96 passed / 8 skipped 文件，1071 passed / 58 skipped 用例**。
+
+### 1.9 BD `src/main.cjs:371-470` 装配段（逐行对照物）
+
+与方案 §3.1 的伪代码一致，另有方案没写出来的几条实测细节：
+
+- `townClient.getContext().key` = `connection ? sessionPartition(connection) : ''`（未连接是空串，不是 null）。
+- `onEvent`：`profile_changed` → `invalidateTownMembers()` 并 **return**（不再喂 background）；其余 → `townBackground.notifyEvent(event)`；
+  `dm` 额外推 `{kind:'dm'}`（收件箱不进后台收集，渲染层收到提示后自己重读）。
+- `townSpeak` 先试 `townClient.speak(...)`，只有 `error.code==='AUTH_REQUIRED'` 才落到 `townWriter`（Being 中继）。
+  本单元按定案 5.7 **不移植中继**：AUTH_REQUIRED 直接抛。
+- `resetTownReader()` = `townPairing.reset() + townClient.reset() + townWriter?.reset() + 房间/成员缓存清空`。
+- `syncTownLifecycle()` 的 enabled 判据是 `!exitStarted && !townSuspended && Boolean(connection) && status==='connected' && net.isOnline()`；
+  `background.lifecycle` 多一个 `reason: townSuspended ? 'suspended' : 'offline'`。
+- `powerMonitor.on('suspend'|'resume')` 只切 `townSuspended` 再 `syncTownLifecycle()`（resume **不自动重发消息**）。
+- `loadCachedFiresides()`：已缓存直接 `structuredClone` 返回；否则 `cachedReads.snapshot({method:'getFiresides'})`，
+  命中后写房间缓存并 `background.reconcileRooms(data)`。
+- `loadCachedFiresideMembers(value)`：先取房间缓存，**房间不在目录里就直接 `{members:[],cached:false}`**；
+  成员缓存 60 秒过期（`Date.now() - lastSuccessAt >= 60000` 才删）。
+- `townState()` 把 `townSession.state()` / `channelBeing.state()` / `background.metadata()` / `client.state()` / `pairing.state()`
+  拼进 `town.state()` 的结果，并把 `identity.townId`、`identity.displayName`、`memberDirectory` 补齐。
+
+### 1.10 BD `docs/interfaces.md` §1.2 Town 节 / §1.3 推送 / §3.3 类接口 / §4 townApp / §5 错误码
+
+- 通道语义、参数上限、返回 DTO 已逐条抄进本文件 §4 的 IPC 清单。
+- 错误码目录（§5）：`INVALID_REQUEST` / `INVALID_RESPONSE` / `NOT_CONNECTED` / `SESSION_CHANGED` / `AUTH_REQUIRED` /
+  `IDENTITY_MISMATCH` / `BUSY` / `ABORTED` / `NETWORK_ERROR` / `RATE_LIMITED` / `SERVICE_ERROR` / `NOT_SENT` /
+  `RESULT_UNKNOWN` / `STORAGE_ERROR` / `PAIRING_INCOMPLETE` / `PAIR_CODE_INVALID` / `PAIR_RESULT_UNKNOWN` /
+  `PAIR_STORAGE_ERROR` / `NOT_RUNNING` / `PAUSED`；未知码折叠为 `TOWN_ERROR`。
+- `townApp`（§4）本期要填的字段：`identity` / `access` / `sync` / `client` / `pairing` / `memberDirectory`
+  （`portalInstall` / `portalWorkspace` 属 I7）。
