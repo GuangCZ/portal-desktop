@@ -302,6 +302,13 @@ IM 留的四条 `pending`（读 `error.code` 的）全部转绿，退出码 0：
 
 ### 4.3 `tests/town-ui.mjs`：**13 过 2 红 → 14 过 1 红**（剩下的那条是 IT 的）
 
+**先把「用户看到什么变了」说准**：包络的 `message` 从来都到得了渲染层（`publicErrorMessage` 用的就是它），
+**到不了的是 `code`**，所以所有按码分支的界面走不到。以 Town 未配对为例，
+`main/town/speak.ts:47` 的 `PAIRING_REQUIRED` 这句话一直显示得出来，但
+`renderer/town/models/town.ts:601` 的 `this.fail(errorText(error), this.codeOf(error) === 'AUTH_REQUIRED')`
+第二个参数恒为 false，于是 `page.tsx:204` 画的是「暂时未能读取内容」+「重试」，
+而不是「连接 Town，继续阅读」+「配置 Town 连接」。现在走得到了。
+
 - **`an ambiguous recipient offers the choices Town returned`：红 → passed**。
   这正是 IM openIssue 1 的第二个后果：`TownModel.send()` 读 `(error).candidates`（`renderer/town/models/town.ts:1147`），
   以前页面收到的 Error 自有属性只有 `["stack","message"]`，`#town-send-candidates` 永远是空的；现在两个候选人都列出来了。
