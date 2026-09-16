@@ -265,3 +265,46 @@ model 没建起来就 toast），`openFeature` 先查 `TASK_SHELL_PAGES` 再查 
 **结论**：不在本单元做。不变量仍由 I5 的 `tests/chat-integration-composer.test.ts` 钉着
 （生产可达路径上两者恒等，理由是 `main.ts:335/449` 两处调用都在 `verifyBeingConnection` 之后，
 而 `chat/ready.ts:6` 第一行就拒绝空连接，`!next` 那一支到不了）。设计与代价写进 openIssues。
+
+---
+
+## 4. 真机冒烟（打包产物，2026-09-17）
+
+打包：`env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package` → 退出码 0；
+随后 `codesign --force --deep --sign - "out/Being Desktop-darwin-arm64/Being Desktop.app"`。
+
+### 4.1 先验一件只能在打包产物上验的事：解码函数在 minify 之后仍然自足
+
+`executeInMainWorld` 的 `func` 是被**字符串化后在主世界重新求值**的，所以打包器只要留下一个外部引用就会在真机上炸，
+而且没有任何编译期告警。从 `.vite/build/preload.js` 里按 `func:<名>` 找到压缩后的函数体（685 字节）逐个标识符核对：
+
+```
+function Q(e,i){const r=g=>{…},d=g=>(...a)=>{…},k=(g,a)=>{…};
+  return Object.defineProperty(globalThis,i,{value:k(e,1),enumerable:!0}),i}
+```
+
+`e`/`i` 是形参，`r`/`d`/`k`/`g`/`a`/`s`/`p`/`l` 全部在函数内声明——**零外部引用**，
+压缩只把局部名改短了。vitest 里那条「`toString()` 后 `new Function` 重新求值再跑」的用例守的是源码形态，这一步守的是产物形态。
+
+### 4.2 `tests/town-sdk.mjs`：**13 过 4 红 → 17 全过**
+
+IM 留的四条 `pending`（读 `error.code` 的）全部转绿，退出码 0：
+
+| check | 之前 | 现在 |
+| --- | --- | --- |
+| `an unpaired read rejects with AUTH_REQUIRED rather than a sentence` | 红（`code` 是 null） | **passed** |
+| `…and says so as INVALID_REQUEST` | 红 | **passed** |
+| `…and says so as SESSION_CHANGED` | 红 | **passed** |
+| `…as AUTH_REQUIRED`（forget 之后） | 红 | **passed** |
+
+其余 13 条原样通过，含 `the renderer raised no errors`。**脚本一字未改。**
+
+### 4.3 `tests/town-ui.mjs`：**13 过 2 红 → 14 过 1 红**（剩下的那条是 IT 的）
+
+- **`an ambiguous recipient offers the choices Town returned`：红 → passed**。
+  这正是 IM openIssue 1 的第二个后果：`TownModel.send()` 读 `(error).candidates`（`renderer/town/models/town.ts:1147`），
+  以前页面收到的 Error 自有属性只有 `["stack","message"]`，`#town-send-candidates` 永远是空的；现在两个候选人都列出来了。
+- **仍然红的一条**：`messages render while the member directory is still pending`
+  ——`desktop/main/town/session/session.ts` 的 `getBonfireMessages` 把 `/api/bonfire/hear` 与 `getMembers()` 放在同一个
+  `Promise.all` 里（IM openIssue 10 / 复审 finding 2）。**属 IT 的独占目录，本单元按分工保持红。**
+- 脚本一字未改。
