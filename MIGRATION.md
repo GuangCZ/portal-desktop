@@ -337,3 +337,9 @@ P1 的 chat 子系统原样搬进 `subsystems/chat.ts`，成为这套注册方�
 - **`connectionCleared()` 依然没有调用方。** 接口和扇出都在，`main.ts` 从来没有接过它——这是 P1 就有的缺口，I0 没有顺手改。
 - **`npm run start` 的人工冒烟没做**（本机缺 Rust 工具链，`resources/heart-portal` 不存在；打包验证用的是临时 stub）。
 - **Linux 的 node-pty 没有 prebuild**，`MakerZIP` 的 linux 目标需要构建机上有 python3 + make + g++，本次未验证。
+
+## 集成阶段：各单元记录
+
+| 单元 | 产出 | 记录 |
+| --- | --- | --- |
+| I2 工具桥 + 控制台 | `main/subsystems/tools.ts`、`main/tools/ipc.ts`、`preload/channels/tools.ts`、`shared/tools-types.ts`、`renderer/tools/`；六个接缝各 append 一行 | `docs/migration/i2-tools.md` |
