@@ -98,6 +98,24 @@ export function messagesDto(value: unknown, members: { id: string; name?: string
   return { messages, latestSeq: value.global_latest_seq, ...(sequence(value.total_count) ? { total: value.total_count } : {}), ...relaySource(value) };
 }
 
+// Who a direct message was addressed to.
+//
+// ADDED 2026-09-16, beyond the line-by-line port of BeingDesktop src/town-session.cjs
+// directMessagesDto, which drops this. Town does send it: `normalizeTownResponse`
+// maps `recipient_town_id` onto `recipient` for /api/messages (wire.ts, ported
+// verbatim), and every /api/messages fixture in tests/town-session-client.test.ts
+// carries one. BeingDesktop can afford to drop it because its inbox renders one
+// direction and always replies to the sender (renderer/town-app.js
+// `startInboxReply`). This shell's inbox marks a message of mine and offers to
+// continue that conversation, which needs the other end's address — without it a
+// message of mine has no reply target at all. Display fields only; carried only
+// when present, so fixtures and payloads without one keep their shape.
+const recipientField = (item: WireRecord) => {
+  const id = validId(item.recipient) ? item.recipient : validId(item.recipient_being_id) ? item.recipient_being_id : '';
+  const name = text(item.recipient_name, 100) || text(item.recipient_display, 100);
+  return { ...(id ? { recipientId: id } : {}), ...(id && name ? { recipientName: name } : {}) };
+};
+
 export function directMessagesDto(value: unknown): { messages: TownDirectMessage[] } {
   if (!record(value) || !Array.isArray(value.messages)) throw failure('INVALID_RESPONSE', '私信格式发生变化，请稍后重试。');
   const seen = new Set<unknown>();
@@ -110,6 +128,7 @@ export function directMessagesDto(value: unknown): { messages: TownDirectMessage
         ? { replyTo: { id: text(item.reply_to, 200), beingId: validId(item.reply_to_sender) ? item.reply_to_sender : '', preview: text(item.reply_to_preview, 200) } }
         : {};
       return { id: text(item.id, 200), senderId, senderName: text(item.sender_name, 100) || senderId || '未知',
+        ...recipientField(item),
         content: text(item.content, 32000), createdAt: text(item.created_at, 64) || text(item.at, 64),
         ...viaField(item), ...reply };
     });

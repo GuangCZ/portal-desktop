@@ -53,10 +53,17 @@ export interface TownDesktopMessagePage {
   source?: string;
 }
 
+/** One message from `GET /api/messages`. `recipientId` is the addressee Town
+ * reported, present only when the payload carried one — it is what a message of
+ * mine is answered to, since replying to my own message continues the
+ * conversation with the other end rather than writing to myself (Town refuses a
+ * self-addressed private message; docs/town-sdk-integration.md「私信与回复」). */
 export interface TownDesktopDirectMessage {
   id: string;
   senderId: string;
   senderName: string;
+  recipientId?: string;
+  recipientName?: string;
   content: string;
   createdAt: string;
   via?: string;

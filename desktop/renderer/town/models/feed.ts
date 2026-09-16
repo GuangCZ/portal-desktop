@@ -44,6 +44,11 @@ export const newFeedFilters = (): FeedFilters => ({
 export interface FeedMessage {
   /** Stable key. Town's sequence for a feed, its message id for a direct message. */
   id: string;
+  /** Private mail rather than a feed. The two are replied to through different
+   * endpoints and different id spaces — `POST /api/messages` takes an opaque
+   * message id, the feeds take a sequence — so a row says which it is instead of
+   * leaving `mailReply` to guess from the shape of an id. */
+  mail: boolean;
   /** The numeric parent a reply would address. 0 when this feed has none. */
   seq: number;
   index: number;
@@ -79,6 +84,7 @@ export function feedMessages(messages: readonly TownDesktopMessage[], options: {
     const mine = Boolean(me && normalizeTownIdentity(authorId) === me);
     return {
       id: message.id,
+      mail: false,
       seq: Number.isSafeInteger(Number(message.id)) ? Number(message.id) : 0,
       index,
       authorId,
@@ -95,21 +101,28 @@ export function feedMessages(messages: readonly TownDesktopMessage[], options: {
   });
 }
 
-/** The inbox. Town's `/api/messages` returns both directions; `senderId` is the
- * only address either way, so a message not from me is one to me. */
+/** The inbox. `GET /api/messages` is the mailbox, newest first, ≤100
+ * (docs/interfaces.md §6). A message whose sender is me is one I sent, and it is
+ * answered to `recipientId` — the other end — not to its sender, which would be
+ * myself. A message from anyone else was addressed to me. */
 export function inboxMessages(messages: readonly TownDesktopDirectMessage[], options: { me: string }): FeedMessage[] {
   const me = normalizeTownIdentity(options.me);
   return messages.map((message, index) => {
     const authorId = (message.senderId || '').trim();
     const mine = Boolean(me && normalizeTownIdentity(authorId) === me);
+    // Town's own addressee wins; a message to me that did not carry one is still
+    // to me. A message of mine without one has no address, and `mailReply` then
+    // declines rather than offering a reply that could only go to myself.
+    const recipientId = (message.recipientId || (mine ? '' : options.me)).trim();
     return {
       id: message.id,
+      mail: true,
       seq: 0,
       index,
       authorId,
       author: message.senderName || authorId || '未知',
-      recipient: mine ? '' : '我',
-      recipientId: mine ? '' : options.me,
+      recipient: mine ? (message.recipientName || recipientId) : '我',
+      recipientId,
       content: message.content,
       mentioned: false,
       mine,
@@ -138,8 +151,12 @@ export const feedDisplayName = (name: string, id: string) =>
  * address — a display name is not unique, and Town resolves the ambiguity by
  * refusing (docs/town-sdk-integration.md「私信与回复」). */
 export function mailReply(message: FeedMessage): FeedReply | undefined {
+  // A message of mine is answered to the other end; anyone else's, to its author.
+  // Replying to my own letter must never address me: Town refuses a self-addressed
+  // private message and this shell intercepts it first (session/client.ts).
   const recipient = message.mine ? message.recipientId : message.authorId;
-  if (!/^[a-zA-Z0-9_-]{1,160}$/.test(message.id) || !recipient || !/^[a-zA-Z0-9_-]{1,160}$/.test(recipient)) return;
+  // A feed carries a sequence, not a mail id, and the two id spaces do not mix.
+  if (!message.mail || !/^[a-zA-Z0-9_-]{1,160}$/.test(message.id) || !recipient || !/^[a-zA-Z0-9_-]{1,160}$/.test(recipient)) return;
   const author = feedDisplayName(message.author, message.authorId);
   return {
     id: message.id,
