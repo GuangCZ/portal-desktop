@@ -356,3 +356,60 @@ BD `src/main.cjs:574` `selectSavedProject`：校验目录在 `sidebarState(...).
 `tests/sidebar-e2e.mjs` 加 4 条 check（`project-new-task-binds-project`、`projects-contain-their-tasks`、
 `workspace-unset-before-select`、`project-select-moves-workspace`），**本机真跑通过，14 条全绿**。
 
+
+---
+
+## 3. 门槛
+
+在 `f4c56f5`（第 13 条完成）上实测：
+
+| 门槛 | 基线 `next @ 7b2cef8` | 本单元 | 差 |
+| --- | --- | --- | --- |
+| `npm run typecheck` | 绿 | **绿** | — |
+| `npx vitest run` 文件 | 109 | **115 passed / 8 skipped = 123** | +14 文件 |
+| `npx vitest run` 用例 | 1197 通过 / 34 跳过 | **1221 通过 / 34 跳过** | **+24 通过，跳过数不变** |
+
++24 = 浏览器归属 6 + QUIT_ALLOWED 5 + WorkerPresenter 1 + 侧栏活动灯 4 + connectionCleared 2 + town-open 3
++ shell-state-ipc 2 + 工作目录联装 2 − 删掉的 `protocolFile` 1。**没有重新启用任何 skip，也没有新增 skip。**
+
+## 4. 真机冒烟
+
+### 4.1 打包
+
+产物沿用第 1–13 条期间打的那一份（命令逐字记录在此，便于复现）：
+
+```
+cp /Users/d5c/Documents/ChatGPT/BeingDesktop/.local/i2-tools/resources/heart-portal resources/heart-portal   # clang 编的 Mach-O stub，--version 打印版本号
+env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package
+codesign --force --deep --sign - "out/Being Desktop-darwin-arm64/Being Desktop.app"
+```
+
+产物：`/Users/d5c/Documents/ChatGPT/BeingDesktop/.local/im-integration/out/Being Desktop-darwin-arm64/Being Desktop.app`
+（`codesign -dv` → `Signature=adhoc`、`Identifier=town.beings.desktop`）。
+asar 里 `/.vite/renderer/main_window/index.html` 与 `/node_modules/node-pty/bin/darwin-arm64-149` 都在，
+说明 Vite external 与 asar prune 两件事都对。
+
+### 4.2 首次启动被系统钥匙串对话框挡住（环境问题，不是代码缺陷；实测，不是推断）
+
+**现象**：刚 ad-hoc 重签之后的**头两次** `electron.launch` 都是
+`Timeout 180000ms exceeded`——Playwright 的两个 ws 都连上了，然后一直等不到窗口。
+
+**定位过程（全部是实测）**：
+
+1. 直接跑产物，40 秒内 stdout/stderr 一个字都没有，但 `ps` 里 GPU 与 Renderer 两个 helper 都在。
+2. 用 `--inspect=9333` 挂上主进程的 node inspector（`Runtime.evaluate` + `includeCommandLineAPI`）：
+   `app.isReady()` = `true`、`app.whenReady()` 立刻兑现，`BrowserWindow.getAllWindows()` = **一个窗口，`url` 是空串**。
+3. 再挂一次（`--inspect=9334`，新 profile），这次 4 秒时窗口已经是 `beings://desktop/`、`loading:false`、`visible:true`，
+   `protocol.isProtocolHandled('beings')` = `true`，`did-fail-load` 一条没有。
+4. 最小 Playwright 脚本（同一个 executable、同样的空 profile）：**`electron.launch` 262 ms 返回**，
+   `firstWindow().url()` = `beings://desktop/`；`pw:protocol` 日志里
+   `beings://desktop/assets/index-*.js` 与 `*.css` 都是 `status:200`。
+5. 原封不动重跑 `node tests/browser-e2e.mjs`：**PASS**。
+
+**结论**：产物是好的，卡的是**第一次**。`main.ts:583-584` 的 `windowReady = true; createWindow();` 排在整个异步 `ready()` 的**最后**，
+而 `ready()` 前面要取 `safeStorage`（`main.ts` 的 `secretStorage`）——ad-hoc 签名每次重签都变，macOS 因此弹**模态**钥匙串授权框，
+主进程同步卡在那里，窗口就一直停在「已创建、未 load」的状态，与第 2 步观察到的完全一致。
+`tests/support/electron-lifecycle.mjs` 里那个 `PORTAL_DESKTOP_TEST_MOCK_KEYCHAIN=1` → `--use-mock-keychain` 的开关，
+注释写的正是这件事（"Ad-hoc macOS builds change their signature on every rebuild"），
+但 `tools-e2e` / `browser-e2e` / `terminal-e2e` **都没有设这个环境变量**，所以刚重签之后的第一次跑必然撞上。
+→ 记进 openIssues（本单元不改这三个脚本的环境变量：那会把「真钥匙串」这条覆盖悄悄换成假的，属于产品判断，不该由整合单元替 I5/I2/I3 拍板）。
