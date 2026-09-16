@@ -338,19 +338,16 @@ P1 的 chat 子系统原样搬进 `subsystems/chat.ts`，成为这套注册方�
 - **`npm run start` 的人工冒烟没做**（本机缺 Rust 工具链，`resources/heart-portal` 不存在；打包验证用的是临时 stub）。
 - **Linux 的 node-pty 没有 prebuild**，`MakerZIP` 的 linux 目标需要构建机上有 python3 + make + g++，本次未验证。
 
-## 集成阶段 I1–I7：并行单元（2026-09-16）
+## 集成阶段：各单元记录（2026-09-16）
 
-I0 的接缝铺好之后，五到七个单元在各自的 worktree 里把移植进来的类接成真实子系统。
-每个单元写自己的 `docs/migration/i<N>-*.md`，**这里只加一行表格项**。
+I0 的接缝铺好之后，每个集成单元在各自的 worktree 里把移植进来的类接成真实子系统，
+详情写在自己的 `docs/migration/<unit>.md`，**这里只追加一行**。
 
-| 单元 | 产出 | 记录 |
+| 单元 | 产出 | 用户可见的变化 / 记录 |
 | --- | --- | --- |
-| I3 终端 + 内置工具浏览器 | `main/subsystems/{terminal,tool-browser}.ts`、`main/tools/{terminal,browser}/ipc.ts`、`main/tools/terminal/node-pty.ts`、`preload/channels/{terminal,tool-browser}.ts`、`shared/{terminal,tool-browser}-types.ts`、`renderer/{terminal,tool-browser}/` | `docs/migration/i3-terminal-browser.md` |
+| I1 · Town | Town 直连读写、累积时间线、成员目录与六位码配对（`subsystems/town.ts` + 24 条 `beings:town-*` 通道 + 三条推送）；删除旧 Town 层与 u3 的 Portal 控制器 | **需要重新配对**：凭据改由 `<userData>/town-client` 保管（与 BeingDesktop 0.8.x 同格式），旧的 `town-credential.json` 不再读取，也没有迁移器；篝火/围炉/私信改为本机直连，不再经 Being 转发，未配对时发送会提示「请用 Being 提供的六位配对码连接 Town。」（`docs/migration/i1-town.md`） |
 | I2 工具桥 + 控制台 | `main/subsystems/tools.ts`、`main/tools/ipc.ts`、`preload/channels/tools.ts`、`shared/tools-types.ts`、`renderer/tools/`；六个接缝各 append 一行 | `docs/migration/i2-tools.md` |
+| I3 终端 + 内置工具浏览器 | `main/subsystems/{terminal,tool-browser}.ts`、`main/tools/{terminal,browser}/ipc.ts`、`main/tools/terminal/node-pty.ts`、`preload/channels/{terminal,tool-browser}.ts`、`shared/{terminal,tool-browser}-types.ts`、`renderer/{terminal,tool-browser}/` | `docs/migration/i3-terminal-browser.md` |
 | I4 编排 + 功能任务账本 | `main/subsystems/orchestration.ts`、`main/orchestration/{instructions,ipc}.ts`、`main/features/{methods,history-cache,town-sync,ipc}.ts`、`preload/channels/orchestration.ts`、`shared/orchestration-types.ts`、`renderer/{orchestration,features}/`；六个接缝各 append 一行。`orchestration.presentation` 待 I2 赋值、Worker 验收卡片待 I5，在那之前对话里看不到卡片（方案接受的中间态） | `docs/migration/i4-orchestration-features.md` |
 | I6 | 侧栏持久化 + 关于/隐私：`main/shell/{sidebar-state,ipc}.ts`、`main/subsystems/shell-state.ts`、`preload/channels/shell-state.ts`、`shared/shell-state-types.ts`、`renderer/settings/`；`OrganizerModel` 改为主进程账本的投影 | `docs/migration/i6-shell-state.md` |
----
-## 集成阶段 I1 起：各单元一行（2026-09-16）
-I0 之后每个集成单元在下表**追加一行**（详情写在各自的 `docs/migration/<unit>.md`）。表头由第一个落地的单元建起。
-| 单元 | 接上了什么 | 用户可见的变化 |
-| I1 · Town | Town 直连读写、累积时间线、成员目录与六位码配对（`subsystems/town.ts` + 24 条 `beings:town-*` 通道 + 三条推送）；删除旧 Town 层与 u3 的 Portal 控制器 | **需要重新配对**：凭据改由 `<userData>/town-client` 保管（与 BeingDesktop 0.8.x 同格式），旧的 `town-credential.json` 不再读取，也没有迁移器；篝火/围炉/私信改为本机直连，不再经 Being 转发，未配对时发送会提示「请用 Being 提供的六位配对码连接 Town。」 |
+| IM 合并后整合修复 | 工具浏览器归属收敛到 `tool-browser` 子系统（`DesktopTools` 改惰性注入）、两条视口通道进 `QUIT_ALLOWED`、`test:tools` / `test:terminal` / `test:sidebar` 三个脚本接进 `test:all`、`main/town/channel/` 的 u3 副本收敛到 `main/common/`、`WorkerPresenter` 类型放宽、侧栏活动灯认 Worker、`beings:sidebar-project-select` 补回、`connectionCleared()` 接上调用方 | 侧栏项目可以切换工作目录（终端 / 控制台 / 工具桥随之改变）；有 Worker 在跑的会话，侧栏的灯是「说话中」；`beings:town-open` 回到工具浏览器标签页而不是系统浏览器（`docs/migration/im-integration.md`） |

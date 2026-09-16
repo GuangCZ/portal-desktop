@@ -9,8 +9,9 @@ renderer/
 ├─ index.html               桌面 HTML 挂载点
 ├─ app/                     全局布局、导航、设置及跨页面协调
 │  ├─ page.tsx
+│  ├─ slots.tsx             面板 / 侧栏 / 顶栏 / 全屏页四个插槽数组
 │  ├─ components/           顶栏、侧栏、设置、搜索、诊断
-│  ├─ models/               应用状态、跨页面工作场景
+│  ├─ models/               应用状态、跨页面工作场景、功能模型注册表
 │  ├─ hooks/                对话与壳层的接线
 │  └─ styles.css            桌面文档样式入口
 ├─ conversation/            与 Being 的对话
@@ -21,6 +22,33 @@ renderer/
 │  ├─ page.tsx
 │  ├─ components/           身份、发送、内容阅读和安装面板
 │  └─ models/               Town 状态、请求协调和消息筛选
+├─ tools/                   桌面工具桥：浏览器地址栏、控制台与待确认调用
+│  ├─ slot.tsx              面板 / 顶栏入口与功能模型的注册项
+│  ├─ components/           面板、地址栏、控制台、连接状态、调用确认卡片
+│  ├─ models/               工具桥状态、视口测量与调用队列
+│  └─ styles.css            本模块样式入口（由 slot.tsx 引入）
+├─ tool-browser/            Being 可操作的内置浏览器（独立分区，与外壳浏览器分开）
+│  ├─ slot.tsx
+│  ├─ components/           标签页、地址栏与原生视图的占位矩形
+│  ├─ models/               标签页状态与视口去重
+│  └─ styles.css
+├─ terminal/                交互终端面板（xterm + 主进程 node-pty）
+│  ├─ slot.tsx
+│  ├─ components/           面板、标签页、终端画布
+│  ├─ models/               会话列表、回放与字号
+│  └─ styles.css
+├─ orchestration/           编排模式与 Worker
+│  ├─ slot.tsx
+│  ├─ components/           代理设置、Worker 列表 / 详情、会话分组
+│  ├─ models/               编排设置与 Worker 账本
+│  └─ styles.css
+├─ features/                功能任务账本（面板与模型由 orchestration/slot.tsx 注册）
+│  ├─ components/           任务列表与详情
+│  └─ models/               任务账本与导航钩子
+├─ settings/                侧栏账本的渲染层投影与关于 / 隐私静态页
+│  ├─ components/           侧栏底部入口（也是它的插槽注册项）、关于、隐私
+│  ├─ models/               侧栏账本（主进程为真值）
+│  └─ styles.css            本模块自带样式入口（由 components/entry.tsx 引入）
 ├─ portal/page.tsx          本机 Portal 页面
 ├─ browser/                内置浏览器页面及 hooks/ 分栏交互
 └─ shared/                 跨功能复用
@@ -34,6 +62,10 @@ renderer/
 
 - `page.tsx` 组合当前模块的组件；`components/` 负责 JSX 与表单，`models/` 负责
   状态和业务规则，`hooks/` 负责 React 生命周期。协议实现放 `services/`，不混入 JSX。
+- 集成阶段接进来的模块（`tools/`、`tool-browser/`、`terminal/`、`orchestration/`）各带一个
+  `slot.tsx`：它把本模块的面板、顶栏按钮与功能模型注册进 `app/slots.tsx` 与
+  `app/models/registry.ts`，壳层的 `page.tsx` / `sidebar.tsx` / `topbar.tsx` 因此不需要认识它们。
+  `features/`、`settings/` 与 `town/` 的侧栏项没有单独的 `slot.tsx`，注册项直接从组件或模型文件导出。
 - 在功能模块内就近修改代码，不创建全局业务 `components / models / hooks`。
   紧密相关的小组件可以放同一文件；不为单个组件继续嵌套目录。
 - `app/` 组合页面并协调跨模块动作。`shared/` 不依赖具体功能页面或业务模型。
@@ -65,5 +97,7 @@ Markdown 和高亮 token 直接渲染为 React 元素，不使用 HTML 注入。
 `npm run typecheck`、`npm test` 检查类型、状态及模块依赖边界（对话层见
 `tests/conversation-model.test.ts` 与 `tests/composer.test.ts`）；
 `npm run test:menu-keyboard`、`npm run test:town-names`、`npm run test:seed-garden`、
-`npm run test:update-progress` 用无头 Chrome 验证真实组件之间的界面联动。
+`npm run test:update-progress` 用无头 Chrome 验证真实组件之间的界面联动；
+`npm run test:tools`、`npm run test:terminal`、`npm run test:sidebar`、`npm run test:browser`
+需要先 `npm run package`，它们驱动的是打包出来的客户端。
 桌面检查见[测试说明](../TESTING.md)，进程划分见[桌面目录说明](../README.md)。
