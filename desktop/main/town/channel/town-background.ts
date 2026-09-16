@@ -4,11 +4,11 @@
 //
 // IPC surface registered by BeingDesktop main.cjs boot() (registration belongs to the
 // integration stage, see docs/interfaces.md section 1):
-//   townSnapshot({kind, firesideId?})        -> envelope, synchronous local read
-//   townCachedSnapshot({kind, firesideId?})  -> envelope after the disk restore settles
-//   townRefresh({kind, firesideId?})         -> envelope after one transport read
-//   townRequestRead({kind, firesideId?})     -> envelope after one explicit Being-executed read
-//   townLoadOlder({kind, firesideId?})       -> envelope after one bounded older-history walk
+//   getTownMessageSnapshot(feed)   -> snapshot()/cachedSnapshot(): envelope, cache-restored first
+//   refreshTownMessages(feed)      -> refresh(): envelope after one window read
+//   loadOlderTownMessages(feed)    -> loadOlder(): one bounded older-history walk, SDK reads only
+//   requestTownRead({kind, firesideId?, selectionRevision?, includeRooms?}) -> requestRead()
+// feed is {kind:'bonfire'} or {kind:'fireside', firesideId}; updates push on being:town-messages.
 // Feed updates reach the renderer through onUpdate, diagnostics through onStatus.
 //
 // TownRefresh, TownSession and BonfireCache are ported by other migration units; here they are

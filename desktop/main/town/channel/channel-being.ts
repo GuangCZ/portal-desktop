@@ -4,10 +4,10 @@
 //
 // IPC surface registered by BeingDesktop main.cjs boot() (registration belongs to the
 // integration stage, see docs/interfaces.md section 1):
-//   beginChannelConnection({ channel, connectionRevision })  -> ChannelOutcome
-//   getChannelStatus({ channel, connectionRevision })        -> ChannelOutcome & { channels }
-//   inspectChannelStatus({ channel, connectionRevision })    -> read-only service snapshot
-//   updateFeishuCredentials(...)                             -> always rejects locally
+//   beginChannelConnection({channel, connectionRevision})  -> ChannelOutcome
+//   checkChannelStatus({channel, connectionRevision})      -> getChannelStatus(): outcome & {channels}
+//   inspectChannelStatus({channel, connectionRevision})    -> read-only service snapshot
+//   updateFeishuCredentials(value)                         -> always rejects locally
 // State changes reach the renderer through the injected onChange callback.
 //
 // Electron is never imported; every outside dependency arrives through the constructor.

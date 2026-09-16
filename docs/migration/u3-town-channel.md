@@ -455,3 +455,27 @@ TownPairing 的 5 个用例（全部移植）：
 1. `P1 identity exposes distinct Loom, verified Town and display fields`（第 87 行）：`new TownController({installer:{}, portal:{state:{}}, getContext:()=>({beingName:'cz_being', townId:'t_self', displayName:'After'})})`，断言 `state().identity.loomBeingId === 'cz_being'`、`.townId === 't_self'`、`.displayName === 'After'`。其余部分测的是 TownClient。
 2. `P1 exact acceptance fixture keeps Loom, Town and display identities separate across IPC`（第 150 行）：identity 夹具 `{loomBeingId:'cz_being', townId:'t_IzYOPP3G0ABJuK2M', displayName:'Neuromancer'}`，经 `structuredClone(controller.state())` 走 preload 后三字段逐一相等。其余部分测 `renderer/town-mentions.js` 与 `src/town-wire.cjs`（其他单元）。
 注：两处都只给 `installer`/`portal`/`getContext` 三个构造参数 —— `state()` 必须在没有 `saveDeployment`/`startPortal` 的情况下可用。
+
+### docs/interfaces.md 第 1、3 节的核对结果（用于文件头注释）
+IPC 通道名（第 1 节，与 main.cjs 的 `handle(...)` 名一致）：
+- Town 目录/草稿：`getTownCatalog()`、`openTownPage(id)`、`prepareTownFeature(id)`（串行）、`prepareTownAssistance({operation})`（串行）、`prepareFiresideDraft({draft, connectionRevision})`（串行，draft ≤32000，`connectionRevision` 必须等于当前 `generation`）、`prepareTownPairing()`。
+- Town 时间线：`getTownMessageSnapshot(feed)`（先返回缓存恢复的数据）、`refreshTownMessages(feed)`（一次窗口读 `limit=50`）、`loadOlderTownMessages(feed)`（向前最多 6 页；Being 中继源不支持）、`requestTownRead({kind, firesideId?, selectionRevision?, includeRooms?})`（属 `sdkReadMethods`，跳过记账）。`feed = {kind:'bonfire'} | {kind:'fireside', firesideId}`。推送通道 `being:town-messages` / `onTownMessages`。
+- Channel：`beginChannelConnection({channel})`（功能任务）、`checkChannelStatus({channel})`（功能任务）、`inspectChannelStatus({channel})`（只读）、`updateFeishuCredentials(value)`。注意 IPC 名是 **checkChannelStatus**，对应 `ChannelBeing.getChannelStatus`。
+- Town 应用状态与部署：`getTownAppState()` / `refreshTownApp()` → `townState()`；`deployPortal(request)`（串行·功能任务）。
+第 3 节登记的构造参数：
+- `ChannelBeing {getContext, getSession, readStatus, fetchImpl, onChange, onRequest}`（文档未列源码里的动态 `import BeingClient`，本单元把它显式化为 `createClient`）。
+- `TownBackground {townSession, getIdentity, readCachedSnapshot, direct, limit, bonfireCache, getCacheKey, onUpdate, onStatus}`（源码另有 `clock`；本单元另加 `createRefresh`）。
+- `TownController {installer, portal, getContext, saveDeployment, startPortal, defaultWorkspace, onChange, inspectInstallation}`（源码另有 `platform`/`arch`/`configFactory`；本单元另加 `portalRelease`/`defaultRelease`/`prepareWorkspace`/`groveConfigText`/`fs`/`randomUUID`）。
+- `TownRefresh {readSnapshot, getIdentity, onSnapshot, onStatus, onSuccess, intervalMs, limit, automatic, cached, pageable}`，方法 `start/stop/pause/resume/reset`、`refresh()`、`requestRead(readSnapshot)`、`loadOlder()`、`snapshot()`、`status()`、`cacheRecord()`、`restoreCache(value)` —— 与本单元 `types.ts` 的 `TownRefreshLike` 一致。
+
+### 其余文档核对（docs/town-sdk-integration.md、docs/architecture.md 5.3、docs/p1-town-identity-mentions-2026-09-15.md）
+- 「SDK 配对升级」确认 `src/town-pairing.cjs` 的约束：独立 scene、回复必须恰好六位大写字母/数字、忽略其他 scene/推理/工具结果/不完整回复、读取前探活、`202`/90 秒超时/无法确认一律转手动且不重发、不接受迟到的码 —— 与 `channel/pairing-probe.ts` 的移植一致。
+- 「配对与权限」确认安全存储不可用要在兑换前停止（`client.store.assertAvailable?.()` 在探活之前调用）。
+- 「发送路径」的 `BeingTownWriter` 中继回退属于 `TownClient.speak()`，不在本单元；架构 5.3 同样把中继标在 `townSpeak` 上。按任务要求不移植，保留为可注入的可选钩子。
+- 架构 5.3 确认：`ChannelBeing` 的固定会话由 `ChatSessions.ensureChannel` 创建（本单元的 `getSession` 注入点）；只读状态查询走 `TownSession.getChannelStatus`（本单元的 `readStatus` 注入点）；`refreshTownMessages` 用 `limit:50`（由 main.cjs 在构造 TownBackground 时传入，模块默认仍是 10，与 BeingDesktop 一致）。
+- `docs/p1-town-identity-mentions-2026-09-15.md` 本轮改动集中在 renderer 与 town-session，未涉及 TownController；三字段身份（loomBeingId / townId / displayName）与「不按显示名判定身份」的约束由 `channel/town-controller.ts` 的 `state().identity` 保持。
+
+### 分层与依赖自检
+- `desktop/main/town/channel/**` 无任何 `electron` 导入。
+- 仅三处使用 node 内置模块（main 层允许）：`town-controller.ts` 与 `portal-config.ts` 的 `node:fs/promises` + `node:path`、`loom-connection.ts` 的 `node:crypto`（sha256 分区指纹）；`node:crypto` 的 `randomUUID` 与 fs 门面都可通过构造参数替换。
+- `tests/architecture.test.ts` 4 条全部通过。

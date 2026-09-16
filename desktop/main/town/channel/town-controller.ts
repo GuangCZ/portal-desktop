@@ -5,9 +5,9 @@
 //
 // IPC surface registered by BeingDesktop main.cjs boot() (registration belongs to the
 // integration stage, see docs/interfaces.md section 1):
-//   townState()                 -> state()
-//   refreshPortalInstall()      -> refresh(), returns state()
-//   deployPortal({ confirmed, permissions: { files, exec, web } }) -> { status, detail }
+//   getTownAppState()           -> state()
+//   refreshTownApp()            -> refresh(), returns state()
+//   deployPortal({confirmed, permissions:{files, exec, web}}) -> {status, detail}
 //   createFireside/joinFireside -> requireTownIdentity(), always rejects
 // State changes reach the renderer through the injected onChange callback.
 //
