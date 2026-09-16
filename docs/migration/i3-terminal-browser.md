@@ -479,3 +479,41 @@ BD 的 `state.workspace.path` 对应的是本仓库的 `projectWorkspace`（`sha
    等 I6 的外观设置把这两个变量补上，终端字号就会跟着走，不需要再改这里。
 8. **`connectionCleared()` 依然没有调用方**（P1 就有的缺口，I0 原样保留）。
    本单元的两个子系统都没有实现它——终端与浏览器是本地工具，换 Being 不需要清空。
+
+---
+
+## 6. 复审整改（2026-09-16）
+
+整改前基线（本 worktree，e9e106c）：`npm run typecheck` 绿；`npx vitest run` → **1103 passed / 58 skipped，100 files**。
+
+### 6.1 为整改重读的文件（摘要）
+
+- **`desktop/renderer/tool-browser/models/tool-browser.ts`（133 行）**——`start()` 订阅 `onState` + 首读 `state()`，
+  返回的停止闭包里 `lifecycle++`、`stop()`、`open=false`，再直接 `api.toolBrowser.setViewport({visible:false})`；
+  `hide()` 同样直接发 `{visible:false}`。两处都**绕过** `this.bounds` 去重缓存（`setViewport()` 第 93-94 行
+  在 visible+矩形都没变时直接 return）。→ 复审第 1 条成立。
+  `accept()` 第 70 行 `if (previous !== state.activeTabId) this.address = ...`，只在切标签页时回填地址；
+  上方注释写的 `editing` / 非受控输入框机制在 `panel.tsx` 里**不存在**（第 105 行是 `value={browser.address}`，受控）。
+  → 复审第 3 条成立，且注释确实描述了不存在的东西。
+- **`desktop/renderer/tool-browser/components/panel.tsx`（117 行）**——`sendBounds` 用 `getBoundingClientRect()`
+  + `!panel.current?.hidden && !document.querySelector("dialog[open]")` 算 visible，
+  经 `useLayoutEffect` / `ResizeObserver` / `MutationObserver` / `window.resize` 触发；
+  地址输入框没有 `onFocus`/`onBlur`，也没有 BD 的 `select()`。
+- **BD `renderer/desktop-tools.js`（200 行，只读源）**——三条规则是这次整改的对照物：
+  1. `renderBrowser()`：`if(document.activeElement!==$('browser-address'))$('browser-address').value=active?.url || '';`
+     ——**每次状态渲染**都回填，唯一的例外是地址栏有焦点。
+  2. `layout()`：payload 含 `visible`，`const key=JSON.stringify(payload);if(key===lastViewport)return;`，
+     且 `hide()`/`show()` 都走 `render()→layout()`，**没有任何一条绕过去重缓存的旁路**；
+     发送失败时 `lastViewport=''`，下一次布局会重发。
+  3. `$('browser-address-form').onsubmit`：`if(active?.url===url)return;`（地址没变就什么都不做），
+     `$('browser-address').onfocus=event=>event.target.select();`。
+- **`desktop/main/extensions.ts`（195 行）**——`installDesktopExtensions(ctx)` 是 `installSubsystems(ctx, INSTALLERS)`
+  的唯一生产调用点；`INSTALLERS` 模块私有。安装循环第 159-160 行 `try/catch` 把失败吞成
+  `report('subsystem-install:'+install.name, …)`，`ipcMain.handle` 的重复通道名异常会走这条路——
+  客户端照常启动，只是少一个功能，测试不会红。→ 复审第 2 条的危险成立。
+- **`tests/chat-ipc.test.ts` fixture（第 77-85 行）**——已改成 `installSubsystems(ctx, [installChatSubsystem])`。
+  `grep -rn installDesktopExtensions tests/` 只剩 `main-startup.test.ts:20` 的注释与
+  `chat-save-rollback.test.ts:66` 的 `vi.mock` 桩 → 真实 `INSTALLERS` 确实**零覆盖**。
+- **`desktop/renderer/app/styles.css:92` 与 `:204`**——`#browser-panel{flex:0 0 49%}`（portal-desktop 的，本单元不改）、
+  `.workspace-body{display:flex;flex:1;min-height:0}`，`.workspace-stage{flex:1;min-width:0}`。
+  本单元两个面板都是 `flex:0 0 42%` + `min-width:280/260px` → 三个面板同时打开必然溢出。→ 复审第 5 条成立。
