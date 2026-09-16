@@ -1,5 +1,6 @@
 import type { ChatAPI } from './desktop-types';
 import type { TerminalAPI, ToolBrowserAPI } from './desktop-types';
+import type { DesktopToolsAPI } from './desktop-types';
 export interface UpdateState {
   phase: 'idle' | 'checking' | 'available' | 'current' | 'unavailable';
   currentVersion: string; latestVersion?: string; message: string; releaseUrl: string;
@@ -114,6 +115,7 @@ export interface DesktopAPI {
   terminal: TerminalAPI;
   /** The Being-operable tool browser, not the shell browser above (desktop-types.ts). */
   toolBrowser: ToolBrowserAPI;
+  tools: DesktopToolsAPI;
   // ────────────────────────────────────────────────────────────────────────────
 }
 declare global { interface Window { beings: DesktopAPI } }

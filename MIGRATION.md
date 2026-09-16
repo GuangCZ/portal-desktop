@@ -346,3 +346,4 @@ I0 的接缝铺好之后，五到七个单元在各自的 worktree 里把移植�
 | 单元 | 产出 | 记录 |
 | --- | --- | --- |
 | I3 终端 + 内置工具浏览器 | `main/subsystems/{terminal,tool-browser}.ts`、`main/tools/{terminal,browser}/ipc.ts`、`main/tools/terminal/node-pty.ts`、`preload/channels/{terminal,tool-browser}.ts`、`shared/{terminal,tool-browser}-types.ts`、`renderer/{terminal,tool-browser}/` | `docs/migration/i3-terminal-browser.md` |
+| I2 工具桥 + 控制台 | `main/subsystems/tools.ts`、`main/tools/ipc.ts`、`preload/channels/tools.ts`、`shared/tools-types.ts`、`renderer/tools/`；六个接缝各 append 一行 | `docs/migration/i2-tools.md` |

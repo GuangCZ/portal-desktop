@@ -13,11 +13,13 @@
 import { chat } from './chat';
 import { terminal } from './terminal';
 import { toolBrowser } from './tool-browser';
+import { tools } from './tools';
 
 export const desktopChannels = {
   chat,
   terminal,
   toolBrowser,
+  tools,
 };
 // ──────────────────────────────────────────────────────────────────────────────
 

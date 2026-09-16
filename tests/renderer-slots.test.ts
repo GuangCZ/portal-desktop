@@ -58,9 +58,11 @@ describe("the renderer slot registry", () => {
   // slot that appears here without a line in slots.tsx — or disappears from it —
   // fails this first.
   it("carries exactly the surfaces the landed units registered", () => {
-    expect(LANDED.panels).toEqual(["terminal", "tool-browser"]);
+    expect(LANDED.panels).toEqual(["terminal", "tool-browser", "tools"]);
     expect(LANDED.sidebar).toEqual([]);
-    expect(LANDED.topbar).toEqual(["terminal", "tool-browser"]);
+    expect(LANDED.topbar).toEqual(["terminal", "tool-browser", "tools"]);
+    for (const list of [LANDED.panels, LANDED.sidebar, LANDED.topbar, LANDED.sheets, LANDED.models.map(factory => factory.key)])
+      expect(new Set(list).size).toBe(list.length);
     expect(LANDED.sheets).toEqual([]);
   });
 
@@ -141,9 +143,9 @@ describe("the renderer feature-model registry", () => {
   // those. `AppModel` builds every registered factory in its constructor, so this
   // also proves none of them needs a live shell to be constructed.
   it("builds exactly the models the landed units registered", () => {
-    expect(LANDED.models.map(factory => factory.key).sort()).toEqual(["terminal", "toolBrowser"]);
+    expect(LANDED.models.map(factory => factory.key).sort()).toEqual(["terminal", "toolBrowser", "tools"]);
     FEATURE_MODELS.push(...LANDED.models);
-    expect(Object.keys(new AppModel(desktop()).features).sort()).toEqual(["terminal", "toolBrowser"]);
+    expect(Object.keys(new AppModel(desktop()).features).sort()).toEqual(["terminal", "toolBrowser", "tools"]);
   });
 
   // The point of the whole case: a model registered here gets the same lifecycle

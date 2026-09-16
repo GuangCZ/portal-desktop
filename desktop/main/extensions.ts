@@ -29,11 +29,13 @@ import type {
 import { installChatSubsystem } from './subsystems/chat';
 import { installTerminalSubsystem } from './subsystems/terminal';
 import { installToolBrowserSubsystem } from './subsystems/tool-browser';
+import { installToolsSubsystem } from './subsystems/tools';
 
 const INSTALLERS: SubsystemInstaller[] = [
   installChatSubsystem,
   installTerminalSubsystem,
   installToolBrowserSubsystem,
+  installToolsSubsystem,
 ];
 // ──────────────────────────────────────────────────────────────────────────────
 

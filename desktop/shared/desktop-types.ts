@@ -16,4 +16,5 @@
 export * from './chat-types';
 export * from './terminal-types';
 export * from './tool-browser-types';
+export * from './tools-types';
 // ──────────────────────────────────────────────────────────────────────────────

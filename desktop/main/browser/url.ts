@@ -1,3 +1,16 @@
+// The SHELL browser's address parsing: what a person typed into `ClientBrowser`'s
+// address bar, and how an address is shown back to them with credentials removed.
+// portal-desktop's own module, unchanged by the Being Desktop migration.
+//
+// THE OTHER PARSER. `desktop/main/tools/browser/browser.ts` exports
+// `normalizeBrowserUrl` for the Being-facing tool browser, and
+// `desktop/main/tools/browser-links.ts` routes external links through it. The
+// rules differ on purpose and the two files are kept apart (integration plan
+// §3.2「要收敛的副本」): here, bare text becomes a host name, because a person is
+// typing; there, anything that is not clearly an address is REFUSED, because a
+// Being is asking. If they are ever merged, the stricter one wins. Note also that
+// this file only hides credential parameters when showing an address, while the
+// tool browser redacts them everywhere a snapshot can reach the renderer.
 const credentialKey = /token|secret|password|api[-_]?key|authorization|^code$/i;
 
 export function browserURL(input: string): string {
