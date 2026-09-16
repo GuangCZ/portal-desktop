@@ -242,3 +242,12 @@
 17. `a blocked redirect with no committed page remains a fatal load error` — 未提交页面上 `will-redirect` 到 `being://app/index.html` → error 匹配 `/已阻止/`、notice 为空
 
 （`test(` 出现次数 = 17，与上表一一对应；移植后 vitest 用例数必须 ≥ 17。）
+
+### docs/architecture.md 5.4（桌面工具桥）与 9（渲染层）中与本单元相关的内容
+
+- 工具桥是 Desktop 充当 MCP 服务器的反向连接（DesktopToolLink over Portal relay）。直接模式暴露 `desktop_browser_*`、`desktop_console_*`、`desktop_terminal_*`；编排模式只暴露 `desktop_worker_*`。
+- 浏览器与控制台工具调用进入「待确认队列（上限 8）」，用户 `request.allow` 后才 `invoke → DesktopBrowser.readPage / DesktopConsole.run …`。
+- `desktop_terminal_*` 用消息里的 `terminal.scope`（sessionId + sessionToken）绑定会话，**不再逐次确认**。
+- 渲染层：`desktop-tools.js`（`beingTools`）负责内置浏览器面板、控制台与待确认工具调用；`terminal-panel.js`（`beingTerminal`）是 xterm 终端面板。两者都属于后续集成阶段的 renderer 工作，不在本单元范围。
+
+结论：本单元只移植 `DesktopTerminal` 与 `DesktopBrowser` 两个主进程类本身；确认队列、工具目录、terminal scope 绑定、renderer 面板都在别的单元或后续集成阶段。
