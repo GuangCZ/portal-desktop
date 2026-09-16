@@ -163,3 +163,37 @@ test("feature models and services remain independent of React components and hoo
     ),
   ).toEqual([]);
 });
+
+// The two rules the I0 subsystem seam rests on (2026-09-16, integration plan
+// §2.7). Both are about keeping the seam cheap to merge into from five branches.
+
+test("the shared main-process floor depends on nothing but Node and itself", () => {
+  // desktop/main/common/ holds the implementations several units would otherwise
+  // each copy (sanitizeText, the platform helpers, the Loom address parser, the
+  // request context). Every unit imports it, so anything it imports becomes a
+  // dependency of all of them — and `sessionPartition` there is a disk format,
+  // which must not start depending on a feature's state. Node builtins only.
+  expect(
+    edges.filter(
+      (edge) =>
+        edge.source.startsWith("main/common/") &&
+        !nodeImport(edge.specifier) &&
+        !edge.target.startsWith("main/common/"),
+    ),
+  ).toEqual([]);
+});
+
+test("subsystems reach Electron only through the façade they are installed with", () => {
+  // `SubsystemContext.electron` (desktop/main/subsystems/types.ts) is what a
+  // subsystem gets: the window, the session, the clipboard, the shell, `net`. A
+  // direct `import ... from "electron"` here would make the subsystem impossible
+  // to install in a test without a running application, which is the whole reason
+  // `extensions.ts` takes everything as parameters.
+  expect(
+    edges.filter(
+      (edge) =>
+        edge.source.startsWith("main/subsystems/") &&
+        edge.specifier === "electron",
+    ),
+  ).toEqual([]);
+});

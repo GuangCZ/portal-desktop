@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AppModel } from "../models/app";
 import { useModel } from "../../shared/hooks/use-model";
+import { topbarActions } from "../slots";
 export function Topbar({ model }: { model: AppModel }) {
   const app = useModel(model);
   const [expanded, setExpanded] = useState(false),
@@ -134,6 +135,10 @@ export function Topbar({ model }: { model: AppModel }) {
         </span>
       </div>
       <div className="topbar-actions">
+        {/* Feature actions (slots.tsx), before the shell's own controls. */}
+        {topbarActions().map(({ key, Action }) => (
+          <Action key={key} app={app} />
+        ))}
         <button
           id="refresh-chat"
           className="topbar-icon-button"

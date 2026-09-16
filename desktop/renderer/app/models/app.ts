@@ -10,6 +10,7 @@ import { Store, errorText } from "../../shared/models/store";
 import { WorkspaceModel } from "./workspace";
 import { TownModel } from "../../town/models/town";
 import { ConversationModel } from "../../conversation/models/conversation";
+import { FEATURE_MODELS, type AppFeatureModels } from "./registry";
 
 export class AppModel extends Store {
   snapshot?: Snapshot;
@@ -59,6 +60,11 @@ export class AppModel extends Store {
    * 2026-09-16, and the `beings://chat` path it used to live behind was removed
    * with the rest of the iframe wiring. */
   readonly conversation: ConversationModel;
+  /** Models registered by an integration unit (./registry.ts). A slot component
+   * reads its own state from here; the shell itself never looks inside. Populated
+   * at the end of the constructor, so the built-in models above are complete
+   * before any factory runs. */
+  readonly features = {} as AppFeatureModels;
   constructor(readonly api: DesktopAPI) {
     super();
     this.conversation = new ConversationModel({
@@ -77,6 +83,15 @@ export class AppModel extends Store {
       },
       (data) => this.post(data),
     );
+    for (const feature of FEATURE_MODELS) {
+      // A broken feature model must not stop the conversation opening, which is
+      // the same rule the main-process registry follows.
+      try {
+        (this.features as Record<string, unknown>)[feature.key as string] = feature.create(api, this);
+      } catch (error) {
+        this.toast(error);
+      }
+    }
   }
   start() {
     let active = true;
@@ -99,6 +114,10 @@ export class AppModel extends Store {
     }
     const cleanups = [
       cleanupWorkspace,
+      // A registered model publishes through the same Store contract the built-in
+      // ones use, so the shell re-renders on its changes without knowing it exists.
+      ...Object.values(this.features as Record<string, { subscribe(listener: () => void): () => void }>)
+        .map((model) => model.subscribe(() => this.changed())),
       this.town.start(),
       this.api.onPortal((state) => {
         if (this.snapshot) {

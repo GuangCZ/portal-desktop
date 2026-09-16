@@ -16,6 +16,7 @@ import { Dialog } from "../../shared/components/dialog";
 import { age, basename } from "../../conversation/models/organizer";
 import type { ConversationModel } from "../../conversation/models/conversation";
 import type { ChatSessionSummary } from "../../../shared/desktop-types";
+import { sidebarSections } from "../slots";
 
 export function Sidebar({ model }: { model: AppModel }) {
   const app = useModel(model);
@@ -78,6 +79,10 @@ export function Sidebar({ model }: { model: AppModel }) {
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg>
           搜索会话
         </button>
+        {/* Feature entries (slots.tsx), e.g. the bonfire and fireside rows. */}
+        {sidebarSections("head").map(({ key, Section }) => (
+          <Section key={key} app={app} />
+        ))}
       </div>
       <div className="sidebar-scroll">
         {groups.pinned.length > 0 && (
@@ -100,12 +105,18 @@ export function Sidebar({ model }: { model: AppModel }) {
             </p>
           )}
         </section>
+        {sidebarSections("scroll").map(({ key, Section }) => (
+          <Section key={key} app={app} />
+        ))}
       </div>
       <div className="sidebar-foot">
         <span className="sidebar-being">{app.snapshot?.settings.being || "Being"}</span>
         <span className="sidebar-being-status">
           {connected ? "已连接" : app.snapshot?.settings.hasToken ? "连接中…" : "未连接"}
         </span>
+        {sidebarSections("foot").map(({ key, Section }) => (
+          <Section key={key} app={app} />
+        ))}
       </div>
       <SearchDialog open={search} onClose={() => setSearch(false)} app={app} />
       <Dialog

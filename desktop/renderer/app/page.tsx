@@ -18,6 +18,7 @@ import { ConnectionSettings, ClientSettings } from "./components/settings";
 import { Diagnostics } from "./components/diagnostics";
 import { Dialog } from "../shared/components/dialog";
 import { PlaceHeading } from "./components/navigation";
+import { viewSheets, visiblePanels } from "./slots";
 import logo from "../../../resources/branding/logo.png";
 export function App({ model }: { model: AppModel }) {
   const app = useModel(model);
@@ -140,6 +141,11 @@ export function App({ model }: { model: AppModel }) {
           </div>
           <Companion model={app.workspace} />
           <Browser model={app} />
+          {/* Feature panels (slots.tsx). Each owns its own chrome and decides when
+              it is on screen; the shell only mounts it. */}
+          {visiblePanels(app).map(({ key, Panel }) => (
+            <Panel key={key} app={app} />
+          ))}
         </div>
       </main>
       <Diagnostics model={app} />
@@ -153,6 +159,10 @@ export function App({ model }: { model: AppModel }) {
         <PlaceHeading view={app.view} navigate={app.navigate} />
         <Portal model={app} />
         <Town model={app.town} />
+        {/* Feature sheets (slots.tsx): one full page per registered view. */}
+        {viewSheets(app.view).map(({ key, Sheet }) => (
+          <Sheet key={key} app={app} />
+        ))}
       </Dialog>
       <ChatSearch model={app} />
       <TownComposer model={app.town} />
