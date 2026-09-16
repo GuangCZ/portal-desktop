@@ -139,3 +139,19 @@
 `prefix · 最近检查 · 最近采集 · 显示上次同步内容`。**唯一一处增量**：0.8.26 只能从一次已经失败的
 `SBS_NOT_CONFIGURED` 读里知道后台采集没设置，本外壳被直接告知（`beings:model-settings-state`），
 所以同一句话在事实已知时就说；`configured: true` **不会**用来反驳「读不到」。
+
+### 3.4 测试
+
+| 文件 | 改动 |
+| --- | --- |
+| `tests/town-conversation-rules.test.ts`（**新建**，17 条） | I1 遗留 3 的三族：围炉切换竞态 6 条、草稿 3 条、SBS 状态行 6 条、「一次打开一次读」2 条。每条都带它来自 BD `test/town-conversation-ui.cjs` 的原名。 |
+| `tests/town-session-session.test.ts` | 新增 5 条（目录挂起不拖住篝火、暖目录仍解析作者、并发合并且失败不粘、放弃的调用方不取消别人的读、失效后另起一条）。既有「Bonfire reads use documented since and limit」那条把 `calls[1]` 改成按路由找 `/api/bonfire/hear`——原来断言的 `since=3`/`limit=20` 一个没少，只是目录读现在可能落在它前面。 |
+| `tests/town-ui.mjs` | 新增 4 条真窗口 check（草稿光标与焦点、列表滚动位置、状态行到达页面、五个并发目录读只有一条上线）。两条原 `pending` 转绿改为硬 `check`，并把三条读计数断言改成**对各自基线**计数（理由与实测见脚本内注释与本文件 §4.1）。夹具只增加了一个 `bulk` 开关与一个并发计数，既有场景一个字没改。 |
+
+**反向证据（去掉修复会重新变红）**
+
+| 修复 | 反向证据 |
+| --- | --- |
+| `getBonfireMessages` 不等目录 | `tests/town-ui.mjs`「messages render while the member directory is still pending」——IM 在同一夹具、同一打包流程下实测为红（记录 §9.2），本单元实测为绿；`tests/town-session-session.test.ts`「a pending member directory does not hold up the bonfire messages」同一条规则的单元级复现。 |
+| `getMembers` in-flight 合并 | `tests/town-ui.mjs`「five directory reads at once are one request on the wire」；单元级 `concurrent directory reads share one request`。 |
+| 渲染层四条 | 把 `applyTimeline` 的 feed 围栏、`openFeed` 的 `onFeed`、`receiveState` 的 `arrived`、`send()` 的草稿删除逐条改回原样后重跑 `tests/town-conversation-rules.test.ts`：**17 条里 4 条变红**（围炉迟到答复、围炉往返、回执清草稿、身份到达不重读），改回来后 17 条全绿。 |
