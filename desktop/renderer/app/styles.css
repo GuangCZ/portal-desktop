@@ -154,9 +154,13 @@ html[data-theme=dark] .mention-tag,html[data-theme=dark] .mentions-me .social-av
 #town-send-count{font-size:12px;font-variant-numeric:tabular-nums}.over-limit{color:#b34b47!important}.send-shortcut{font-size:11px;color:var(--muted)}
 
 /* Catalog panes share the space left inside the sheet, including short windows. */
+#place-sheet #town-view.paginated-view{overflow:hidden}
+#place-sheet .paginated-view .town-content{height:100%;min-height:0;width:100%;display:flex;flex-direction:column;padding-bottom:18px}
+#place-sheet .paginated-view .town-toolbar,#place-sheet .paginated-view .town-live-row,#place-sheet .paginated-view .list-status{flex-shrink:0}
+#place-sheet .paginated-view #town-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
+#place-sheet .paginated-view #town-pagination{flex-shrink:0;gap:16px;margin-top:12px}
+#place-sheet .paginated-view #town-pagination:empty{display:none}
 #place-sheet #town-view:is(.kit-catalog,.seed-catalog){overflow:hidden}
-#place-sheet :is(.kit-catalog,.seed-catalog) .town-content{height:100%;min-height:0;width:100%;display:flex;flex-direction:column;padding-bottom:18px}
-#place-sheet :is(.kit-catalog,.seed-catalog) .town-toolbar,#place-sheet :is(.kit-catalog,.seed-catalog) .town-live-row,#place-sheet :is(.kit-catalog,.seed-catalog) .list-status{flex-shrink:0}
 #place-sheet :is(.kit-catalog,.seed-catalog) #town-body{flex:1;min-height:0;display:flex;overflow:auto}
 #place-sheet :is(.kit-catalog,.seed-catalog) .catalog-split{flex:1;min-width:0;min-height:0;align-items:stretch;grid-template-columns:minmax(200px,.8fr) minmax(0,1.4fr)}
 #place-sheet :is(.kit-catalog,.seed-catalog) .catalog-list,#place-sheet :is(.kit-catalog,.seed-catalog) .catalog-detail{min-width:0;min-height:0;max-height:none;overscroll-behavior:contain;scrollbar-gutter:stable}
@@ -165,8 +169,6 @@ html[data-theme=dark] .mention-tag,html[data-theme=dark] .mentions-me .social-av
 #place-sheet :is(.kit-catalog,.seed-catalog) .catalog-item>*{max-width:100%}
 #place-sheet :is(.kit-catalog,.seed-catalog) .catalog-detail{padding:24px 12px 24px 24px}
 #place-sheet :is(.kit-catalog,.seed-catalog) .detail-placeholder{min-height:0;height:100%;padding:24px;text-align:center;line-height:1.8}
-#place-sheet :is(.kit-catalog,.seed-catalog) #town-pagination{flex-shrink:0;gap:16px;margin-top:12px}
-#place-sheet :is(.kit-catalog,.seed-catalog) #town-pagination:empty{display:none}
 #place-sheet :is(.kit-catalog,.seed-catalog) .loading-block,#place-sheet :is(.kit-catalog,.seed-catalog) .empty-state{min-height:0;width:100%;margin:auto}
 .kit-detail{overflow-wrap:anywhere}
 .kit-summary .reading-title{margin-bottom:6px}
