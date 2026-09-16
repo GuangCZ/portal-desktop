@@ -94,3 +94,33 @@
 `consoleEnvironment(source = process.env)` — 只保留 key 的小写形式命中集合、值为 string 且不含 `\0` 的项（保留原 key 大小写）。
 
 本单元处理：把 `desktopPlatform / desktopEnvironment / shellPath / consoleEnvironment` 逐行移植到 `desktop/main/tools/terminal/platform.ts`（本单元目录内，避免与并行单元的 tools 顶层文件撞名）；集成阶段若 console 单元也移植了同名函数，应合并到一份共享模块。
+
+### test/desktop-terminal.test.cjs（282 行，16 个用例）
+
+**它注入假 pty，不起真 node-pty**（`fixture()` 里 `pty = { spawn: (...args) => {...new FakePty(1000 + calls.length)} }`），因此全部用例都能在 vitest 下跑，无需 it.skip。
+
+`class FakePty`：`constructor(pid)` → `{pid, data:Set, exit:Set, errors:Set, writes:[], sizes:[], kills:0}`；`onData(l)`/`onExit(l)` 加入集合并返回 `{dispose}`；`emit(text)` 对 data 集合逐个调用；`end(exitCode = 0)` 对 exit 集合调 `listener({exitCode})`；`write(v)` push 到 writes；`resize(cols, rows)` push `{cols, rows}`；`kill()` → `kills++` 且 `end(1)`；`on('error', l)` / `removeListener('error', l)` 维护 errors 集合。
+
+`fixture(options = {})` → `{service, calls}`；`calls` 每项 `{args, handle}`；默认 `getWorkspace: () => path.resolve(__dirname, '..')`（BeingDesktop 仓库根，真实存在的目录）、`platform: 'win32'`，options 覆盖在后。
+
+用例清单（顺序即原文件顺序）：
+1. `terminal construction is lazy and snapshots contain no output or environment` — 初始 snapshot `{sessions: [], activeSessionId: null}`；calls 为空；dispose 后 `create()` rejects `/关闭/`。
+2. `creation selects a real directory, ConPTY and an interactive shell with a clean environment` — environment 夹具 `{SystemRoot:'C:\Windows', Path:'safe-path', OPENAI_API_KEY:'private', BEING_TOKEN:'private', HTTP_PROXY:'http://user:secret@proxy', ELECTRON_RUN_AS_NODE:'1', OTHER:'private'}`；`create({cols:91, rows:22})`；断言 file 匹配 `/powershell\.exe$/i`、args `['-NoLogo','-NoProfile']`、`options.useConpty === true`、`options.conptyInheritCursor === false`、`options.env.Path === 'safe-path'`、`options.env.TERM === 'xterm-256color'`、五个敏感键为 undefined；snapshot activeSessionId === sessionId、cols 91、status 'running'。
+3. `input, Ctrl+C and terminal responses go to the same persistent session` — 写入 `['cd child\r','echo 中文🙂\r','\x03','\x1b[A','\x1b[1;1R']` 全部落到 handle.writes；`calls.length === 1`；`write({id, data:'界'.repeat(23000)})` throws `/64 KiB/`；`data: null` 也 throws `/64 KiB/`；未知 id throws `/不存在/`。
+4. `resize validates before native calls and ignores identical dimensions` — 默认尺寸 100x30，`resize(100,30)` 不触发 native；`resize(120,42)` 触发一次；`[[0,20],[501,20],[80,201],[80.5,20],[80,NaN]]` 全 throws `/尺寸/`；sizes 仍为 1。
+5. `incremental terminal reads paginate complete Unicode chunks and report expired cursors` — emit `'中文🙂'.repeat(100000)`；循环 readSince 直到 `hasMore === false`，每次 `truncated === false`、字节 ≤ 128*1024、`sequence > 上一次`；拼接等于原文；再 readSince 得空串；随后 emit `'x'.repeat(2*1024*1024)` 后 `readSince(id, 0).truncated === true`；`readSince(id, Number.MAX_SAFE_INTEGER)` throws `/游标/`。
+6. `invalid creation dimensions and invalid directories never spawn` — `[{cols:0},{rows:201},{cwd:'relative'},{cwd:__filename},{cwd:path.join(__dirname,'missing-terminal-fixture')}]` 全 rejects；`calls.length === 0`。
+7. `the eight-session limit includes concurrent pending creates` — `getWorkspace` 返回一个受控 promise；先并发发起 8 个 create，第 9 个立即 rejects `/8 个终端/`；release 后 8 个都成功、`calls.length === 8`；再 create 仍 rejects `/8 个终端/`。
+8. `dispose during asynchronous workspace resolution prevents the spawn` — create 挂起时 dispose，再 release；pending rejects `/关闭/`；`calls.length === 0`。
+9. `replay sequence and streaming sequence avoid loss or duplicate delivery` — emit 'one'；`read(id)` → `{data:'one', sequence:1}`；emit 'two'；`replay.data + 事件里 sequence > replay.sequence 的拼接 === 'onetwo'`；两条事件 id 均为 session id；`'data' in snapshot().sessions[0] === false`。
+10. `replay memory and individual stream chunks are bounded without splitting Unicode` — emit `'界🙂'.repeat(400000) + 'tail-marker'`；`read()` 的 `truncated === true`、字节 ≤ 1024*1024、以 'tail-marker' 结尾；每条事件字节 ≤ 64*1024 且 UTF-8 往返一致；replay 同样往返一致（即不劈代理对）。
+11. `observer failures cannot lose replay or interrupt terminal teardown` — onChange/onData 都抛错；read 仍拿到 'still-available'；dispose 后 `kills === 1`。
+12. `closing a session stops only its owned PTY, preserves others and deduplicates` — 建两个，activate(first)，`Promise.all([close(first), close(first)])`；`calls[0].kills === 1`、`calls[1].kills === 0`；activeSessionId 变成 second；`handle.data.size === 0`、`handle.exit.size === 0`（订阅已 dispose）。
+13. `natural exit preserves scrollback and exit code but blocks new input` — emit 'last output'；`end(7)`；snapshot exitCode 7、status 'exited'；read 仍有输出；write throws `/结束/`；resize throws `/结束/`；`close(id)` 后 `kills === 1`（close 走 `item.process` 已被置 null 的分支？不——win32 上 `nativeReleased` 在 onExit 里被置 true 后调用了 kill，kills 已为 1，`item.process = null`，所以 close 走 `!item.process` 直接 remove，kills 保持 1）。
+14. `failed native close is retryable and never drops ownership` — 把 kill 换成抛 `'owned PTY is busy'`；`close` rejects `/busy/`；会话仍在；换回原 kill 后 close 成功、会话清空。
+15. `failed dispose restores a usable service and a later successful dispose closes it` — 首个会话 kill 抛 `'fixture close failure'`；`dispose()` rejects；`service.disposed === false`；会话仍在且 status 'running'；还能 create 第二个并写入；恢复 kill 后 close(first)、dispose() 成功；`disposed === true`、sessions 清空、两个 handle 各 kills === 1；随后 create rejects `/关闭/`。
+16. `failed spawn releases the create slot and unsupported platforms do not launch` — spawn 抛 `'native load failed'`，连续 10 次 create 都 rejects `/无法启动/`；`service.pendingCreates === 0`；sessions 为空；另起 `platform:'linux'` 的 fixture，create rejects `/不支持/`、calls 为空。
+17. `native stream errors are handled inside the owning session` — 手动触发 `handle.errors` 里的监听；read 匹配 `/连接已中断/`；snapshot status 为 `'exited'`（onError 置 'failed' 后 kill → FakePty.end(1) → onExit 覆写为 'exited'）；`kills === 1`；dispose 后 `handle.errors.size === 0`。
+18. `natural shell exit releases its pinned node-pty worker and pipe without touching another session` — 建两个会话；给 `calls[0].handle` 挂 `_agent = { inSocket: {destroy}, _conoutSocketWorker: {dispose} }`；`end(0)` 后 pipes/workers 各 1、第二个会话 kills 0；再 `end(0)` 不重复（didExit 守卫），pipes 仍为 1。
+
+（实际 `test(...)` 调用共 16 个；上面 1–18 的编号里 5/10 等为连续编号，清点以 `test(` 出现次数为准 = 16。）
