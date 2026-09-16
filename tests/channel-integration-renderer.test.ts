@@ -8,6 +8,7 @@
 // position — are listed in docs/migration/i7-channel-drafts.md as not covered.
 import { expect, it } from "vitest";
 import { CHANNEL_CARDS, CHANNEL_STATUS, ChannelModel, type ChannelHost } from "../desktop/renderer/channel/models/channel";
+import { placeChannelDraft } from "../desktop/renderer/channel/draft-target";
 import type { DesktopAPI } from "../desktop/shared/types";
 import type { ChannelDraftPush, ChannelOutcomeState, ChannelWorkerState } from "../desktop/shared/desktop-types";
 
@@ -22,6 +23,8 @@ interface HarnessOptions {
   catalog?: () => Promise<any>;
   draft?: (request: any) => Promise<any>;
   openPage?: (id: string) => Promise<any>;
+  /** A shell bridge that misbehaves: `post` runs after the push is recorded. */
+  post?: (data: unknown) => void;
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -51,7 +54,7 @@ function harness(options: HarnessOptions = {}) {
     },
   } as unknown as DesktopAPI;
   const host: ChannelHost = {
-    post: (data: unknown) => { posts.push(data); },
+    post: (data: unknown) => { posts.push(data); options.post?.(data); },
     navigate: (view: string) => { navigations.push(view); },
     toast: (error: unknown) => { toasts.push(error); },
     features: { featureTasks: { setNavigate: handler => { navigate.handler = handler; } } },
@@ -316,6 +319,59 @@ it("a pushed draft is routed through the shell’s composer and answered", async
   expect(f.posts.length).toBe(1);
   expect(f.acks.at(-1)).toEqual({ id: "d2", ack: "unavailable" });
   stop();
+});
+
+it("a bridge that throws is answered at once rather than waited out", async () => {
+  // `receiveDraft` runs inside an IPC listener: an exception escaping it is not
+  // caught anywhere, and the main process would sit out its whole three-second
+  // deadline for an answer that has already become impossible.
+  const f = harness({ post: () => { throw new Error("bridge is gone"); } });
+  const stop = f.model.start();
+  await settle();
+  expect(() => f.draft({ id: "d4", text: "草稿", expiresAt: Date.now() + 3000 })).not.toThrow();
+  await settle();
+  expect(f.acks).toEqual([{ id: "d4", ack: "unavailable" }]);
+  stop();
+});
+
+it("the three answers a pushed draft can get, decided as the Loom page decided them", () => {
+  // The rule the bridge applies (app/hooks/use-conversation-bridge.ts) lives in
+  // renderer/channel/draft-target.ts so that it can be run here. `placeDraft` is
+  // the conversation model's own, copied verbatim, so what this proves is the
+  // gate in front of it and not the double.
+  const conversation = (text: string, disabled = false) => {
+    const state = { text, disabled };
+    return {
+      get disabled() { return state.disabled; },
+      composer: { get text() { return state.text; } },
+      placeDraft(value: string) { if (state.disabled || state.text.trim()) return false; state.text = value; return true; },
+      typed: () => state.text,
+    };
+  };
+
+  const empty = conversation("");
+  expect(placeChannelDraft(empty, "草稿")).toBe("placed");
+  expect(empty.typed()).toBe("草稿");
+
+  const written = conversation("我自己写的");
+  expect(placeChannelDraft(written, "草稿")).toBe("occupied");
+  expect(written.typed()).toBe("我自己写的");
+
+  // BeingDesktop 0.8.26 test/town-conversation-ui.cjs「existing text and whitespace
+  // drafts are preserved with no input or focus event」: src/town.cjs line 134
+  // compares `field.value !== ''`, so a composer holding one newline is occupied.
+  // `placeDraft` trims and would overwrite it.
+  for (const blank of [" ", "\n", " \n\t", "  "]) {
+    const spaced = conversation(blank);
+    expect(placeChannelDraft(spaced, "草稿")).toBe("occupied");
+    expect(spaced.typed()).toBe(blank);
+  }
+
+  // Disconnected, or no conversation mounted: the user is asked to wait rather
+  // than to clear something they did not write.
+  const closed = conversation("", true);
+  expect(placeChannelDraft(closed, "草稿")).toBe("unavailable");
+  expect(closed.typed()).toBe("");
 });
 
 it("a conversation that never answers is reported as unavailable rather than left hanging", async () => {

@@ -11,7 +11,7 @@
 // promise of `inspect`, and the「读回」tail that follows a channel request.
 import { afterEach, expect, it } from 'vitest';
 import {
-  CHANNEL_CHANNELS, channelFixture, event, json, settle, sse, stubSubsystem, type ChannelFixture,
+  CHANNEL_CHANNELS, CONNECTION, channelFixture, event, json, settle, sse, stubSubsystem, type ChannelFixture,
 } from './channel-fixture';
 import { PAIRING_DRAFT } from '../desktop/main/town/channel/ipc';
 
@@ -223,7 +223,45 @@ it('one draft channel carries four kinds and refuses anything else', async () =>
   // A fireside draft written under another epoch is never handed over.
   await expect(f.call('beings:town-draft', { kind: 'fireside', draft: '晚上好', connectionRevision: revision + 1 }))
     .rejects.toThrow(/连接身份已变化，草稿未转交/);
+
+  // A fireside handoff MISSING its epoch is a malformed draft, not a moved
+  // identity: BeingDesktop requires exactly `draft` and `connectionRevision`
+  // (src/town.cjs line 158) and says so about the draft. Answering「连接身份已变化…」
+  // would send the user to re-confirm an identity that never moved.
+  for (const request of [{ kind: 'fireside', draft: '晚上好' }, { kind: 'fireside', connectionRevision: revision }, { kind: 'fireside' }])
+    await expect(f.call('beings:town-draft', request)).rejects.toThrow('请填写有效的围炉协助草稿。');
+  // A field that belongs to another kind is refused rather than carried unread.
+  for (const request of [{ kind: 'pairing', draft: '晚上好' }, { kind: 'pairing', id: 'scroll' },
+    { kind: 'feature', id: 'scroll', connectionRevision: revision }, { kind: 'assistance', id: 'portal-setup', draft: 'x' },
+    { kind: 'fireside', id: 'scroll', draft: '晚上好', connectionRevision: revision }])
+    await expect(f.call('beings:town-draft', request)).rejects.toThrow();
+  // `feature` and `assistance` without an id still answer with the catalogue's own
+  // sentences, which name what is wrong — this channel does not overrule them.
+  await expect(f.call('beings:town-draft', { kind: 'feature' })).rejects.toThrow('无效的 Town 功能。');
+  await expect(f.call('beings:town-draft', { kind: 'assistance' })).rejects.toThrow('请选择有效的 Being 协助操作。');
   expect(f.drafts().length).toBe(before);
+});
+
+it('the feature-task ledger’s own limit keeps the sentence that says what to do', async () => {
+  const full = stubSubsystem('orchestration', {
+    methods: { run: () => Promise.reject(Object.assign(new Error('Too many active feature tasks'), { code: 'TASK_LIMIT_REACHED' })) },
+  });
+  const f = await fixture({ extra: [full] });
+  await f.connect();
+  const request = await f.request('feishu');
+  // BeingDesktop src/main.cjs line 740 gives this code its own sentence and line
+  // 127 lists it in `townErrorCodes`, so both halves reach the page. Read with
+  // `invoke`, not `call`: these four channels resolve WITH the envelope and the
+  // page rebuilds it (renderer/channel/models/channel.ts `unwrap`, which takes
+  // `code` and `message` verbatim) — the fixture's `call` models the preload's
+  // stricter `townErrorFromEnvelope`, which this unit deliberately bypasses.
+  for (const channel of ['beings:channel-begin', 'beings:channel-check'])
+    expect(await f.invoke(channel, request)).toEqual({
+      __townError: true, code: 'TASK_LIMIT_REACHED',
+      message: '功能任务记录已满，请到任务页结束不再跟踪的等待任务后重试。',
+    });
+  // The ledger refused before anything was sent.
+  expect(f.calls.filter(call => call.path === '/api/chat/stream')).toEqual([]);
 });
 
 it('the draft channel is serialized, so two drafts cannot race into one composer', async () => {
@@ -259,6 +297,30 @@ it('installs its preparer on the feature-task ledger once every subsystem exists
   // The ledger's own fence runs first: a `current()` that throws is not overtaken
   // by this unit's context.
   await expect(preparer('第二次', () => { throw new Error('连接已变化，请重新选择任务。'); })).rejects.toThrow(/连接已变化/);
+});
+
+it('re-verifying the same binding leaves the epoch alone; a different one moves it', async () => {
+  const f = await fixture();
+  await f.connect();
+  const revision = await f.revision();
+  // DELIBERATE, and not BeingDesktop's line-by-line shape. `storeConnection`
+  // (src/main.cjs line 710) resets the channel and bumps the generation on every
+  // call, because BeingDesktop calls it from `connect` alone. This shell reaches
+  // `connectionVerified` from `beings:save`, from `beings:portal-start` and from a
+  // takeover preflight (main/main.ts lines 430, 469 and 351), so an unguarded bump
+  // would abandon a channel request in flight every time someone started their
+  // Portal — the same reasoning subsystems/tools.ts records for `disconnectLink`.
+  // The bound ADDRESS is the guard: a credential that changed at all is a new
+  // epoch, and re-verifying the same one is not.
+  await f.connect();
+  expect(await f.revision()).toBe(revision);
+  expect(await f.codeOf('beings:channel-inspect', { channel: 'feishu', connectionRevision: revision })).not.toBe('SESSION_CHANGED');
+
+  const token = 'd'.repeat(64), link = `https://echo.beings.town/other_being/?token=${token}`;
+  const other = { ...CONNECTION, endpoint: 'https://echo.beings.town/other_being', being: 'other_being', token, relaySecret: token, link };
+  await f.connect(other, link);
+  expect(await f.revision()).toBe(revision + 1);
+  expect(await f.codeOf('beings:channel-inspect', { channel: 'feishu', connectionRevision: revision })).toBe('SESSION_CHANGED');
 });
 
 it('a disconnect ends the channel, even though `connectionCleared` is never called', async () => {

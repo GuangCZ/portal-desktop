@@ -319,13 +319,23 @@ export class ChannelModel extends Store {
     // up, and placing it now would overwrite whatever the user has since typed.
     if (Number.isFinite(push.expiresAt) && push.expiresAt <= Date.now()) { reply("unavailable"); return; }
     let answered = false;
-    this.host.post({
-      type: "beings:scene-draft",
-      id: push.id,
-      text: push.text,
-      expiresAt: push.expiresAt,
-      ack: (result: string) => { answered = true; reply(result === "placed" || result === "occupied" ? result : "unavailable"); },
-    });
+    // A throw from `post` — the shell's bridge, or the conversation model behind
+    // it — would escape this IPC listener, and the main process would wait out its
+    // whole deadline for an answer that has already become impossible. Answering
+    // `unavailable` is both true and the sentence the user can act on
+    // (「对话页面尚未准备好，请稍后重试。」), and it costs three seconds less.
+    try {
+      this.host.post({
+        type: "beings:scene-draft",
+        id: push.id,
+        text: push.text,
+        expiresAt: push.expiresAt,
+        ack: (result: string) => { answered = true; reply(result === "placed" || result === "occupied" ? result : "unavailable"); },
+      });
+    } catch {
+      if (!answered) { answered = true; reply("unavailable"); }
+      return;
+    }
     // No bridge is mounted: `post` is the shell's no-op until the conversation
     // wires it, and silence would leave the main process waiting for its deadline.
     if (!answered) queueMicrotask(() => { if (!answered) reply("unavailable"); });
