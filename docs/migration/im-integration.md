@@ -515,3 +515,71 @@ asar 里 `/.vite/renderer/main_window/index.html` 与 `/node_modules/node-pty/bi
      没有 `features` 不是「没有功能」，是 `Cannot read properties of undefined (reading 'tools')`，
      整个 topbar 渲染失败，所以 `#options-trigger` 根本不存在（实测 pageerror 就是这一句）。
      夹具补 `features: {}`（这个夹具本来就不挂载任何功能）。
+
+### 4.7 真机走查查出的一个回归——是本单元第 2 条引入的，已修
+
+第一次走查跑完，`<userData>/logs/client-errors.log` 里有一条：
+
+```
+[beings:tool-browser-viewport]
+Error: 浏览器已经关闭。
+    at Of._alive (…/app.asar/.vite/build/main.js)
+    at Of.setViewport (…)
+```
+
+**是本单元第 2 条把两条视口通道放进 `QUIT_ALLOWED` 之后才有的**：放行只做了一半。
+放行之后它们真的会走到 `DesktopBrowser.setViewport`，而 `subsystems/tool-browser.ts` 的 `quitting()`
+**先**把浏览器 `destroy()` 了，面板 unmount 发出的最后一条 `visible:false` 随后到达，
+`_alive()` 抛「浏览器已经关闭。」，`createTrustedHandle` 把它记进错误日志——
+**每一次「开着工具浏览器面板退出」都会写一条**。放行之前它是被 quitting 守卫拒掉的，不写日志，所以看不见。
+
+改法（都在本单元独占的 `desktop/main/tools/**`）：**松开一个已经不存在的矩形不是失败**。
+
+| 文件 | 改动 |
+| --- | --- |
+| `tools/types.ts` | `DesktopBrowserLike` 加 `readonly destroyed: boolean`（真类本来就有，`browser.ts:238`），并写明为什么只有这两条通道读它。 |
+| `tools/browser/ipc.ts` | `beings:tool-browser-viewport`：**先校验参数**，再 `required()`（没有浏览器仍然拒绝——那是 Electron 门面被拒，不能静默），**只有 `destroyed` 时**返回 `idle` 且不调用 `setViewport`。 |
+| `tools/ipc.ts` | `beings:tools-browser-view`：同样，`live.destroyed` 时返回 `IDLE_TOOLS_STATE.browser`。 |
+
+`tests/app-ipc-quit-allowed.test.ts` 加 2 条（5 → 7）：
+「浏览器已销毁时两条通道都安静作答、两个面都没有被要求摆放任何东西」，
+以及「销毁不是接受垃圾输入的理由——参数校验仍然先跑」（`{visible:'no'}` 仍抛「浏览器显示参数无效。」）。
+
+**重新打包 + 重签之后再走一遍，`ERROR-LOG scopes: []`**——回归确认修掉。
+
+### 4.8 `npm run start`（开发路径）与面板走查
+
+**a) `npm run start`**（`PORTAL_DESKTOP_USER_DATA=/tmp/im-devprofile`，避免和别的 worktree 抢单实例锁；
+先 `pgrep` 确认没有别人的 Electron 在跑）：
+
+- `prepare:desktop` 通过（"Prepared local desktop assets (no CDN requests)"）；
+  Vite 两个目标都构建成功（`target built desktop/preload/preload.ts`、`target built desktop/main/main.ts`）；
+- 窗口起来了：`[{"url":"http://localhost:5173/","visible":true,"title":"Portal Desktop"}]`，`app.getVersion()` = `0.9.0`；
+- **`<userData>/logs/client-errors.log` 根本没有被创建**——即**没有任何 `subsystem-install` / `onError` 报告**；
+- 用主进程 inspector 调 `app.quit()`（走真实退出路径，含 `extensions.quitting()`）：进程干净退出，无残留。
+  退出瞬间终端上有一行 `Error occurred in handler for 'beings:snapshot': Error: 客户端正在退出，请稍候。`
+  ——这是**退出守卫在正常工作**（`beings:snapshot` 不在 `QUIT_ALLOWED` 上，渲染层在拆卸时又问了一次快照），
+  不是错误日志条目；记在这里是因为它看起来吓人。
+
+**b) 面板走查**（在**打包产物**上做，比 dev 更接近用户；脚本留在
+`…/scratchpad/im-smoke-walk.mjs`，夹具 Being 用 `protocol.handle('http')` 拦 `127.0.0.1:1`）：
+
+| 步骤 | 结果 |
+| --- | --- |
+| 绑定夹具 Being（设置对话框 → 保存、连接并启动） | OK |
+| 终端面板：新建终端，输入 `echo being` | **OK，回显到 `.xterm-rows`** |
+| 工具浏览器面板：在它自己的标签页里打开一个本地 http 页面 | **OK，标签标题变成「工具浏览器冒烟」** |
+| 编排与 Worker 面板 / 功能任务面板 | OK |
+| Town：小镇 → 配对页 → 配对码对话框 → 回到对话 | OK |
+| 关于 / 隐私两个外壳页（开→关→开→关） | OK |
+| 置顶一个会话 | OK（`[aria-label="已置顶"]` 里出现） |
+| 退出 → 再起（同一 profile） | **仍置顶**；且磁盘 `settings.json` 的 `sidebar.owners[<scope>].tasks[<id>].pinned === true` |
+| 渲染层 `pageerror` | 0 条 |
+| `logs/client-errors.log` 里的 `subsystem-*` scope | **0 条** |
+
+唯一的日志条目是重启那一轮的 `startup-connection` / `startup-notice`：
+夹具的 `protocol.handle('http')` 只能在应用起来之后装，所以第二次启动的**开机连接校验**必然先失败一次
+（脚本随后用磁盘上的设置重新 `save()` 一次让它绑回来）。这是走查夹具的时序，不是产品问题。
+
+**连上真实 Being 发消息没有做**：本机没有可用的 Being/Portal（引擎是 stub），
+所以对话核心只在夹具层面跑过；方案 §6.3 里「连接夹具 Being 发消息」这一条记进 openIssues。
