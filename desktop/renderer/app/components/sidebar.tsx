@@ -6,9 +6,14 @@
 // DEVIATIONS from 0.8.26, all recorded in docs/migration/p1-ui.md:
 // · the session menu is drawn here rather than by Electron's native menu, since
 //   this shell has no `showSessionMenu` channel;
-// · pins, projects and archives are in memory only (OrganizerModel);
 // · deleting a conversation asks a second time in the shell's own dialog, where
 //   0.8.26 relied on the native menu being a deliberate act.
+//
+// Pins, archives and project folders are the main process's since integration
+// unit I6 (docs/migration/i6-shell-state.md): every entry below calls the ledger
+// and renders what it answers with, so a refused change leaves the sidebar
+// showing what was actually saved. `app.run` turns a refusal into the toast
+// 0.8.26 shows from its own `mutate` (renderer/sidebar.js line 36).
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { AppModel } from "../models/app";
 import { useModel } from "../../shared/hooks/use-model";
@@ -26,11 +31,9 @@ export function Sidebar({ model }: { model: AppModel }) {
   const [editing, setEditing] = useState("");
   const [forgetting, setForgetting] = useState<ChatSessionSummary | null>(null);
   const [search, setSearch] = useState(false);
+  const shell = useModel(app.features.shellState);
   const connected = conversation.connected;
   const groups = organizer.groups(conversation.sessions);
-  useEffect(() => {
-    organizer.setProjects(app.snapshot?.settings.workspace ? [app.snapshot.settings.workspace] : []);
-  }, [organizer, app.snapshot?.settings.workspace]);
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.repeat) return;
@@ -50,6 +53,7 @@ export function Sidebar({ model }: { model: AppModel }) {
       session={session}
       app={app}
       conversation={conversation}
+      busy={shell.busy}
       editing={editing === session.id}
       menuOpen={menu === session.id}
       onMenu={open => setMenu(open ? session.id : "")}
@@ -92,10 +96,29 @@ export function Sidebar({ model }: { model: AppModel }) {
           </section>
         )}
         {groups.projects.map(project => (
-          <ProjectGroup key={project.path} project={project} connected={connected} conversation={conversation}>
+          <ProjectGroup
+            key={project.path}
+            project={project}
+            connected={connected}
+            busy={shell.busy}
+            conversation={conversation}
+            app={app}
+          >
             {project.sessions.map(row)}
           </ProjectGroup>
         ))}
+        <button
+          type="button"
+          id="add-project"
+          className="sidebar-add-project"
+          disabled={shell.busy}
+          title="把一个本机文件夹加进侧栏，用来给会话分组"
+          onClick={() => void app.run(() => shell.addProject())}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          添加项目文件夹
+        </button>
+        {shell.error && <p className="sidebar-note" role="status">{shell.error}</p>}
         <section className="sidebar-section" aria-label="会话">
           <h2 className="sidebar-section-title">会话</h2>
           {groups.standalone.map(row)}
@@ -147,13 +170,19 @@ export function Sidebar({ model }: { model: AppModel }) {
   );
 }
 
-function ProjectGroup({ project, connected, conversation, children }: {
+function ProjectGroup({ project, connected, busy, conversation, app, children }: {
   project: { path: string; name: string; sessions: ChatSessionSummary[] };
   connected: boolean;
+  busy: boolean;
   conversation: ConversationModel;
+  app: AppModel;
   children: ReactNode;
 }) {
+  // Folding is per window and survives a ledger update, because it is React state
+  // rather than anything the main process sends: 0.8.26 keeps it in localStorage
+  // for the same reason (renderer/sidebar.js `foldKey`).
   const [open, setOpen] = useState(true);
+  const [menu, setMenu] = useState(false);
   const id = useId();
   return (
     <section className="sidebar-section" aria-label={`项目 ${project.name}`}>
@@ -171,14 +200,48 @@ function ProjectGroup({ project, connected, conversation, children }: {
         </button>
         <button
           type="button"
-          className="icon-button compact"
+          className="icon-button compact project-new-task"
           aria-label={`在 ${project.name} 中新建会话`}
           title={`在 ${project.name} 中新建会话`}
-          disabled={!connected}
-          onClick={() => void conversation.create().then(id => { if (id) conversation.organizer.move(id, project.path); })}
+          disabled={!connected || busy}
+          onClick={() => void app.run(async () => {
+            const created = await conversation.create();
+            if (!created) return;
+            // File it, then raise it: 0.8.26 sends the same two changes for a
+            // conversation created inside a project (src/main.cjs line 1170).
+            await conversation.organizer.move(created, project.path);
+            await conversation.organizer.touch(created);
+          })}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
         </button>
+        <button
+          type="button"
+          className="icon-button compact project-more"
+          aria-haspopup="menu"
+          aria-expanded={menu}
+          aria-label={`项目「${project.name}」的更多操作`}
+          onClick={() => setMenu(value => !value)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></svg>
+        </button>
+        {menu && (
+          <div className="sidebar-menu" role="menu" aria-label="项目操作">
+            <button
+              type="button"
+              role="menuitem"
+              disabled={busy}
+              onClick={() => {
+                setMenu(false);
+                // The folder and its files are untouched; the conversations filed
+                // under it become standalone.
+                void app.run(() => conversation.organizer.removeProject(project.path));
+              }}
+            >
+              从侧栏移除项目
+            </button>
+          </div>
+        )}
       </div>
       <div id={id} hidden={!open}>
         {children}
@@ -188,10 +251,11 @@ function ProjectGroup({ project, connected, conversation, children }: {
   );
 }
 
-function SessionRow({ session, app, conversation, editing, menuOpen, onMenu, onEdit, onForget }: {
+function SessionRow({ session, app, conversation, busy, editing, menuOpen, onMenu, onEdit, onForget }: {
   session: ChatSessionSummary;
   app: AppModel;
   conversation: ConversationModel;
+  busy: boolean;
   editing: boolean;
   menuOpen: boolean;
   onMenu: (open: boolean) => void;
@@ -243,7 +307,7 @@ function SessionRow({ session, app, conversation, editing, menuOpen, onMenu, onE
       >
         <span className={`session-activity-light ${activity || "inactive"}`} aria-hidden="true" />
         <span className="session-title">{session.title || "新会话"}</span>
-        <span className="task-age">{age(session)}</span>
+        <span className="task-age">{age(session, Date.now(), value.touchedAt)}</span>
       </button>
       <button
         type="button"
@@ -270,7 +334,12 @@ function SessionRow({ session, app, conversation, editing, menuOpen, onMenu, onE
             buttons[(index + (event.key === "ArrowDown" ? 1 : buttons.length - 1) + buttons.length) % buttons.length]?.focus();
           }}
         >
-          <button type="button" role="menuitem" onClick={() => { onMenu(false); organizer.pin(session.id); }}>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={busy}
+            onClick={() => { onMenu(false); void app.run(() => organizer.pin(session.id)); }}
+          >
             {value.pinned ? "取消置顶" : "置顶"}
           </button>
           <button
@@ -282,12 +351,23 @@ function SessionRow({ session, app, conversation, editing, menuOpen, onMenu, onE
             重命名
           </button>
           {organizer.projects.filter(path => path !== value.project).map(path => (
-            <button key={path} type="button" role="menuitem" onClick={() => { onMenu(false); organizer.move(session.id, path); }}>
+            <button
+              key={path}
+              type="button"
+              role="menuitem"
+              disabled={busy}
+              onClick={() => { onMenu(false); void app.run(() => organizer.move(session.id, path)); }}
+            >
               移到 {basename(path)}
             </button>
           ))}
           {value.project && (
-            <button type="button" role="menuitem" onClick={() => { onMenu(false); organizer.move(session.id, ""); }}>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={busy}
+              onClick={() => { onMenu(false); void app.run(() => organizer.move(session.id, "")); }}
+            >
               移出项目
             </button>
           )}
@@ -295,10 +375,16 @@ function SessionRow({ session, app, conversation, editing, menuOpen, onMenu, onE
           <button
             type="button"
             role="menuitem"
+            disabled={busy}
             onClick={() => {
               onMenu(false);
-              organizer.archive(session.id);
-              app.toast(value.archived ? "会话已恢复" : "会话已归档，可从搜索中恢复。");
+              // The confirmation is only shown for a change that was saved:
+              // 0.8.26 toasts after its `mutate` resolves, not before it
+              // (renderer/sidebar.js line 165).
+              void app.run(async () => {
+                await organizer.archive(session.id);
+                app.toast(value.archived ? "会话已恢复" : "会话已归档，可从搜索中恢复。");
+              });
             }}
           >
             {value.archived ? "取消归档" : "归档会话"}
@@ -380,10 +466,15 @@ function SearchDialog({ open, onClose, app }: { open: boolean; onClose: () => vo
   }, [open]);
   const selected = Math.min(index, Math.max(0, results.length - 1));
   const openResult = (session: ChatSessionSummary) => {
-    if (organizer.metadata(session.id).archived) organizer.archive(session.id);
-    onClose();
-    app.navigate("chat");
-    void conversation.select(session.id);
+    // Restoring first, and only opening it if that was saved: an archived
+    // conversation the ledger refused to restore would otherwise open into a
+    // sidebar that still does not list it (renderer/sidebar.js line 196).
+    void app.run(async () => {
+      if (organizer.metadata(session.id).archived) await organizer.archive(session.id);
+      onClose();
+      app.navigate("chat");
+      await conversation.select(session.id);
+    });
   };
   return (
     <Dialog id="session-search" aria-label="搜索会话" open={open} onClose={onClose} dismissOnBackdrop>
