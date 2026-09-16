@@ -25,7 +25,8 @@ export interface PairingClient {
 export interface TownPairingState {
   status: 'idle' | 'requesting' | 'complete' | 'manual_required';
   busy: boolean;
-  errorCode: string;
+  /** A rejected fetch contributes a DOMException's numeric legacy code (AbortError 20, TimeoutError 23). */
+  errorCode: string | number;
 }
 
 /* ---------------------------------------------------- Loom view (town.cjs) */

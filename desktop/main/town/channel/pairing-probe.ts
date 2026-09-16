@@ -4,7 +4,7 @@
 //
 // The pairing conversation has its own scene. Neither another scene's reply nor
 // partial text, reasoning, tool output or replay history can authorize this client.
-import { codedError, errorCode, type CodedError } from './errors';
+import { codedError, type CodedError } from './errors';
 import { parseConnection, sessionPartition, type LoomConnection } from './loom-connection';
 import { consumeEvents, type SseData } from './sse';
 import type { PairingClient, PairingConnectionContext, TownPairingState } from './types';
@@ -30,11 +30,14 @@ export const pairCodeFrom = (text: string): string => PAIR_CODE.test(text.trim()
  * Readiness probe verdict. 204 means idle. Anything that is not a readable JSON
  * verdict leaves readiness unknown, and an unfinished stream means the Being is busy:
  * neither may send the pairing message.
+ *
+ * `data` is dereferenced without a guard, as town-pairing.cjs does: a JSON `null` body throws a
+ * TypeError that the caller's catch turns into READINESS_UNKNOWN, not BUSY.
  */
 export const readinessVerdict = (status: number, ok: boolean, contentType: string | null, data: unknown): '' | 'BUSY' | 'READINESS_UNKNOWN' => {
   if (status === 204) return '';
   if (!ok || !contentType?.includes('application/json')) return 'READINESS_UNKNOWN';
-  return (data as { finished?: unknown } | null)?.finished === true ? '' : 'BUSY';
+  return (data as { finished?: unknown }).finished === true ? '' : 'BUSY';
 };
 
 /** Events carry their own scene; the last `meta` scene applies to events that omit it. */
@@ -45,9 +48,14 @@ export const eventScene = (data: SseData, current: string): string =>
 export const deltaText = (type: string, data: SseData): unknown =>
   type === 'content_block_delta' ? data.delta?.text : ['text', 'text_delta'].includes(type) ? data.text ?? data.delta : '';
 
-/** A failure before the chat request was dispatched leaves readiness, not pairing, unknown. */
-export const pairingFailureCode = (error: unknown, dispatched: boolean): string =>
-  errorCode(error) || (dispatched ? 'PAIRING_INCOMPLETE' : 'READINESS_UNKNOWN');
+/**
+ * A failure before the chat request was dispatched leaves readiness, not pairing, unknown.
+ * Any truthy `code` wins, as `error.code || ...` did in town-pairing.cjs: an aborted or timed-out
+ * fetch rejects with a DOMException whose legacy `code` is numeric (AbortError 20,
+ * TimeoutError 23), and that value reaches the renderer unchanged.
+ */
+export const pairingFailureCode = (error: unknown, dispatched: boolean): string | number =>
+  (error as { code?: string | number }).code || (dispatched ? 'PAIRING_INCOMPLETE' : 'READINESS_UNKNOWN');
 
 export interface TownPairingOptions {
   getContext: () => PairingConnectionContext | null | undefined;
@@ -167,7 +175,8 @@ export class TownPairing {
       this._context(ctx);
       const code = pairingFailureCode(error, dispatched);
       this._set({ status: 'manual_required', errorCode: code });
-      throw PAIRING_ERRORS[code] ? fail(code) : error;
+      // A numeric DOMException code is never a PAIRING_ERRORS key, so the original error is rethrown.
+      throw PAIRING_ERRORS[code] ? fail(String(code)) : error;
     } finally {
       void response?.body?.cancel().catch(() => {});
       controller.abort();

@@ -77,7 +77,12 @@ export interface TownControllerOptions {
   portalRelease?: (platform: string, arch: string) => PortalReleaseInfo | null;
   defaultRelease?: PortalReleaseInfo;
   prepareWorkspace?: (options: { workspace?: string; defaultWorkspace?: string }) => Promise<string>;
-  groveConfigText?: (text: string, kitsDir: string) => string;
+  /**
+   * BeingDesktop imported grovePortalConfigText from grove-portal.cjs, so it could never be
+   * missing. grove-portal.cjs belongs to the Grove/Kits unit, so it is injected here — and
+   * required, so a managed Portal carrying groveKitsDir can never meet an absent hook.
+   */
+  groveConfigText: (text: string, kitsDir: string) => string;
   fs?: ControllerFileSystem;
   randomUUID?: () => string;
 }
@@ -96,7 +101,7 @@ export class TownController {
   private inspectInstallation: (value?: unknown) => Promise<any>;
   private portalRelease: NonNullable<TownControllerOptions['portalRelease']>;
   private prepareWorkspace: NonNullable<TownControllerOptions['prepareWorkspace']>;
-  private groveConfigText?: (text: string, kitsDir: string) => string;
+  private groveConfigText: (text: string, kitsDir: string) => string;
   private fs: ControllerFileSystem;
   private randomUUID: () => string;
   release: PortalReleaseInfo;
@@ -194,7 +199,7 @@ export class TownController {
     const managed = context.managedPortal;
     if (managed && managed.executable === context.portalExecutable && managed.configPath === context.portalConfig) {
       const configuration = await this.configFactory({ workspace: managed.workspace!, name: 'being-desktop', permissions: managed.permissions });
-      if (managed.groveKitsDir) configuration.toml = this.groveConfigText!(configuration.toml, managed.groveKitsDir);
+      if (managed.groveKitsDir) configuration.toml = this.groveConfigText(configuration.toml, managed.groveKitsDir);
       if (managed.workspace !== configuration.capabilities.workspace) throw new Error('托管 Portal 的工作区已变化，请先在连接设置核对配置。');
       this._update({ status: 'installing', phase: 'checking', detail: '正在核对已部署的 Portal。', recovery: null });
       try {

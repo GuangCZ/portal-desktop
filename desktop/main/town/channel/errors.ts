@@ -22,7 +22,6 @@ export const codedError = (code: string, message: string): CodedError =>
 export const chatFail = (code: string): CodedError =>
   codedError(code, CHAT_MESSAGES[code] || CHAT_MESSAGES.SERVICE_ERROR);
 
-export const errorCode = (error: unknown): string =>
-  error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
-    ? (error as { code: string }).code
-    : '';
+// No shared `errorCode(error)` helper: BeingDesktop reads `error.code` directly and accepts any
+// truthy value, including a DOMException's numeric legacy code. A string-only helper silently
+// rewrote those into a different code, so each caller reproduces the original expression.

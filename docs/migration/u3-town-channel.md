@@ -14,9 +14,9 @@
 | 支撑函数 | `src/security.cjs` `src/services.cjs` `src/being-chat.cjs` | `channel/errors.ts` `loom-connection.ts` `sanitize.ts` `sse.ts` | 已移植（随各模块测试通过） |
 | ChannelBeing | `src/channel-being.cjs` | `channel/channel-being.ts` + `channel/being-client.ts` | 测试通过（tests/town-channel-channel-being.test.ts，26/26） |
 | TownBackground | `src/town-background.cjs` | `channel/town-background.ts` | 测试通过（tests/town-channel-town-background.test.ts，11 通过 + 15 skip，skip 原因见上表） |
-| TownController | `src/town-controller.cjs` | `channel/town-controller.ts` + `channel/portal-config.ts` + `channel/portal-release.ts` | 测试通过（tests/town-channel-town-controller.test.ts，31 通过 + 1 skip） |
+| TownController | `src/town-controller.cjs` | `channel/town-controller.ts` + `channel/portal-config.ts` + `channel/portal-release.ts` | 测试通过（tests/town-channel-town-controller.test.ts，32 通过 + 1 skip） |
 | Town catalog/drafts | `src/town.cjs` | `channel/town-catalog.ts` | 测试通过（tests/town-channel-town-catalog.test.ts，18/18） |
-| TownPairing 探活 | `src/town-pairing.cjs` | `channel/pairing-probe.ts` | 测试通过（tests/town-channel-pairing.test.ts，7 通过 + 8 skip） |
+| TownPairing 探活 | `src/town-pairing.cjs` | `channel/pairing-probe.ts` | 测试通过（tests/town-channel-pairing.test.ts，10 通过 + 8 skip） |
 
 ## 阅读摘要
 
@@ -432,12 +432,12 @@ TownPairing 的 5 个用例（全部移植）：
 
 ## 收尾（2026-09-16）
 
-门槛：`npm run typecheck` 通过；`npx vitest run` → `Test Files 50 passed | 7 skipped (57)` / `Tests 404 passed | 40 skipped (444)`。
-基线为 309 通过 / 16 跳过；本单元新增 95 通过 + 24 跳过，既有测试一条未删未改。
+门槛：`npm run typecheck` 通过；`npx vitest run` → `Test Files 51 passed | 7 skipped (58)` / `Tests 410 passed | 40 skipped (450)`（复审修复后重跑）。
+基线为 309 通过 / 16 跳过；本单元新增 101 通过 + 24 跳过，既有测试一条未删未改。
 
 新增文件（只新增，未改动任何既有文件）：
 - `desktop/main/town/channel/`：`types.ts`（注入契约）、`errors.ts`、`loom-connection.ts`、`sanitize.ts`、`sse.ts`、`being-client.ts`、`pairing-probe.ts`、`town-catalog.ts`、`channel-being.ts`、`town-background.ts`、`town-controller.ts`、`portal-config.ts`、`portal-release.ts`。
-- `tests/`：`town-channel-pairing.test.ts`、`town-channel-town-catalog.test.ts`、`town-channel-channel-being.test.ts`、`town-channel-town-background.test.ts`、`town-channel-sdk-background.test.ts`、`town-channel-town-controller.test.ts`。
+- `tests/`：`town-channel-pairing.test.ts`、`town-channel-town-catalog.test.ts`、`town-channel-channel-being.test.ts`、`town-channel-town-background.test.ts`、`town-channel-sdk-background.test.ts`、`town-channel-town-controller.test.ts`、`town-channel-p1-identity.test.ts`。
 
 跳过的用例（原名保留，`it.skip`，集成阶段必须重新启用）：
 - `tests/town-channel-pairing.test.ts` 的 8 条：测的是 `src/town-client.cjs`（TownClient 单元）。
@@ -448,7 +448,7 @@ TownPairing 的 5 个用例（全部移植）：
 1. `tests/town-channel-town-controller.test.ts` 先 `fs.realpath(os.tmpdir())` 再 `mkdtemp`：macOS 的 `/var` 是符号链接，`validatePortalWorkspace` 会拒绝；夹具其余部分照抄。
 2. `crypto.randomUUID` 从 `t.mock.method` 改为构造参数注入（`randomUUID` 选项），因为 vitest 无法对 ESM 命名空间打桩。
 
-放弃的迁移点：`townSpeak` 的 Being 中继回退（BeingTownWriter）按任务要求不移植；`ChannelBeing` 与 `TownController` 都把对应回退点保留为可注入的可选钩子（`createClient` / `groveConfigText`），缺省即无回退。
+放弃的迁移点：`townSpeak` 的 Being 中继回退（BeingTownWriter）按任务要求不移植；`ChannelBeing` 把该回退点保留为可选钩子 `createClient`，缺省即无回退。`TownController` 的 `groveConfigText` 见下节「复审修复」第 4 条：已改为**必填**注入。
 
 ### test/p1-name-rules.test.cjs 里针对 TownController 的两条断言
 `test/town-identity-migration.test.cjs` 不涉及 TownController（grep 无命中）。`test/p1-name-rules.test.cjs` 有两处：
@@ -479,3 +479,56 @@ IPC 通道名（第 1 节，与 main.cjs 的 `handle(...)` 名一致）：
 - `desktop/main/town/channel/**` 无任何 `electron` 导入。
 - 仅三处使用 node 内置模块（main 层允许）：`town-controller.ts` 与 `portal-config.ts` 的 `node:fs/promises` + `node:path`、`loom-connection.ts` 的 `node:crypto`（sha256 分区指纹）；`node:crypto` 的 `randomUUID` 与 fs 门面都可通过构造参数替换。
 - `tests/architecture.test.ts` 4 条全部通过。
+
+## 复审修复（2026-09-16）
+
+复审给出 3 条 high/medium 与 1 条 medium，全部按「实测优先」处理。四条 BeingDesktop 侧行为都用
+`/Users/d5c/Documents/ChatGPT/BeingDesktop/src/town-pairing.cjs` 现场跑过（脚本放在临时目录，未向
+BeingDesktop 写入任何文件），实测输出逐条记在下面，作为后续接手的判据。
+
+| # | 位置 | 判定 | 处理 |
+| --- | --- | --- | --- |
+| 1 | `channel/sse.ts` | 成立 | `parsed ?? {}` → `parsed as SseData`；补 1 条用例 |
+| 2 | `channel/pairing-probe.ts` `pairingFailureCode` | 成立 | 还原 `error.code || …`；`errorCode` 状态字段放宽为 `string \| number`；补 1 条用例 |
+| 3 | `channel/pairing-probe.ts` `readinessVerdict` | 成立 | 去掉可选链，null 体照原样抛 TypeError；补 1 条用例 |
+| 4 | `channel/town-controller.ts` `groveConfigText` | 成立 | 改为必填注入，去掉 `!`；补 1 条用例 |
+
+1. **`data: null` 的 SSE 帧不得被改写成 `{}`。** BeingDesktop `src/being-chat.cjs:133` 把 `parsed` 原样交给
+   handler；`src/town-pairing.cjs:71-72` 的每个分支都直接解引用 `data`，所以 `data: null` 会抛 TypeError，
+   这正是它拒绝该回复的方式。移植版的 `?? {}` 把这条拒绝抹掉了，会在 BeingDesktop 拒绝的流上完成配对。
+   实测同一条流（`event: meta / event: text {"text":"AB3XY9"} / event: done + data: null`）：
+   - BeingDesktop：`REJECTED code="PAIRING_INCOMPLETE" state.errorCode="PAIRING_INCOMPLETE" pairs=0 calls=2`
+   - 修复后的移植版：同上（`tests/town-channel-pairing.test.ts` 的
+     `a null SSE payload cannot authorize pairing`）。
+   `SseData` 仍声明为 `Record<string, any>`，`parsed as SseData` 是刻意的断言：类型上不承认 null，运行时
+   与 being-chat.cjs 逐字一致 —— 若改成 `SseData | null`，各 handler 就得加判空，那才是真正的语义改动。
+2. **`error.code` 接受任何真值，包括 DOMException 的数字 code。** BeingDesktop `src/town-pairing.cjs:92-94`
+   是 `const code = error.code || (dispatched ? 'PAIRING_INCOMPLETE' : 'READINESS_UNKNOWN')`。真实 fetch 在
+   90 秒超时/中止时 reject 的是 DOMException，其 legacy `code` 是数字（AbortError 20、TimeoutError 23，已在
+   node 里实测）。原移植版经 `errors.ts` 的 `errorCode()` 只认字符串，于是超时被改写成 `READINESS_UNKNOWN`，
+   渲染层拿到的错误对象与错误码都变了。实测 `fetchImpl` reject
+   `new DOMException('The operation was aborted due to timeout','TimeoutError')`：
+   - BeingDesktop：`REJECTED name=TimeoutError code=23 state={"status":"manual_required","busy":false,"errorCode":23} calls=1`
+   - 修复后的移植版：同上（`a timed out request keeps its own abort error and numeric code`）。
+   连带改动：`types.ts` 的 `TownPairingState.errorCode: string | number`；`throw PAIRING_ERRORS[code] ?
+   fail(String(code)) : error`（数字 code 永远不是 `PAIRING_ERRORS` 的键，所以照原样重抛原始错误）；
+   `errors.ts` 里只认字符串的 `errorCode()` 助手已删除（无人再用，留着只会诱导后续重新引入同一放宽）。
+3. **探活返回 JSON `null` 是「无法确认」，不是 BUSY。** BeingDesktop `src/town-pairing.cjs:53-54` 直接读
+   `data.finished`，null 体抛 TypeError，被外层 catch（`dispatched === false`）判成 `READINESS_UNKNOWN`。
+   实测 `/api/stream/active` 返回 body `null` + `application/json`：
+   - BeingDesktop：`REJECTED code="READINESS_UNKNOWN" state.errorCode="READINESS_UNKNOWN" pairs=0 calls=1`
+   - 修复后的移植版：同上（`a null readiness body leaves readiness unknown and sends no chat message`）。
+   两种结果都不会发出配对消息（安全结论一致），但渲染层可见的错误码与中文文案不同，按逐行保真还原。
+4. **`groveConfigText` 改为必填注入。** BeingDesktop `src/town-controller.cjs:7` 直接 import
+   `grove-portal.cjs` 的 `grovePortalConfigText`，第 111 行无条件调用，因此「钩子缺失」在 BeingDesktop 里
+   是不可能状态。移植版把它做成可选注入却用 `!` 调用，一旦集成阶段忘记接线且受管 Portal 带
+   `groveKitsDir`，`deploy()` 会抛 `this.groveConfigText is not a function`（该调用在 try 之外，不会被
+   「已部署的 Portal 未能启动…」兜住），而 `!` 让 tsc 也发现不了。现在它是 `TownControllerOptions` 的必填
+   字段，集成阶段必须接 `grovePortalConfigText`，否则编译期就报错。新增用例
+   `one-click Portal retry compares the injected Grove configuration extension` 覆盖该分支：注入的钩子改写
+   `configuration.toml` 后，磁盘上带扩展的配置才校验通过并启动。原 `it.skip` 的
+   `one-click Portal retry accepts the verified Grove configuration extension` 保留不动 —— 它需要
+   Grove/Kits 单元的 `enableGrovePortal` 真件。
+
+复审修复后重跑：`npm run typecheck` 通过；`npx vitest run` → `Test Files 51 passed | 7 skipped (58)` /
+`Tests 410 passed | 40 skipped (450)`。

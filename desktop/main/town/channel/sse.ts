@@ -16,7 +16,10 @@ export async function consumeEvents(body: ReadableStream<Uint8Array> | null | un
     if (data.length) {
       let parsed: unknown;
       try { parsed = JSON.parse(data.join('\n')); } catch { throw chatFail('INVALID_RESPONSE'); }
-      onEvent(type || 'message', (parsed ?? {}) as SseData);
+      // `null` is handed over untouched, exactly as being-chat.cjs does. Every handler
+      // dereferences `data`, so a `data: null` frame throws a TypeError — that refusal is
+      // load-bearing: it is what keeps a null payload from authorizing Town pairing.
+      onEvent(type || 'message', parsed as SseData);
     }
     type = ''; data = []; size = 0;
   };

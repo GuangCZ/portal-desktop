@@ -84,7 +84,12 @@ async function harness(overrides: Overrides = {}) {
     defaultWorkspace: h.defaultWorkspace,
     ...(overrides.configFactory ? { configFactory: overrides.configFactory } : {}),
     ...(overrides.randomUUID ? { randomUUID: overrides.randomUUID } : {}),
-    ...(overrides.groveConfigText ? { groveConfigText: overrides.groveConfigText } : {}),
+    // Required injection: grove-portal.cjs belongs to the Grove/Kits unit, so the fixture always
+    // supplies one. It runs only when the managed Portal carries groveKitsDir.
+    groveConfigText: overrides.groveConfigText || ((text: string, kitsDir: string) => {
+      calls.push("grove");
+      return `${text}\n# grove_kits_dir = ${JSON.stringify(kitsDir)}\n`;
+    }),
     async saveDeployment(value) {
       calls.push("save");
       h.saved = { ...value };
@@ -312,6 +317,21 @@ it("one-click retry preserves changed configurations and does not start them", a
 // migration unit. Here the Grove config extension is an injected hook, so this case waits for
 // the real grovePortalConfigText and enableGrovePortal.
 it.skip("one-click Portal retry accepts the verified Grove configuration extension", () => {});
+
+// What this unit can own of that case: the injected hook rewrites the configuration the managed
+// retry compares against, so a config file carrying the extension still verifies and starts.
+it("one-click Portal retry compares the injected Grove configuration extension", async () => {
+  const h = await harness();
+  await h.controller.deploy(confirmation());
+  const groveKitsDir = path.join(h.root, "grove-kits");
+  const base = await fs.readFile(h.saved.configPath, "utf8");
+  await fs.writeFile(h.saved.configPath, `${base}\n# grove_kits_dir = ${JSON.stringify(groveKitsDir)}\n`);
+  Object.assign(h.context, { portalExecutable: h.saved.executable, portalConfig: h.saved.configPath, managedPortal: { ...h.saved, groveKitsDir } });
+  h.calls.length = 0;
+  expect((await h.controller.deploy(confirmation())).status).toBe("running");
+  expect(h.calls.includes("grove")).toBe(true);
+  expect(h.calls.includes("start")).toBe(true);
+});
 
 it("one-click retry rejects modified binaries and workspace changes before launch", async () => {
   for (const change of ["binary", "workspace"]) {

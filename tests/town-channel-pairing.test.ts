@@ -129,3 +129,45 @@ it("a timeout ignores a late response and never repeats the chat or confirm requ
   expect(f.pairs.length).toBe(0);
   expect(f.calls.length).toBe(2);
 });
+
+// The three cases below are not in the BeingDesktop file. They pin behaviour this port first got
+// wrong; each expectation was measured against src/town-pairing.cjs itself on 2026-09-16.
+
+// Measured: REJECTED code="PAIRING_INCOMPLETE" state.errorCode="PAIRING_INCOMPLETE" pairs=0 calls=2.
+// consumeEvents hands `null` to the handler, whose `data.scene_id` read throws; that TypeError is
+// what refuses the reply. Replacing the payload with `{}` would pair on this stream instead.
+it("a null SSE payload cannot authorize pairing", async () => {
+  const f = pairingFixture({
+    response: (_url, options) => {
+      const { scene_id: scene } = JSON.parse(String(options.body));
+      return new Response(`event: meta\ndata: ${JSON.stringify({ scene_id: scene })}\n\nevent: text\ndata: {"text":"AB3XY9"}\n\nevent: done\ndata: null\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  await expect(f.pairing.connect()).rejects.toMatchObject({ code: "PAIRING_INCOMPLETE" });
+  expect(f.pairs.length).toBe(0);
+  expect(f.calls.length).toBe(2);
+  expect(f.pairing.state()).toEqual({ status: "manual_required", busy: false, errorCode: "PAIRING_INCOMPLETE" });
+});
+
+// Measured: REJECTED name=TimeoutError code=23 state.errorCode=23 pairs=0 calls=1. A real fetch
+// rejects the 90-second timeout with a DOMException, whose legacy code is a number; the original
+// error reaches the caller because no PAIRING_ERRORS entry matches it.
+it("a timed out request keeps its own abort error and numeric code", async () => {
+  const f = pairingFixture({ active: () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); } });
+  const error = await f.pairing.connect().then(() => null, (value: unknown) => value);
+  expect((error as DOMException).name).toBe("TimeoutError");
+  expect((error as DOMException).code).toBe(23);
+  expect(f.pairing.state()).toEqual({ status: "manual_required", busy: false, errorCode: 23 });
+  expect(f.pairs.length).toBe(0);
+  expect(f.calls.length).toBe(1);
+});
+
+// Measured: REJECTED code="READINESS_UNKNOWN" state.errorCode="READINESS_UNKNOWN" pairs=0 calls=1.
+// A JSON `null` verdict is not a readable readiness answer, so it is unknown rather than BUSY.
+it("a null readiness body leaves readiness unknown and sends no chat message", async () => {
+  const f = pairingFixture({ active: () => json(null) });
+  await expect(f.pairing.connect()).rejects.toMatchObject({ code: "READINESS_UNKNOWN" });
+  expect(f.pairing.state()).toEqual({ status: "manual_required", busy: false, errorCode: "READINESS_UNKNOWN" });
+  expect(f.pairs.length).toBe(0);
+  expect(f.calls.length).toBe(1);
+});
