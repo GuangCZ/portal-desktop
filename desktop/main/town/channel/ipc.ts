@@ -40,7 +40,7 @@
 // (docs/migration/i4-orchestration-features.md).
 import { assistanceDraft, featureDraft, firesideDraft, getTownCatalog, townPageUrl, FIRESIDE_EPOCH_CHANGED } from './town-catalog';
 import { requireDraftContext } from './draft';
-import { townErrorEnvelope } from '../../../shared/town-desktop-errors';
+import { townErrorCode, townErrorEnvelope } from '../../../shared/town-desktop-errors';
 import type { ChannelBeing } from './channel-being';
 import type { DraftAck, NativeDraftContextReader, PrepareNativeDraft } from './draft';
 import type { ChannelDraftRequest, ChannelTownCatalog, ChannelWorkerState } from '../../../shared/channel-types';
@@ -85,6 +85,42 @@ export interface ChannelIpcOptions {
 const MAX_ID = 64;
 const MAX_DRAFT = 32_000;
 
+const KINDS = ['feature', 'assistance', 'fireside', 'pairing'] as const;
+type DraftKind = (typeof KINDS)[number];
+
+/** Which fields belong to which kind. BeingDesktop had four channels and each
+ * checked its own argument where it lived; one channel with four kinds has to say
+ * this out loud, or a field meant for another kind rides along unread.
+ *
+ * `fireside` is the strict one, as it is there: src/town.cjs line 158 requires
+ * EXACTLY `draft` and `connectionRevision`, both data properties, and answers
+ * anything else with「请填写有效的围炉协助草稿。」 — which tells the user to check
+ * what they wrote. Accepting the request without an epoch and failing it later on
+ * `context.generation !== undefined` would instead say「连接身份已变化…」and send
+ * them to re-confirm an identity that never moved.
+ *
+ * `feature` and `assistance` deliberately do NOT require `id` here: without one,
+ * ./town-catalog.ts answers with BeingDesktop's own sentence (「无效的 Town 功能。」
+ * and「请选择有效的 Being 协助操作。」), which is more use than a generic refusal. */
+const FIELDS: Record<DraftKind, readonly string[]> = {
+  feature: ['id'], assistance: ['id'], fireside: ['draft', 'connectionRevision'], pairing: [],
+};
+
+/** BeingDesktop src/main.cjs line 740: the feature-task ledger's own limit has a
+ * sentence that says what to do about it, and line 127 lists the code in
+ * `townErrorCodes`, so both halves cross to the page. `TOWN_ERROR_CODES`
+ * (desktop/shared/town-desktop-errors.ts, unit I1) does not carry the code, and
+ * `townErrorEnvelope` would downgrade the pair to「Town 操作未完成，请稍后重试。」—
+ * advice that cannot succeed, because only the user ending a tracked task frees a
+ * slot. The envelope is therefore built here; the page's `unwrap`
+ * (renderer/channel/models/channel.ts) takes `code` and `message` verbatim. */
+const TASK_LIMIT = {
+  code: 'TASK_LIMIT_REACHED',
+  message: '功能任务记录已满，请到任务页结束不再跟踪的等待任务后重试。',
+} as const;
+
+type TaskLimitEnvelope = { __townError: true; code: typeof TASK_LIMIT.code; message: typeof TASK_LIMIT.message };
+
 const invalid = (message: string): Error => Object.assign(new Error(message), { code: 'INVALID_REQUEST' });
 
 const plain = (value: unknown): value is Record<string, unknown> =>
@@ -117,7 +153,13 @@ function draftRequest(value: unknown): ChannelDraftRequest {
   const id = descriptors.id?.value as unknown;
   const draft = descriptors.draft?.value as unknown;
   const connectionRevision = descriptors.connectionRevision?.value as unknown;
-  if (typeof kind !== 'string' || !['feature', 'assistance', 'fireside', 'pairing'].includes(kind)) throw invalid('请选择有效的草稿类型。');
+  if (typeof kind !== 'string' || !(KINDS as readonly string[]).includes(kind)) throw invalid('请选择有效的草稿类型。');
+  // The refusal is the kind's own, because the two sentences ask for different
+  // things: one to pick a draft type again, one to check the fireside draft.
+  const fields = FIELDS[kind as DraftKind];
+  const wrongShape = kind === 'fireside' ? '请填写有效的围炉协助草稿。' : '请选择有效的草稿类型。';
+  if (Object.keys(descriptors).some(key => key !== 'kind' && !fields.includes(key))) throw invalid(wrongShape);
+  if (kind === 'fireside' && fields.some(key => !Object.hasOwn(descriptors, key))) throw invalid(wrongShape);
   if (id !== undefined && (typeof id !== 'string' || !id || id.length > MAX_ID)) throw invalid('请选择有效的草稿类型。');
   if (draft !== undefined && (typeof draft !== 'string' || draft.length > MAX_DRAFT)) throw invalid('请填写有效的围炉协助草稿。');
   if (connectionRevision !== undefined && (!Number.isSafeInteger(connectionRevision) || (connectionRevision as number) < 0)) throw invalid('请填写有效的围炉协助草稿。');
@@ -149,9 +191,12 @@ export function registerChannelIpc(options: ChannelIpcOptions): void {
 
   /** BeingDesktop's `handle` catch for a `townMethods` channel (src/main.cjs line
    * 741): resolve with the envelope rather than throw, so the code crosses. */
-  const envelope = async <T>(body: () => Promise<T>): Promise<T | ReturnType<typeof townErrorEnvelope>> => {
+  const envelope = async <T>(body: () => Promise<T>): Promise<T | ReturnType<typeof townErrorEnvelope> | TaskLimitEnvelope> => {
     try { return await body(); }
-    catch (error) { return townErrorEnvelope(error); }
+    catch (error) {
+      if (townErrorCode(error) === TASK_LIMIT.code) return { __townError: true, ...TASK_LIMIT };
+      return townErrorEnvelope(error);
+    }
   };
 
   handle('beings:channel-begin', (value: ChannelInput) =>
