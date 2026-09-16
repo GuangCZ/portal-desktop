@@ -18,6 +18,11 @@
 //      to unknown; a later successful read recovers it.
 //   4. Only explicit toggles write configuration.
 //
+// One rule was added on 2026-09-16 after review: the Being is bound BEFORE the
+// window's renderer runs, which is the order main.ts uses and the order under
+// which the page's own state push is sent to nobody. Rule 0 below asserts the
+// page finds its Being anyway.
+//
 // The old script's fifth rule — an older pending GET cannot undo a subsequently
 // confirmed toggle — moved to vitest, where it can be expressed exactly: this
 // client cannot overlap a read and a write from the page (the page refuses while
@@ -170,7 +175,7 @@ const subsystem = installModelSettingsSubsystem({
 globalThis.__fixtureErrors = [];
 // The test's own control, on the main process's global rather than a channel, so
 // the renderer cannot reach it and the bridge under test stays production's.
-globalThis.__fixtureBind = () => { subsystem.connectionVerified(null); return subsystem.ready; };
+globalThis.__fixtureReady = () => subsystem.ready;
 globalThis.__fixtureState = () => subsystem.state();
 
 app.whenReady().then(() => {
@@ -182,6 +187,14 @@ app.whenReady().then(() => {
   window = new BrowserWindow({ show: true, width: 1280, height: 900,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
   window.loadURL('beings://desktop/');
+  // PRODUCTION'S ORDER, and the reason this line is here rather than in the test
+  // body: main.ts creates the window and only then restores the saved connection
+  // -- createWindow(), then restoreStartup() -> verifyConnection() ->
+  // extensions.connectionVerified(...). The renderer's bundle has not run yet, so
+  // the only push that says a Being is bound reaches nobody. A fixture that binds
+  // after the page is on screen tests an ordering no user ever sees -- and would
+  // not have caught the page staying inert for the whole session.
+  subsystem.connectionVerified(null);
 });
 app.on('window-all-closed', () => app.quit());
 `;
@@ -209,13 +222,22 @@ try {
   const configured = page.locator('#model-sbs-configured');
   const status = page.locator('#model-config-status');
 
-  // Open the page the way a user does: the sidebar footer's third link.
-  await page.locator('#open-models').waitFor();
-  // Bind the Being first so the subsystem's own first read is the one being held.
-  const binding = evaluate('__fixtureBind');
+  // The Being was bound while this page was still loading (see the comment in
+  // the fixture main process), so its first read is already in flight — held
+  // open here, which is what keeps「未知」on screen long enough to assert.
   await until(() => reads.length > 0, 'the first read');
+  await page.locator('#open-models').waitFor();
+  const binding = evaluate('__fixtureReady');
+
+  // 0. THE COLD START. Nothing pushed `connected: true` to this renderer — that
+  //    went out before it existed. A page that learns its state only from the
+  //    push makes everything below unreachable: the entry opens a page claiming
+  //    no Being is connected, every control disabled, with no way to retry.
   await page.locator('#open-models').click();
   await page.locator('#model-settings-page').waitFor();
+  check('page-finds-the-being-it-was-not-told-about', (await status.textContent()).trim() !== '连接 Being 后即可配置模型。');
+  await until(() => reads.length === 2, 'the page\'s own first read');
+  check('opening-the-page-reads-the-configuration', reads.length === 2);
 
   // 1. Unknown is not off. While no read has confirmed a value the switch is
   //    disabled and carries no `aria-pressed` at all.
