@@ -135,7 +135,8 @@ Worktree `.local/i5-conversation`，分支 `i5-conversation`，基线 `next @ 7b
   后面没有空白就补一个空格并把 caret 放到空格后）、`composerReferences(text, items, prefix)`
   （marker 前必须是行首或空白、后必须是结尾或标点）、`buildKitPrompt(text, kits)`（内置能力段 + 远端 Kit 段，
   两段用 `\n` 连，再空一行接原文）。
-- **BD `renderer/town-mentions.js`** —— 聊天 composer 用到的是 `memberMap / memberName / resolve / unresolvedNotice`：
+- **BD `renderer/town-mentions.js`** —— 聊天 composer 用到的是 `memberMap / memberName / resolve / unresolvedNotice`，
+  转写（读的方向）还要 `displayText`（复审后补，见第 8 节 F1）：
   `resolve` 只认精确 ID（`t_` 前缀或目录里有的 id），其余进 `unresolved`；
   `unresolvedNotice` 文案「未解析提及：@x；按原文发送，可能不会触发通知。请从候选列表选择完整 Town ID。」。
   本仓库 `renderer/town/models/mentions.ts` 是 I1 的**显示向**投影（`mentionNames/mentionParts/mentionWarnings`），
@@ -239,7 +240,8 @@ Worktree `.local/i5-conversation`，分支 `i5-conversation`，基线 `next @ 7b
 ## 6. 冒烟与门槛
 
 - `npm run typecheck`：绿。
-- `npx vitest run`：**114 文件 / 1271 通过 / 24 跳过**（基线 109 / 1197 / 34）。新增 5 个测试文件、+74 通过；重新启用 10 条 skip（34 → 24）。既有用例一条未删、未弱化。
+- `npx vitest run`：**114 文件 / 1279 通过 / 24 跳过**（基线 109 / 1197 / 34；复审修复前是 1271）。
+  新增 5 个测试文件、+82 通过；重新启用 10 条 skip（34 → 24）。既有用例一条未删、未弱化。
 - **打包真跑**：`PORTAL_DESKTOP_MAC_LOCAL_TEST=1 npx electron-forge package`（绕代理）+ `codesign --force --deep --sign -`，`resources/heart-portal` 用 clang 编的 Mach-O stub（`--version` 打印 `heart-portal 0.0.0`）。
 - **`tests/electron-smoke.mjs`：18 条全过**（在最终树上重新打包后又跑了一遍，仍全过）（§6.1 的 10 步全部走到）。覆盖：打包客户端启动 → 真实设置对话框连接夹具 → 侧栏一个会话 → 基线 `GET /api/history` 恰好一次 → 发一句 → `.chat-message.is-user` + 流式行 → `POST /api/chat/stream` 的 body 带 `scene_id`（`desktop-<uuid>-<uuid>`）/ `scene_meta.scene_label` / `scene_meta.client` / `client_ref`，`message` 带 v1 帧且声明长度属实、剥掉后正是人说的话、帧里 `chatSessionId` 等于场景里的会话 UUID、直接模式无 orchestrator 段、token 不在 body 任何位置 → 停止按钮 → `POST /api/stop` 恰好一次 → 重启后会话、标题、双方消息都在，且转写里没有 `request context v1`。
 - 未跑：`npm run test:all` 全量（会串行占用四个 worktree 共用的 E2E 锁，且包含其它单元的脚本）。本单元只保证 `electron-smoke` 从「skipped」变「passed」，§6.3.4 的「skipped 名单只减不增」在这一项上成立。
@@ -247,7 +249,108 @@ Worktree `.local/i5-conversation`，分支 `i5-conversation`，基线 `next @ 7b
 
 ## 7. 未做 / 存疑
 
-1. **D3：帧里的 `portal` 运行态是假的**（恒 `not_configured` / `unknown`）。要修必须动 `subsystems/types.ts` 或 `main.ts` 给 `SubsystemContext` 加一个 Portal 状态读取口——两个文件本单元都不能碰。建议 IM 收敛时加一个 `ctx.portalState?: () => PortalState | null`，`chat/environment.ts` 已经预留 `getPortalState` 参数，接上即可，`portalRuntime` 与它的表不用改。
+1. **D3：帧里的 `portal` 运行态是假的**（恒 `not_configured` / `unknown`）——也就是说
+   **定案 §5.2 的交付物在合回 next 之后仍然不成立**：映射表写完了、测试钉死了，但没有输入。
+   要修必须动 `subsystems/types.ts` 或 `main.ts` 给 `SubsystemContext` 加一个 Portal 状态读取口——两个文件本单元都不能碰。
+   IM 收敛时的完整改动是一个字段加两行（`subsystems/chat.ts` 的 `getPortalState` 上方逐字写了同一份）：
+
+   ```
+   subsystems/types.ts:  portalState?: () => PortalState | null;
+   main.ts:              portalState: () => portal.state,
+   subsystems/chat.ts:   getPortalState: () => ctx.portalState?.() ?? null,
+   ```
+
+   `chat/environment.ts` 的 `portalRuntime` 与 `tests/chat-integration-environment.test.ts` 都不用改。
+   **在此之前不要把 I5 记成「§5.2 已落地」。**
 2. **D4：composer 的 Kit 没有市场 ID、没有图标**，与 BD 的菜单在这两处观感不同。要对齐得让 `kits/install.ts` 把市场 ID 写进安装回执，属 Kit 安装链路，不在本单元范围。
 3. `connectionCleared()` 依然没有调用方（I0 记录里就存在的缺口）：Being 被清空时卡片的 `details.reset()` 因此不会触发。本单元没有扩大这个缺口，也没有修——接线在 `main.ts`。
 4. `tests/town-sdk.mjs` / `tests/town-ui.mjs`（I1 重写、从未执行）本单元未代跑，按分工归 IM 在打包客户端上真跑。
+
+---
+
+## 8. 复审结论的处理（2026-09-16，同一 worktree）
+
+复审五条，逐条如下。`npm run typecheck` 绿，`npx vitest run` **114 文件 / 1279 通过 / 24 跳过**。
+
+### F1（medium，已修）转写里的 `@提及` 没有做显示名投影
+
+属实，是漏移植，不是决定。BD `renderer/chat-app.js:102` 在 Markdown 渲染之后用
+`beingTownMentions.displayText(textNode.nodeValue, mentionMembers)` 走一遍文本节点，跳过 `code, pre, .chat-link`；
+成员表由 `chat-composer.js` 的 `onMembersChanged` 回填并 `repaint()`（`chat-app.js:190`）。
+本单元原来只移了 composer 那一半（解析方向），读的这一半整个漏了。
+
+移植结果：
+
+- `renderer/conversation/models/mentions.ts` 补 `displayNames(members)` 与
+  `displayText(text, names)`，正则与 `clean()` 照 BD `town-mentions.js:33-37`（含第一个「吃掉整条 URL」的分支，
+  `https://example.invalid/@t_x` 因此保持原样）。
+- `renderer/conversation/models/directory.ts` 补 `displayNames` / `project` 两个 getter，按 `this.data` 身份缓存：
+  转写每次重绘（包括每个流式 token）都要取它，重建一次成员表就会把下面所有 memoized 气泡一起作废。
+  `project` 的身份只在目录被替换时才变——**这正是「成员刷新要重画已有气泡」的实现方式**。
+- `components/messages.tsx` 的 `Transcript` 多订阅一个 model（`useModel(model.directory)`），
+  把 `directory.project` 作为 `renderText` 传进 `Bubble` → `Markdown`。
+  `Markdown` 的 `renderText` 钩子本来就只在 `decorate` 为真时调用，而 `code`/`codespan` 不走 `words()`、
+  链接子节点走 `render(tokens, false)`——与 BD 的「跳过 `code, pre, .chat-link`」逐条对应，不需要再加判断。
+- 直播气泡**不投影**：BD `chat-app.js:367` 是 `if (live) body.textContent = text; else body.append(renderMarkdown(text))`，
+  走 walker 的只有渲染那一支。照搬。
+- 解释卡片**投影**：BD 把同一个 `renderMarkdown` 交给了 `chat-selection.js`（`chat-app.js:191`），
+  所以 `components/detail-card.tsx` 用同一个 `project`。
+- `Bubble` 因此从私有改成导出：`Transcript` 订阅两个 model，在 node 环境下 `useSyncExternalStore`
+  没有 `getServerSnapshot` 会直接抛（实测），渲染不了；而要钉的规则是气泡的 markup。
+
+测试：`tests/conversation-renderer.test.ts` 新增 7 条（30 → 37），把 BD `test/chat-composer-ui.cjs` 第 98/100/102/104/106 行
+五条断言逐条映射，外加「直播中的回复不投影」与「目录不可用时投影是恒等」。
+
+**偏差（记在这里，不藏）**：`displayNames` 会丢掉「名字等于 id」和「名字等于 `@id`」的条目。
+BD 不丢——前者输出相同（把 `@id` 换成 `@id`），后者 BD 会得到 `@@t_abc`。这是显示层，
+与 I1 的 `renderer/town/models/mentions.ts:29` 同一条规则，故意对齐。
+
+### F2（medium，未修，属实）上下文帧里的 Portal 运行态是编造的
+
+复审对事实与约束的核实都成立：`SubsystemContext` 没有任何 portal 字段，`PortalSupervisor` 留在 `main.ts` 闭包里，
+两个文件本单元都不得修改。**没有在本单元修**，处理是把缺口写得更硬：`subsystems/chat.ts` 的
+`getPortalState` 上方现在逐字写出 IM 要加的那一个字段和两行，第 7 节第 1 条改写成
+「§5.2 在合回前不成立」，并进 `openIssues`。映射表本身（`portalRuntime` 九行）与它的测试早已完成，
+接上输入即可，两边都不用改。
+
+考虑过但否决的两条捷径：(a) 在 `subsystems/chat.ts` 里用 `declare module './types'` 给 `SubsystemContext`
+增补一个可选 `portalState` —— 这等于单方面改接缝契约，是 I0/IM 的事；(b) `ctx as {portalState?}` 硬转 ——
+读一个类型上不存在的字段，把契约写成谎话。两条都比「如实留缺口」更坏。
+
+### F3（low，已加不变量测试）`connectionRevision` 的跨子系统隐式耦合
+
+复审的链路描述准确。补充一条复审没查的事实，它把严重性降到「潜在」而不是「线上失效」：
+`main.ts` 只有两处调 `connectionVerified`（335 与 449），两处都在 `verifyBeingConnection` 之后，
+而 `chat/ready.ts:6` 第一行就是 `if (!connection) throw new Error('尚未配置 Being，Portal 未启动。')`——
+所以生产路径根本到不了 `!next` 这一支（`town.ts:333` 与 `chat.ts` 的分歧点），两个计数器在可达路径上恒等。
+
+因此没有改 `connectionVerified` 的行为（在生产到不了的分支上改语义，风险大于收益），
+而是按复审建议的第二条把不变量钉住：`tests/chat-integration-composer.test.ts` 新增一条，
+用 `installSubsystems(ctx, [installChatSubsystem, installTownSubsystem])` 装两个子系统，
+先读 `beings:chat-composer-data` 拿到回显的 revision，再用它调 `beings:town-speak`，断言：
+
+- 用回显值 → `AUTH_REQUIRED`（未配对，§5.7），**不是** `SESSION_CHANGED`；
+- 用回显值 ±1 → `SESSION_CHANGED`；
+- 换 Being 后两边一起走，旧 revision 仍被拒；同一 Being 重新验证两边都不动。
+
+`subsystems/chat.ts` 的 `composerData` 上方写明了这条不变量与它的测试位置。
+真正的收敛（合成一个由外壳持有的连接世代）仍留给 IM。
+
+### F4（low，已修）选区工具条丢了 Tab 与选区高亮
+
+两条都补上，照 `chat-selection.js:115-118` 与 `:107`：
+
+- `keydown` 加 Tab 分支（工具条可见、焦点不在其中、非 Shift+Tab 时 `preventDefault()` 并聚焦第一个可用按钮）。
+  BD 无条件 `add.focus()`；这里取第一个未禁用的按钮，两个都禁用时不拦 Tab——断开连接时工具条按钮本来就不可用。
+- `CSS.highlights` 的 `chat-selected`：`capture()` 成功时 `set`，每一条隐藏路径（统一收进 `clear()`）与卸载时 `delete`，
+  API 不存在时静默跳过。`renderer/conversation/styles.css` 加一条 `::highlight(chat-selected)`
+  （照 BD `chat-app.css:118` 的配色），**单独成条**而不是并进 `::selection` 选择器组——
+  不支持 `::highlight()` 的引擎只会丢掉这一条，不会连累别的。
+
+### F5（low，已修）注入替身形状与生产不一致
+
+属实，注释也确实说反了：`policy.inspectForMessage()` 是对话层每条消息都会调的。
+`tests/chat-integration-details.test.ts` 的替身 installer 现在发布真的 `OrchestrationPolicy` 实例，
+四个参数照 `subsystems/orchestration.ts:144` 接（`getIdentity` / `getDesktopId` / `getBridge` / `getMode` / `onChange`），
+注释改成说明剩下的 cast 只盖住 runner 与 histories。行为不变（`getMode()` 为直接模式 → 仍是 `{status:'disabled'}`），
+变的是形状。
