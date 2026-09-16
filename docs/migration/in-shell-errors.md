@@ -339,3 +339,31 @@ IM 留的四条 `pending`（读 `error.code` 的）全部转绿，退出码 0：
   既有文件里加 1 条（`features-feature-tasks`），**跳过数一条没变，既有用例一条没删**。
   `tests/channel-integration-renderer.test.ts` 里那条既有用例改了一处断言（`model` 由「toast 说没有页面」改成
   「打开 models 对话框」，因为行为按任务书第 4 条**有意**改变），同时**补了 `workspace` 仍然 toast** ——规则数 +1。
+
+---
+
+## 5. 共享文件触碰行（逐行，给合并者）
+
+| 文件 | 本单元做了什么 | 归属 |
+| --- | --- | --- |
+| `desktop/main/main.ts` | **append 一行**：`installDesktopExtensions({…})` 里 `portalState: () => portal.state,`。其它一字未动。 | 任务书授权（第 2 条） |
+| `desktop/main/subsystems/types.ts` | **append 一个可选成员** `portalState?: () => PortalState | null;` + `import type` 加 `PortalState`。既有成员一个没动。 | 任务书授权（第 2 条） |
+| `desktop/main/extensions.ts` | **append 一个同名可选成员**到 `DesktopExtensionsContext` + `import type` 加 `PortalState` + `subsystemContext` 构造里一行 `...(ctx.portalState ? { portalState: ctx.portalState } : {}),`。**`INSTALLERS` 一字未动。** | 任务书没预料到（它以为 main.ts 直接造 `SubsystemContext`）；这三行是把第 2 条接通的机械必需 |
+| `desktop/main/subsystems/chat.ts` | `getPortalState` **一处**（+ 上方注释重写）。 | 任务书授权（第 2 条） |
+| `desktop/main/app/ipc.ts` | 退出文案字面量换成 `QUITTING_MESSAGE`（+ 一行 import）。**行为一字不变**，`QUIT_ALLOWED` 没动。 | 无单元独占；IM 上一轮以例外身份改过 |
+| `desktop/main/chat/environment.ts` | **只改注释**两处（缺口已补，旧注释成了谎话）。无行为改动。 | I5 的文件 |
+| `desktop/main/features/feature-tasks.ts` | 新增一个常量 + 抛出点换文案。 | 本单元独占（`main/features/**`） |
+| `desktop/shared/errors.ts` | **append** `QUITTING_MESSAGE` 与 `isQuittingRefusal`。`publicErrorMessage` 一字未动。 | 错误码表，本单元例外 |
+| `desktop/shared/chat-errors.ts` / `town-desktop-errors.ts` | 各 append 一个 `*Payload`；`*FromEnvelope` 基于它重写，**行为逐字不变**；`TOWN_ERROR_CODES` append `'TASK_LIMIT_REACHED'`。 | 错误码表，本单元例外 |
+| `desktop/shared/town-desktop-errors.ts` | **另一处**：`clean()` 的正则由**裸控制字节**改成 `\uXXXX` 转义（与同门 `chat-errors.ts:67` 一致）。正则语义完全相同。**这个文件在基线上就被 git 当成二进制**（`Bin 5895 -> …`），I5 的 D9 记过同一个坑：二进制文件在合并时是二进制冲突而不是可读 diff。现在它是纯文本了。 | 同上 |
+| `desktop/renderer/app/models/app.ts` | 一个私有字段 + `onPortal` 回调里的守卫（+ 一行 import）。 | 任务书授权（`renderer/app/**`） |
+| `desktop/renderer/channel/models/channel.ts` | `TASK_SHELL_PAGES` 一张新表 + `ChannelHost.features` 一个可选成员 + `openFeature` 里一个分支。 | I7 的目录；任务书把第 4 条派给本单元 |
+| `desktop/preload/**` | `main-world.ts` 新文件；`preload.ts` 的 `exposeBridge`；`channels/bridge.ts` 两个 `*enveloped` + 退路开关；`channels/town.ts` 删本地 `townEnveloped`。**24 条 Town 通道、5 条对话通道、5 条卡片通道、2 条模型写通道的名字与参数一字未动。** | 本单元独占 |
+| `tests/support/electron-lifecycle.mjs` | 假钥匙串由 opt-in 改 opt-out。 | 本单元独占 |
+| `MIGRATION.md` | 「集成阶段：各单元记录」表**末尾 append 一行**。 | 约定的一行式冲突点 |
+
+**没有碰**：`package.json`、`package-lock.json`、`forge.config.ts`、`vite.*.config.ts`、`tsconfig.json`、`vitest.config.ts`、
+`scripts/test-all.mjs`、`desktop/preload/channels/index.ts`、`desktop/shared/desktop-types.ts`、`desktop/shared/types.ts`、
+`desktop/renderer/app/slots.tsx`、`desktop/renderer/app/models/registry.ts`、`desktop/renderer/main.tsx`、
+`desktop/main/town/**`、`desktop/main/subsystems/town.ts`、`desktop/renderer/town/**`、`desktop/shared/town-types.ts`、
+`tests/town-sdk.mjs`、`tests/town-ui.mjs`（两个脚本**一字未改**，红转绿全部来自产品代码）。
