@@ -112,3 +112,55 @@ u1/u2/u3 的构造签名、portal-desktop 自带 town 模块的重叠判定、�
   `PAIR_STORAGE_ERROR` / `NOT_RUNNING` / `PAUSED`；未知码折叠为 `TOWN_ERROR`。
 - `townApp`（§4）本期要填的字段：`identity` / `access` / `sync` / `client` / `pairing` / `memberDirectory`
   （`portalInstall` / `portalWorkspace` 属 I7）。
+
+---
+
+## 3. 决定与偏差（读完真实代码之后）
+
+定案 5.1 说「删 `town/{client,live,pairing,ipc}.ts` 及其 9 条通道，渲染层 Town 页按新 DTO 重写」。
+真实代码里有三处方案 §1.3 没有记到的约束，按「方案与真实代码冲突时以真实代码为准」处理：
+
+### D1 · `town/client.ts` 还被 `main/kits/install.ts` 用着（匿名公开读）
+
+`desktop/main/kits/install.ts:11` import `TOWN_ORIGIN, TownClient`，`:110` 用
+`new TownClient(() => '', fetcher).query({kind:'kit', id})` 做**匿名公开目录读**，`:65` 用 `TOWN_ORIGIN` 拼下载地址。
+Kits 子系统不属于本单元，也不在任何单元的删除范围里。
+
+处理：把 `town/client.ts` 拆成两半——
+**带鉴权的那半（`TownCredentials` 凭据库、`pair`、`send`、私密路由）全部删除**，由移植来的
+`TownClient`（`town/session/client.ts`）+ `TownClientStore` 接管；
+**匿名公开目录读那半**留下，搬进本单元的新文件 `desktop/main/town/catalog.ts`（`TOWN_ORIGIN` / `townRoute` / `TownCatalog`），
+`townRoute` 只保留 `private:false` 的 kind（`home`/`seeds`/`seed*`/`embers`/`ember`/`scrolls`/`scroll`/`grove`/`kit`），
+私密 kind（`bonfire`/`firesides`/`fireside`/`inbox`/`sent`/`my-scrolls`）删除。
+`kits/install.ts` 改一行 import。
+
+### D2 · 通道删除的实际账目
+
+`town/ipc.ts` 注册的是 **10** 条（方案写 9）。按 D1 的拆分：
+**删 8 条**：`beings:town-live`、`-reconnect`、`-send`、`-auth`、`-pair`、`-pair-cancel`、`-auto-pair`、`-token`。
+**留 2 条**（改由本单元的 `town/ipc-desktop.ts` 注册，只服务公开目录）：`beings:town`（私密 kind 已从路由表删除）、`beings:town-open`。
+`beings:town-open` 原来经 `options.open(url)` 打到外壳浏览器；子系统上下文没有浏览器句柄，改用
+`ctx.electron.shell.openExternal`（允许名单与原来逐字一致）。这是行为偏差，已记在 openIssues。
+
+### D3 · 渲染层「原地重写」，不新建 `renderer/town-desktop/`
+
+任务给了二选一。选**原地重写** `desktop/renderer/town/`，理由是另一条路走不通：
+`desktop/renderer/app/models/app.ts`（`readonly town = new TownModel(...)`、`this.town.start()`、`.show()`、`.updateLive()`）与
+`desktop/renderer/app/page.tsx`（`<Town model={app.town}/>`、`<TownComposer>`、`<TownAuth>`、`<KitInstall>`）、
+`components/navigation.tsx`（import `definitions`）、`topbar.tsx`、`settings.tsx`（`app.town.auth()`）都直接依赖 `TownModel`，
+而 `app.ts` / `page.tsx` 是 I0 明文规定「只有 I0 能改 / 后续单元不需要再改」的文件。
+删掉 `renderer/town/` 就必须改它们；新建一个 `town-desktop/` sheet 又正好是任务禁止的「两套并存」。
+所以：`TownModel` 的类名与构造签名保持不变，**内部的私密视图（篝火 / 私信 / 围炉）整体改接新通道与新 DTO**，
+公开目录视图（广场 / 书架 / 种子 / 卷轴公开页 / Grove / 本机 Kits）继续走保留下来的 `beings:town`。
+每个功能只有一份实现，没有并存。
+不新增 `SHEET_SLOTS` 项（会是第二个 Town 页）；新增一项 `SIDEBAR_SLOTS`（BD `sidebar.js` 的篝火 / 围炉入口）。
+
+### D4 · `desktop/shared/types.ts` 与 `desktop/preload/preload.ts` 不止 append
+
+删通道就必须删 `DesktopAPI` 上对应的成员与 `preload.ts` 里对应的行，这两处超出了「只 append 一行」的纪律。
+已逐行记在 §5 的共享文件触碰行里，合回时这两处需要人工过一眼。
+
+### D5 · 定案 5.7
+
+`townSpeak` 未配对直接抛 `AUTH_REQUIRED`（文案「请用 Being 提供的六位配对码连接 Town。」），不做 Being 中继回退；
+`createClient` 钩子保持可选、缺省 `undefined`（u3 的 `ChannelBeing` 用，本单元不传）。
