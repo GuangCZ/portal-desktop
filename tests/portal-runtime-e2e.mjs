@@ -1,7 +1,11 @@
-// SKIPPED — see the skip block below: this script drives the retired
-// `beings://chat` iframe (removed 2026-09-16, MIGRATION.md "P1 完成状态").
+// SKIPPED — see the skip block below: it needs a real `heart-portal` engine.
 // Focused packaged-client test through its existing IPC API and a local relay.
 // Uses a disposable profile/workspace; never contacts a real Being.
+//
+// Its conversation half was rewritten against the native React conversation by
+// integration unit I7 on 2026-09-16; the anchors below are that page's real class
+// names (desktop/renderer/conversation/components/composer.tsx), grepped rather
+// than assumed.
 import { launchDesktop } from './support/electron-lifecycle.mjs';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'node:http';
@@ -11,14 +15,21 @@ import os from 'node:os';
 import assert from 'node:assert/strict';
 import { desktopExecutable } from './support/desktop.mjs';
 
-// SKIPPED since 2026-09-16. This script drives the conversation through
-// `page.frameLocator('#chat-frame')` — the sandboxed `beings://chat` document
-// that the native React conversation replaced (MIGRATION.md, "P1 完成状态").
-// The iframe, its request proxy and its generated assets are gone, so every
-// locator below addresses nothing. Rewriting it against the native
-// conversation's own DOM is P2 work; until then it reports a skip rather than
-// a failure, so `npm run test:all` stays readable.
-console.log('SKIPPED: tests/portal-runtime-e2e.mjs drives the retired beings://chat iframe. Rewrite against the native conversation (MIGRATION.md, P1).');
+// SKIPPED since 2026-09-16, for a different reason since integration unit I7 on
+// the same day. The iframe it used to drive is gone and every conversation
+// locator below was rewritten against the native page — but what actually keeps
+// it from running is the ENGINE: it starts a managed Portal, waits for
+// `portal.phase === 'connected'` with a real PID, and then drives MCP tools
+// (`portal_file_write`, `portal_exec`, `portal_status`, `tools/list`) over the
+// local relay. Only a real `heart-portal` build answers those; the Mach-O stub
+// that lets `npm run package` finish does not, and building the real one needs a
+// Rust toolchain (`npm run build:portal` → `cargo build --release -p
+// heart-portal`), which this environment has no `cargo` for.
+//
+// To run it: `npm run build:portal && npm run package && npm run test:portal-e2e`,
+// with this block deleted. Until then it reports a skip rather than a failure, so
+// `npm run test:all` stays readable.
+console.log('SKIPPED: tests/portal-runtime-e2e.mjs needs a real heart-portal engine (npm run build:portal, which needs cargo) and a packaged client.');
 process.exit(0);
 
 
@@ -139,9 +150,16 @@ try {
   assert.equal((await state()).pid, pid, 'network reconnect must not restart Portal');
   await rpc('ping');
   await page.evaluate(() => window.beings.browserAction('close'));
-  const frame = page.frameLocator('#chat-frame');
-  await frame.locator('#input').fill('保留未发送草稿');
-  await frame.locator('#file-input').setInputFiles({ name: 'draft.txt', mimeType: 'text/plain', buffer: Buffer.from('private draft attachment') });
+  // The native conversation, not the retired iframe: `.chat-input` is the
+  // composer textarea, `.chat-send` its submit button, and the attachment tray is
+  // `.chat-tray-item` (composer.tsx). The picker takes images only, so the
+  // withheld attachment is a PNG rather than 0.8.26's draft.txt.
+  const input = page.locator('.chat-input');
+  const send = page.locator('.chat-send');
+  await input.fill('保留未发送草稿');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  await page.locator('input[aria-label="选择图片"]').setInputFiles({ name: 'draft.png', mimeType: 'image/png', buffer: png });
+  await page.locator('.chat-tray-item').waitFor();
   const openPortal = async () => {
     await page.locator('#options-trigger').click();
     await page.locator('#client-settings-button').click();
@@ -171,22 +189,25 @@ try {
   assert.equal(chatRequests.length, 0);
   await page.locator('#scene-compose').click();
   await page.getByText('对话输入框已有草稿，请先处理原草稿，再放入引用。', { exact: true }).waitFor();
-  assert.equal(await frame.locator('#input').inputValue(), '保留未发送草稿');
-  assert.equal(await frame.locator('#pending-files.active').count(), 1);
+  assert.equal(await input.inputValue(), '保留未发送草稿');
+  assert.equal(await page.locator('.chat-tray-item').count(), 1);
   assert.equal(chatRequests.length, 0);
-  await frame.locator('#input').fill('');
-  await frame.getByRole('button', { name: '移除 draft.txt', exact: true }).click();
+  await input.fill('');
+  await page.getByRole('button', { name: '移除 draft.png', exact: true }).click();
   await page.locator('#scene-compose').click();
   await page.locator('#companion-panel').waitFor({ state: 'hidden' });
-  const quote = await frame.locator('#input').inputValue();
+  const quote = await input.inputValue();
   assert(quote.startsWith('一起看看Portal 设置'));
   assert(quote.includes(preview.split('\n').map(line => '> ' + line).join('\n')));
   assert.equal(chatRequests.length, 0);
-  await frame.locator('#send-btn').click();
-  await frame.getByText('诊断日志已收到', { exact: true }).waitFor();
+  await send.click();
+  await page.getByText('诊断日志已收到', { exact: true }).waitFor();
   assert.equal(chatRequests.length, 1);
-  assert.equal(chatRequests[0].message, quote);
+  // The native client encodes selections into the message body and sends images
+  // as `images`; neither may carry a withheld attachment.
+  assert(String(chatRequests[0].message).includes(quote));
   assert.equal(chatRequests[0].attachments, undefined);
+  assert.equal(chatRequests[0].images, undefined);
   // Old TOMLs cannot disable the client's controls or silently override a save.
   const imported = path.join(temporary, 'imported.toml');
   const original = `workspace = ${JSON.stringify(startupSettings.workspace)}\nkits_dir = ${JSON.stringify(path.join(temporary, 'kits'))}\nkits_enabled = false\n[tools]\nexec = false\ncustom_tools_enabled = false\nscreenshot = true\n[security]\nexec_allowlist = []\n`;

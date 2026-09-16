@@ -164,7 +164,10 @@ export async function channelFixture({ extra = [], withChat = true, directory }:
     destroy: () => { destroyed = true; },
     cleanup: async () => {
       await extensions.quitting();
-      if (!directory) await rm(own, { recursive: true, force: true });
+      // The conversation cache can still be finishing a write when `quitting`
+      // resolves; let it land, and retry the removal rather than racing it.
+      await settle();
+      if (!directory) await rm(own, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
     },
   };
 }

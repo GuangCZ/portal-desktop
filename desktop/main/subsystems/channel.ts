@@ -205,8 +205,20 @@ export function installChannelSubsystem(ctx: SubsystemContext): ChannelSubsystem
       catch (error) { report('channel-draft-preparer', error); }
     },
     connectionVerified(verified) {
+      if (exiting) return;
       const next = ctx.store.connectionAddress || verified?.link || '';
-      if (!next) return;
+      if (!next) {
+        // Verified with nothing bound. `connectionCleared` is the obvious place
+        // for this, but main.ts has never called it (docs/migration/i0-seams.md):
+        // THIS is the path a disconnect actually takes, so it has to end the
+        // channel rather than leave the page reporting a binding that is gone.
+        address = ''; connection = null; beingName = ''; connected = false;
+        generation++; identityRevision++;
+        channel.reset();
+        acks.reset();
+        publish();
+        return;
+      }
       // A different Being is a new epoch: a channel request in flight is abandoned
       // and the per-channel scenes are re-minted under the new identity.
       if (next !== address) {

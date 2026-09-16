@@ -252,6 +252,26 @@ it('installs its preparer on the feature-task ledger once every subsystem exists
   await expect(preparer('第二次', () => { throw new Error('连接已变化，请重新选择任务。'); })).rejects.toThrow(/连接已变化/);
 });
 
+it('a disconnect ends the channel, even though `connectionCleared` is never called', async () => {
+  const f = await fixture();
+  await f.connect();
+  expect((await f.call('beings:channel-status')).connected).toBe(true);
+  // main.ts has never called `connectionCleared` (docs/migration/i0-seams.md), so
+  // a disconnect arrives as `connectionVerified` with nothing bound. The page must
+  // stop reporting a binding that is gone, and the epoch must move so a request
+  // already in flight cannot come back and be believed.
+  const before = (await f.call('beings:channel-status')).connectionRevision;
+  f.store.connection = null;
+  f.store.connectionAddress = '';
+  f.extensions.connectionVerified(null);
+  await settle();
+  const after = await f.call('beings:channel-status');
+  expect(after.connected).toBe(false);
+  expect(after.connectionRevision).toBeGreaterThan(before);
+  expect(after.status).toBe('unknown');
+  expect(await f.codeOf('beings:channel-begin', { channel: 'feishu', connectionRevision: after.connectionRevision })).toBe('NOT_CONNECTED');
+});
+
 it('refuses every channel while the client is quitting', async () => {
   const f = await fixture();
   await f.connect();
