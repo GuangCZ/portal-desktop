@@ -30,12 +30,14 @@ import { installChatSubsystem } from './subsystems/chat';
 import { installTerminalSubsystem } from './subsystems/terminal';
 import { installToolBrowserSubsystem } from './subsystems/tool-browser';
 import { installToolsSubsystem } from './subsystems/tools';
+import { installOrchestrationSubsystem } from './subsystems/orchestration';
 
 const INSTALLERS: SubsystemInstaller[] = [
   installChatSubsystem,
   installTerminalSubsystem,
   installToolBrowserSubsystem,
   installToolsSubsystem,
+  installOrchestrationSubsystem,
 ];
 // ──────────────────────────────────────────────────────────────────────────────
 

@@ -347,3 +347,4 @@ I0 的接缝铺好之后，五到七个单元在各自的 worktree 里把移植�
 | --- | --- | --- |
 | I3 终端 + 内置工具浏览器 | `main/subsystems/{terminal,tool-browser}.ts`、`main/tools/{terminal,browser}/ipc.ts`、`main/tools/terminal/node-pty.ts`、`preload/channels/{terminal,tool-browser}.ts`、`shared/{terminal,tool-browser}-types.ts`、`renderer/{terminal,tool-browser}/` | `docs/migration/i3-terminal-browser.md` |
 | I2 工具桥 + 控制台 | `main/subsystems/tools.ts`、`main/tools/ipc.ts`、`preload/channels/tools.ts`、`shared/tools-types.ts`、`renderer/tools/`；六个接缝各 append 一行 | `docs/migration/i2-tools.md` |
+| I4 编排 + 功能任务账本 | `main/subsystems/orchestration.ts`、`main/orchestration/{instructions,ipc}.ts`、`main/features/{methods,history-cache,town-sync,ipc}.ts`、`preload/channels/orchestration.ts`、`shared/orchestration-types.ts`、`renderer/{orchestration,features}/`；六个接缝各 append 一行。`orchestration.presentation` 待 I2 赋值、Worker 验收卡片待 I5，在那之前对话里看不到卡片（方案接受的中间态） | `docs/migration/i4-orchestration-features.md` |

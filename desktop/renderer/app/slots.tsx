@@ -23,6 +23,7 @@ import { toolsAction, toolsPanel } from '../tools/slot';
 import type { AppModel } from './models/app';
 import { terminalPanelSlot, terminalTopbarSlot } from '../terminal/slot';
 import { toolBrowserPanelSlot, toolBrowserTopbarSlot } from '../tool-browser/slot';
+import { featureTasksPanel, orchestrationActions, orchestrationPanel, sessionWorkersSection } from '../orchestration/slot';
 
 /** A dockable panel in the workspace body, after the tool browser. */
 export interface PanelSlot {
@@ -65,15 +66,19 @@ export const PANEL_SLOTS: PanelSlot[] = [
   terminalPanelSlot,
   toolBrowserPanelSlot,
   toolsPanel,
+  orchestrationPanel,
+  featureTasksPanel,
 ];
 
 export const SIDEBAR_SLOTS: SidebarSlot[] = [
+  sessionWorkersSection,
 ];
 
 export const TOPBAR_SLOTS: TopbarSlot[] = [
   terminalTopbarSlot,
   toolBrowserTopbarSlot,
   toolsAction,
+  orchestrationActions,
 ];
 
 export const SHEET_SLOTS: SheetSlot[] = [

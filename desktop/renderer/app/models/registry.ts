@@ -20,6 +20,8 @@ import type { Store } from '../../shared/models/store';
 import { terminalModelFactory } from '../../terminal/models/terminal';
 import { toolBrowserModelFactory } from '../../tool-browser/models/tool-browser';
 import { toolsModel } from '../../tools/slot';
+import { orchestrationModel } from '../../orchestration/models/workers';
+import { featureTasksModel } from '../../features/models/feature-tasks';
 
 /** Each feature adds its key with a `declare module '.../models/registry'` block
  * in its own file, so landing a feature never edits this one. */
@@ -50,5 +52,7 @@ export const FEATURE_MODELS: FeatureModelFactory[] = [
   terminalModelFactory,
   toolBrowserModelFactory,
   toolsModel,
+  orchestrationModel,
+  featureTasksModel,
 ];
 // ──────────────────────────────────────────────────────────────────────────────
