@@ -254,10 +254,24 @@ active 是第 4 个（**没有行，所以不该被命名**），前 3 个各一
 | `desktop/main/chat/store-types.ts` | 已移植 |
 | `desktop/main/chat/frame.ts` | 已移植 |
 | `desktop/main/chat/store.ts` | 已移植，测试通过 |
-| `desktop/main/chat/cache.ts` | 已移植，待测试 |
-| `desktop/main/chat/titles.ts` | 已移植，待测试 |
-| `desktop/main/chat/session-recovery.ts` | 已移植，待测试 |
+| `desktop/main/chat/cache.ts` | 已移植，测试通过 |
+| `desktop/main/chat/titles.ts` | 已移植，测试通过 |
+| `desktop/main/chat/session-recovery.ts` | 已移植，测试通过 |
 | `tests/chat-store.test.ts` | 18 用例通过 |
-| `tests/chat-cache.test.ts` | 未开始 |
-| `tests/session-titles.test.ts` | 未开始 |
-| `tests/session-recovery.test.ts` | 未开始 |
+| `tests/chat-cache.test.ts` | 9 用例通过（新写，含 0.8.x 兼容夹具） |
+| `tests/session-titles.test.ts` | 6 用例通过 |
+| `tests/session-recovery.test.ts` | 3 用例通过（原 2 条 + `readSessionRecovery`） |
+
+门槛：`npm run typecheck` 通过；`npx vitest run` → Test Files 53 passed | 7 skipped (60)，
+Tests 414 passed | 16 skipped (430)（含并行 p1-client 块的用例）。
+
+## 存疑 / 待后续阶段处理
+
+- `importSessionRecovery` 要被 `toString()` 注入页面执行。vitest 用 esbuild 转译，实测注入后
+  行为正确；但生产构建（vite.main.config.ts）目前没有显式的 `keepNames`/`minify` 配置，
+  接线阶段把它真正注入 Loom 页面时要再验一次转译产物里没有 `__name(...)` 之类的运行时 helper。
+- `frame.ts` / `titles.ts` / `session-recovery.ts` / `store.ts` 里各有一份从别的 BeingDesktop 模块
+  搬来的小函数（`unwrapMessage` / `sanitizeText` / `sessionPartition` / `sessionFromScene`），
+  后续阶段应与 orchestration、services、security、being-chat 的正式移植合并，避免两份实现漂移。
+- `rename()` 的 `source` 参数在 TS 里被收窄成 `TitleSource`；原 JS 不校验、写什么存什么，
+  但 `snapshot()` 会在落盘时丢掉非法值。行为等价，只是把校验点从运行时提前到编译期。
