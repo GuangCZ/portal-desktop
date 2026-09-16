@@ -438,11 +438,16 @@ export class TownModel extends Store {
       // BeingDesktop acceptTownState (renderer/town-app.js:1701) says exactly
       // that: `Boolean(previousId && nextId && nextId !== previousId)` — an empty
       // previous id is no change — and it never starts a feed read from a state
-      // update at all; only `open()` reads. Here the identity lands one state push
-      // after the page opened, so re-reading on arrival issued a SECOND
-      // `/api/bonfire/hear` roughly 250 ms behind the first, both with `since:null`
-      // (MEASURED by IM 2026-09-16 on the packaged build; tests/town-ui.mjs
-      // 「the pending directory did not stop the feed read」).
+      // update at all; only `open()` reads.
+      //
+      // Here the identity lands one state push after the page opened, so
+      // `this.me` going from '' to a Town id read as a change of Being and issued
+      // a whole second read of the feed that had just been read. MEASURED on the
+      // packaged build (IT, 2026-09-17): a single opening produced
+      // `/api/bonfire/hear` twice a couple of milliseconds apart, both with
+      // `since: null`. (The other extra read that run showed, ~250 ms later, is
+      // NOT this one: it is the live reader reconciling the SSE `hello`, which is
+      // Town announcing a change — see tests/town-ui.mjs for that measurement.)
       const arrived = !this.me;
       this.me = identity;
       this.authLabel = identity ? "@" + identity : state.client.paired ? "Town 连接" : "配对 Being";
