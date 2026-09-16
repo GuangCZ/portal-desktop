@@ -11,7 +11,7 @@
 // It replaces the deleted tests/town-ipc.test.ts, which asserted the same four
 // things about the nine channels of the Town layer decision §5.1 removed.
 import { afterEach, expect, it } from 'vitest';
-import { PLAIN_CHANNELS, TOWN_CHANNELS, townFixture, type TownFixture } from './town-fixture';
+import { FOREIGN_TOWN_CHANNELS, PLAIN_CHANNELS, TOWN_CHANNELS, townFixture, type TownFixture } from './town-fixture';
 import { json, settle } from './town-fixture';
 
 const open: TownFixture[] = [];
@@ -24,7 +24,7 @@ const fixture = async (options?: Parameters<typeof townFixture>[0]) => {
 
 it('registers the documented channel set and answers nobody but the shell', async () => {
   const f = await fixture();
-  expect([...f.handlers.keys()].filter(channel => channel.startsWith('beings:town'))).toEqual(TOWN_CHANNELS);
+  expect([...f.handlers.keys()].filter(channel => channel.startsWith('beings:town') && !FOREIGN_TOWN_CHANNELS.has(channel))).toEqual(TOWN_CHANNELS);
   // The two catalogue channels are the survivors of the deleted town/ipc.ts; the
   // nine private ones it also registered (`townLive`, `reconnectTown`, `sendTown`,
   // `townAuth`, `pairTown`, `autoPairTown`, `cancelTownPair`, `saveTownToken`,

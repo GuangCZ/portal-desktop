@@ -28,7 +28,17 @@ export function useConversationBridge(app: AppModel, conversation: ConversationM
         // The workspace model is mid-call while this runs; answer after it has
         // finished setting up its own timeout, as the iframe's reply did.
         const ok = conversation.placeDraft(message.text);
-        queueMicrotask(() => app.workspace.receive({ type: "beings:scene-draft-result", id: message.id, ok }));
+        // A draft the MAIN PROCESS pushed carries its own reply function
+        // (integration unit I7, decision §5.4): `workspace.receive` answers only
+        // the request the workspace itself started, and the main process needs to
+        // know WHY a draft was refused — an occupied composer asks the user to
+        // send or clear what they wrote, an unmounted one asks them to wait.
+        // `workspace.compose()` passes no `ack`, so its path is unchanged.
+        const ack = (message as { ack?: unknown }).ack;
+        queueMicrotask(() => {
+          app.workspace.receive({ type: "beings:scene-draft-result", id: message.id, ok });
+          if (typeof ack === "function") (ack as (reason: string) => void)(ok ? "placed" : conversation.disabled ? "unavailable" : "occupied");
+        });
         return;
       }
       if (message.type === "beings:search-jump" && typeof message.id === "string") conversation.jump(message.id);

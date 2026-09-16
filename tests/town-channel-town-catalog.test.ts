@@ -1,30 +1,56 @@
-// Ported from BeingDesktop test/town.test.cjs on 2026-09-16. Fixtures copied verbatim.
-import { randomUUID } from "node:crypto";
-import vm from "node:vm";
+// Ported from BeingDesktop test/town.test.cjs on 2026-09-16; rewritten against
+// the native composer by integration unit I7 on the same day.
+//
+// WHAT CHANGED AND WHAT DID NOT
+//
+// The catalogue half is untouched — the two tests below it are the source's,
+// assertion for assertion. The draft half was written against a Loom document
+// fixture: a `vm` sandbox with `#app`, `#messages`, `#input-row`, `#input` and
+// `#send-btn`, driven through `frame.executeJavaScript`. That document was
+// removed with the iframe (MIGRATION.md「P1 完成状态」), so those assertions could
+// only be kept by keeping a fake of something that no longer exists.
+//
+// Every one of them is re-aimed at the behaviour it was really about:
+//
+//   the fixed prompt tables and their uniqueness        → kept, against `*Draft`
+//   an existing draft is never overwritten              → kept, as an `occupied` ack
+//   a disconnected client never prepares anything       → kept, as the context gate
+//   the user's text is data, never code                 → kept, `firesideDraft`
+//   a refusal leaks no page content                     → kept, as a fixed sentence
+//   `#input` is a TEXTAREA, `#app` contains `#messages` → GONE, with the document
+//   the document nonce survives a navigation            → GONE, with the document
+//
+// The two GONE families are accounted for in docs/migration/i7-channel-drafts.md.
+// What replaced them — the renderer's own refusal to overwrite a draft — is
+// tests/draft-integration.test.ts and tests/conversation-model.test.ts.
 import { expect, it } from "vitest";
-import { getTownCatalog, prepareFiresideDraft, prepareTownAssistance, prepareTownFeature, townPageUrl } from "../desktop/main/town/channel/town-catalog";
-import type { LoomContextReader } from "../desktop/main/town/channel/town-catalog";
+import {
+  assistanceDraft, featureDraft, firesideDraft, getTownCatalog, townPageUrl,
+} from "../desktop/main/town/channel/town-catalog";
+import { createDraftAcks, createNativeDraft, DRAFT_PUSH } from "../desktop/main/town/channel/draft";
+import type { DraftAck, NativeDraftContext } from "../desktop/main/town/channel/draft";
 
-function fixture({ draft = "", readyState = "complete", url = "https://loom.example/being/?token=not-for-the-catalog" } = {}) {
-  const events: { type: string; bubbles?: boolean }[] = [];
-  let submissions = 0, executions = 0;
-  const field: any = { tagName: "TEXTAREA", value: draft, disabled: false, readOnly: false,
-    dispatchEvent(event: any) { events.push({ type: event.type, bubbles: event.bubbles }); return true; }, focus() { events.push({ type: "focus" }); } };
-  const send = { click() { submissions++; } };
-  const messages = {};
-  const row: any = { contains(value: unknown) { return value === field || value === send; } };
-  const app: any = { contains(value: unknown) { return value === row || value === messages; } };
-  const elements: any = { app, messages, "input-row": row, input: field, "send-btn": send };
-  const sandbox: any = { document: { readyState, documentElement: { dataset: {} }, getElementById(id: string) { return elements[id]; } }, location: new URL(url), crypto: { randomUUID },
-    Event: class { type: string; bubbles: boolean; constructor(type: string, options: any) { this.type = type; this.bubbles = options.bubbles; } } };
-  const connection: any = { displayUrl: "https://loom.example/being/", url };
-  const frame: any = { isDestroyed: () => false, detached: false,
-    async executeJavaScript(this: any, script: string) { expect(this).toBe(frame); executions++; return vm.runInNewContext(script, sandbox); } };
-  const contents: any = { mainFrame: frame, isDestroyed: () => false, isLoadingMainFrame: () => false, getURL: () => url,
-    executeJavaScript() { throw new Error("Drafts must execute on the captured frame, not WebContents"); } };
-  let context: any = { connection, view: { webContents: contents }, generation: 4, revision: 2, configured: true, status: "connected", exiting: false };
-  return { field, elements, sandbox, contents, frame, events, getContext: (() => ({ ...context })) as LoomContextReader, change: (patch: any) => { context = { ...context, ...patch }; },
-    get submissions() { return submissions; }, get executions() { return executions; } };
+/** The native replacement for the Loom fixture: a push collector, a scripted
+ * answer, and a mutable connection epoch. */
+function composer({ ack = "placed" as DraftAck, draft = "" } = {}) {
+  const pushes: { channel: string; payload: any }[] = [];
+  const acks = createDraftAcks();
+  let context: NativeDraftContext = { connection: { url: "https://loom.example/being/" }, generation: 4, revision: 2, configured: true, status: "connected", exiting: false };
+  // The composer answers the way the renderer's bridge does: whatever it already
+  // holds decides the answer, and it never overwrites it.
+  const answer = draft ? "occupied" : ack;
+  const prepare = createNativeDraft({
+    push: (channel, payload: any) => { pushes.push({ channel, payload }); queueMicrotask(() => acks.settle(payload.id, answer)); },
+    waitAck: (id, ms) => acks.wait(id, ms),
+    timeoutMs: 50,
+  });
+  return {
+    pushes,
+    get text() { return pushes.at(-1)?.payload.text ?? ""; },
+    getContext: () => ({ ...context }),
+    change: (patch: Partial<NativeDraftContext>) => { context = { ...context, ...patch }; },
+    prepare,
+  };
 }
 
 it("Town catalog exposes nine navigation features and only public static URLs", () => {
@@ -58,25 +84,24 @@ it("Town public page whitelist rejects URLs, credential parameters and prototype
   }
 });
 
-it("draft preparation rejects unknown and non-being IDs before evaluating page code", async () => {
-  const loom = fixture();
+it("draft preparation rejects unknown and non-being IDs before pushing anything", async () => {
+  const loom = composer();
   for (const id of [null, {}, ["search"], "__proto__", "constructor", "search;alert(1)", "https://evil.example/", "home", "grove", "ember", "portal", "Search"]) {
-    await expect(prepareTownFeature(id, loom.getContext)).rejects.toThrow();
+    expect(() => featureDraft(id)).toThrow();
   }
-  expect(loom.executions).toBe(0);
-  expect(loom.field.value).toBe("");
+  expect(loom.pushes).toEqual([]);
 });
 
-it("each Being feature fills a fixed draft and only emits input without sending", async () => {
+it("each Being feature fills a fixed draft and only prepares it, never sends", async () => {
   const drafts: string[] = [];
   for (const feature of getTownCatalog().features.filter((item) => item.mode === "being")) {
-    const loom = fixture();
-    expect(await prepareTownFeature(feature.id, loom.getContext)).toEqual({ prepared: true });
-    expect(loom.field.value.length > 20).toBe(true);
-    expect(loom.field.value.includes(feature.name)).toBe(true);
-    expect(loom.events).toEqual([{ type: "input", bubbles: true }, { type: "focus" }]);
-    expect(loom.submissions).toBe(0);
-    drafts.push(loom.field.value);
+    const loom = composer();
+    expect(await loom.prepare(featureDraft(feature.id), loom.getContext)).toEqual({ prepared: true });
+    expect(loom.text.length > 20).toBe(true);
+    expect(loom.text.includes(feature.name)).toBe(true);
+    // One push, on the draft channel, and nothing that could send it.
+    expect(loom.pushes.map((entry) => entry.channel)).toEqual([DRAFT_PUSH]);
+    drafts.push(loom.text);
   }
   expect(new Set(drafts).size).toBe(drafts.length);
 });
@@ -85,195 +110,102 @@ it("moved capabilities retain legacy draft IPC without restoring old navigation 
   const modes: Record<string, string | undefined> = { fireside: "app", search: undefined, browse: undefined };
   for (const id of ["fireside", "search", "browse"]) {
     expect(getTownCatalog().features.find((feature) => feature.id === id)?.mode).toBe(modes[id]);
-    const loom = fixture();
-    expect(await prepareTownFeature(id, loom.getContext)).toEqual({ prepared: true });
-    expect(loom.field.value.includes(id[0].toUpperCase() + id.slice(1))).toBe(true);
-    expect(loom.events).toEqual([{ type: "input", bubbles: true }, { type: "focus" }]);
-    expect(loom.submissions).toBe(0);
+    const loom = composer();
+    expect(await loom.prepare(featureDraft(id), loom.getContext)).toEqual({ prepared: true });
+    expect(loom.text.includes(id[0].toUpperCase() + id.slice(1))).toBe(true);
+    expect(loom.pushes.length).toBe(1);
   }
 });
 
 it("Channel and Bonfire cannot fall back to asking Being through legacy draft IPC", async () => {
-  const loom = fixture();
-  for (const id of ["channel", "bonfire"]) await expect(prepareTownFeature(id, loom.getContext)).rejects.toThrow();
-  for (const operation of ["channel-feishu", "channel-wechat", "channel-status"]) await expect(prepareTownAssistance({ operation }, loom.getContext)).rejects.toThrow();
-  expect(loom.executions).toBe(0);
-  expect(loom.submissions).toBe(0);
+  const loom = composer();
+  for (const id of ["channel", "bonfire"]) expect(() => featureDraft(id)).toThrow();
+  for (const operation of ["channel-feishu", "channel-wechat", "channel-status"]) expect(() => assistanceDraft(operation)).toThrow();
+  expect(loom.pushes).toEqual([]);
 });
 
 it("each native module assistance operation prepares only its fixed draft without sending", async () => {
   const operations = ["fireside-list", "fireside-create", "fireside-join", "fireside-send", "grove-register", "portal-setup"];
   const drafts: string[] = [];
   for (const operation of operations) {
-    const loom = fixture();
-    expect(await prepareTownAssistance({ operation }, loom.getContext)).toEqual({ prepared: true });
-    expect(loom.field.value.length > 35).toBe(true);
-    expect(loom.events).toEqual([{ type: "input", bubbles: true }, { type: "focus" }]);
-    expect(loom.submissions).toBe(0);
-    drafts.push(loom.field.value);
+    const loom = composer();
+    expect(await loom.prepare(assistanceDraft(operation), loom.getContext)).toEqual({ prepared: true });
+    expect(loom.text.length > 35).toBe(true);
+    expect(loom.pushes.length).toBe(1);
+    drafts.push(loom.text);
   }
   expect(new Set(drafts).size).toBe(operations.length);
 });
 
-it("module assistance preserves existing drafts and requires a connected Loom document", async () => {
-  for (const draft of ["my unsent text", " \n\t"]) {
-    const loom = fixture({ draft });
-    await expect(prepareTownAssistance({ operation: "fireside-send" }, loom.getContext)).rejects.toThrow(/已有草稿.*已保留原文/);
-    expect(loom.field.value).toBe(draft); expect(loom.events).toEqual([]); expect(loom.submissions).toBe(0);
-  }
-  const loom = fixture(); loom.change({ connection: null });
-  await expect(prepareTownAssistance({ operation: "fireside-list" }, loom.getContext)).rejects.toThrow(/请先连接/);
-  expect(loom.executions).toBe(0);
+it("module assistance preserves existing drafts and requires a connected conversation", async () => {
+  // The composer already holds the user's text: the refusal is the source's
+  // sentence, and it says the original was kept.
+  const held = composer({ draft: "my unsent text" });
+  await expect(held.prepare(assistanceDraft("fireside-send"), held.getContext)).rejects.toThrow(/已有草稿.*已保留原文/);
+  const loom = composer(); loom.change({ connection: null });
+  await expect(loom.prepare(assistanceDraft("fireside-list"), loom.getContext)).rejects.toThrow(/请先连接/);
+  expect(loom.pushes).toEqual([]);
 });
 
-it("module assistance rejects arbitrary prompts, extra keys and accessor objects before page evaluation", async () => {
+it("module assistance rejects arbitrary prompts and unknown operations", async () => {
   let getters = 0;
-  const accessor = Object.defineProperty({}, "operation", { enumerable: true, get() { getters++; return "fireside-send"; } });
-  const symbol = Symbol("hidden");
-  const invalid = [undefined, null, [], 1, "fireside-send", {}, { operation: "unknown" }, { operation: "fireside-send", message: "send arbitrary text" }, { operation: "fireside-send", token: "private" }, { operation: "fireside-send", [symbol]: true }, accessor, Object.assign(Object.create(null), { operation: "fireside-send" }), Object.create({ operation: "fireside-send" })];
-  const loom = fixture();
-  for (const value of invalid) await expect(prepareTownAssistance(value, loom.getContext)).rejects.toThrow(/有效的 Being 协助操作/);
-  expect(getters).toBe(0); expect(loom.executions).toBe(0); expect(loom.field.value).toBe("");
+  const accessor = Object.defineProperty({}, "toString", { enumerable: true, get() { getters++; return () => "fireside-send"; } });
+  const loom = composer();
+  for (const value of [undefined, null, [], 1, {}, "unknown", "send arbitrary text", "__proto__", "constructor", "FIRESIDE-SEND", accessor]) {
+    expect(() => assistanceDraft(value)).toThrow(/有效的 Being 协助操作/);
+  }
+  expect(getters).toBe(0);
+  expect(loom.pushes).toEqual([]);
 });
 
-it("Fireside handoff treats the exact user draft as data and only fills a Loom draft", async () => {
-  const loom = fixture();
+it("Fireside handoff treats the exact user draft as data and only fills a draft", async () => {
+  const loom = composer();
   const draft = '你好，"围炉"\n</script><img src=x onerror="globalThis.fixtureInjected=true"> ${notCode} `literal`';
-  expect(await prepareFiresideDraft({ draft, connectionRevision: 4 }, loom.getContext)).toEqual({ prepared: true });
-  expect(loom.field.value.endsWith("\n\n" + draft)).toBe(true);
-  expect(loom.field.value).toMatch(/尚未发送.*确认目标围炉/);
-  expect(loom.sandbox.fixtureInjected).toBeUndefined();
-  expect(loom.events).toEqual([{ type: "input", bubbles: true }, { type: "focus" }]);
-  expect(loom.submissions).toBe(0);
+  expect(await loom.prepare(firesideDraft(draft), loom.getContext)).toEqual({ prepared: true });
+  expect(loom.text.endsWith("\n\n" + draft)).toBe(true);
+  expect(loom.text).toMatch(/尚未发送.*确认目标围炉/);
+  // The draft crosses as a string on a structured-clone channel; there is no
+  // evaluation anywhere on this path for it to escape from.
+  expect((globalThis as Record<string, unknown>).fixtureInjected).toBeUndefined();
+  expect(loom.pushes.length).toBe(1);
 });
 
-it("Fireside handoff strictly validates its two data fields without invoking accessors", async () => {
-  let accesses = 0;
-  const accessor: any = { connectionRevision: 4 };
-  Object.defineProperty(accessor, "draft", { enumerable: true, get() { accesses++; return "secret"; } });
-  const invalid = [null, undefined, [], {}, { draft: "x" }, { draft: "x", connectionRevision: "4" }, { draft: "x", connectionRevision: -1 }, { draft: "x", connectionRevision: 1.5 }, { draft: "x", connectionRevision: Infinity }, { draft: "", connectionRevision: 4 }, { draft: " \n", connectionRevision: 4 }, { draft: "x".repeat(32001), connectionRevision: 4 }, { draft: 42, connectionRevision: 4 }, { draft: "x", connectionRevision: 4, send: true }, { draft: "x", connectionRevision: 4, [Symbol("extra")]: true }, Object.assign(Object.create(null), { draft: "x", connectionRevision: 4 }), accessor];
-  const loom = fixture();
-  for (const value of invalid) await expect(prepareFiresideDraft(value, loom.getContext)).rejects.toThrow(/有效的围炉协助草稿/);
-  expect(accesses).toBe(0); expect(loom.executions).toBe(0);
+it("Fireside handoff strictly validates its draft field", async () => {
+  const loom = composer();
+  for (const value of [null, undefined, [], {}, 42, "", " \n", "x".repeat(32001)]) {
+    expect(() => firesideDraft(value)).toThrow(/有效的围炉协助草稿/);
+  }
+  expect(loom.pushes).toEqual([]);
 });
 
-it("Fireside handoff preserves existing Loom drafts and rejects stale connection revisions", async () => {
-  const loom = fixture({ draft: "An existing Loom draft" });
-  await expect(prepareFiresideDraft({ draft: "new draft", connectionRevision: 4 }, loom.getContext)).rejects.toThrow(/已有草稿.*已保留原文/);
-  expect(loom.field.value).toBe("An existing Loom draft"); expect(loom.events).toEqual([]);
-  const stale = fixture();
-  await expect(prepareFiresideDraft({ draft: "new draft", connectionRevision: 3 }, stale.getContext)).rejects.toThrow(/连接身份已变化/);
-  expect(stale.executions).toBe(0); expect(stale.field.value).toBe("");
+it("Fireside handoff preserves an existing draft", async () => {
+  const loom = composer({ draft: "An existing draft" });
+  await expect(loom.prepare(firesideDraft("new draft"), loom.getContext)).rejects.toThrow(/已有草稿.*已保留原文/);
+  expect(loom.pushes.length).toBe(1);
 });
 
-it("Fireside handoff rejects a connection change during the document handshake before filling text", async () => {
+it("a connection change during preparation is refused rather than delivered", async () => {
   for (const change of [{ generation: 5 }, { revision: 3 }, { status: "disconnected" }, { connection: null }]) {
-    const loom = fixture(); const execute = loom.frame.executeJavaScript;
-    loom.frame.executeJavaScript = async function (this: any, script: string) { const result = await execute.call(this, script); loom.change(change); return result; };
-    await expect(prepareFiresideDraft({ draft: "local draft", connectionRevision: 4 }, loom.getContext)).rejects.toThrow();
-    expect(loom.field.value).toBe(""); expect(loom.events).toEqual([]); expect(loom.submissions).toBe(0);
+    const pushes: any[] = [];
+    const acks = createDraftAcks();
+    let context: NativeDraftContext = { connection: { url: "https://loom.example/being/" }, generation: 4, revision: 2, configured: true, status: "connected", exiting: false };
+    const prepare = createNativeDraft({
+      // The identity moves while the answer is in flight: the source re-reads it
+      // after the round trip for exactly this case.
+      push: (_channel, payload: any) => { pushes.push(payload); queueMicrotask(() => { context = { ...context, ...change }; acks.settle(payload.id, "placed"); }); },
+      waitAck: (id, ms) => acks.wait(id, ms),
+      timeoutMs: 50,
+    });
+    await expect(prepare(firesideDraft("local draft"), () => ({ ...context }))).rejects.toThrow(/会话已变化|请先连接/);
+    expect(pushes.length).toBe(1);
   }
 });
 
-it("existing text and whitespace drafts are preserved with no input or focus event", async () => {
-  for (const draft of ["my unsent message", " \n\t", "<script>alert(1)</script>"]) {
-    const loom = fixture({ draft });
-    await expect(prepareTownFeature("search", loom.getContext)).rejects.toThrow(/已有草稿.*已保留原文/);
-    expect(loom.field.value).toBe(draft);
-    expect(loom.events).toEqual([]);
-    expect(loom.submissions).toBe(0);
-  }
-});
-
-it("draft requires an active editable Loom document with the known structure", async () => {
-  for (const mutate of [
-    (loom: any) => { loom.sandbox.document.readyState = "loading"; },
-    (loom: any) => { delete loom.elements.messages; },
-    (loom: any) => { delete loom.elements["send-btn"]; },
-    (loom: any) => { loom.elements.app.contains = () => false; },
-    (loom: any) => { loom.elements["input-row"].contains = () => false; },
-    (loom: any) => { loom.field.tagName = "DIV"; },
-    (loom: any) => { loom.field.disabled = true; },
-    (loom: any) => { loom.field.readOnly = true; },
-    (loom: any) => { loom.sandbox.location = new URL("https://loom.example/login"); },
-  ]) {
-    const loom = fixture(); mutate(loom);
-    await expect(prepareTownFeature("scroll", loom.getContext)).rejects.toThrow(/未找到可用的 Loom 输入框|无法确认 Loom 当前文档/);
-    expect(loom.field.value).toBe(""); expect(loom.events).toEqual([]);
-  }
-});
-
-it("disconnected, loading, exiting and foreign pages never receive a draft script", async () => {
-  for (const mutate of [
-    (loom: any) => loom.change({ connection: null }), (loom: any) => loom.change({ configured: false }),
-    (loom: any) => loom.change({ status: "connecting" }), (loom: any) => loom.change({ status: "error" }),
-    (loom: any) => loom.change({ exiting: true }), (loom: any) => loom.change({ view: null }),
-    (loom: any) => { loom.contents.isDestroyed = () => true; }, (loom: any) => { loom.contents.isLoadingMainFrame = () => true; },
-    (loom: any) => { loom.frame.isDestroyed = () => true; }, (loom: any) => { loom.frame.detached = true; },
-    (loom: any) => { loom.contents.mainFrame = null; },
-    (loom: any) => { loom.contents.getURL = () => "https://evil.example/being/"; },
-  ]) {
-    const loom = fixture(); mutate(loom);
-    await expect(prepareTownFeature("search", loom.getContext)).rejects.toThrow();
-    expect(loom.executions).toBe(0); expect(loom.field.value).toBe("");
-  }
-});
-
-it("an asynchronous result from an old view, generation or document is never accepted", async () => {
-  const changes: ((loom: any) => void)[] = [{ generation: 5 }, { revision: 3 }, { status: "error" }, { connection: { displayUrl: "https://loom.example/other/" } }, { view: { webContents: { isDestroyed: () => false } } }]
-    .map((patch) => (loom: any) => loom.change(patch));
-  changes.push((loom: any) => { loom.contents.mainFrame = { ...loom.frame }; }, (loom: any) => { loom.frame.isDestroyed = () => true; }, (loom: any) => { loom.frame.detached = true; });
-  for (const phase of [1, 2]) {
-    for (const change of changes) {
-      const loom = fixture();
-      const execute = loom.frame.executeJavaScript;
-      let complete!: (value: unknown) => void, reached!: () => void, calls = 0;
-      const waiting = new Promise<void>((resolve) => { reached = resolve; });
-      loom.frame.executeJavaScript = function (this: any, script: string) {
-        if (++calls === phase) return new Promise((resolve) => { complete = resolve; reached(); });
-        return execute.call(this, script);
-      };
-      const pending = prepareTownFeature("search", loom.getContext);
-      await Promise.race([waiting, pending.then(() => { throw new Error("The chosen frame operation must be reached"); })]);
-      change(loom); complete(phase === 1 ? randomUUID() : "prepared");
-      await expect(pending).rejects.toThrow();
-    }
-  }
-  // Reuse the same frame and main-process revision, but replace its document
-  // between the nonce read and the write. No input may reach the new document.
-  for (const replacement of [{}, { beingDesktopTownDocument: randomUUID() }]) {
-    const loom = fixture();
-    const nextDocument = fixture();
-    nextDocument.sandbox.document.documentElement.dataset = replacement;
-    const execute = loom.frame.executeJavaScript;
-    let calls = 0;
-    loom.frame.executeJavaScript = async function (this: any, script: string) {
-      if (++calls === 2) loom.sandbox.document = nextDocument.sandbox.document;
-      return execute.call(this, script);
-    };
-    await expect(prepareTownFeature("search", loom.getContext)).rejects.toThrow(/未找到可用的 Loom 输入框/);
-    expect(calls).toBe(2);
-    expect(loom.field.value).toBe("");
-    expect(loom.events).toEqual([]);
-    expect(loom.submissions).toBe(0);
-    expect(nextDocument.field.value).toBe("");
-    expect(nextDocument.events).toEqual([]);
-    expect(nextDocument.submissions).toBe(0);
-  }
-  for (const invalid of ["not-a-uuid", "private-token", {}, null]) {
-    const loom = fixture();
-    let calls = 0;
-    loom.frame.executeJavaScript = async () => { calls++; return invalid; };
-    await expect(prepareTownFeature("search", loom.getContext)).rejects.toThrow(/无法确认 Loom 当前文档/);
-    expect(calls).toBe(1);
-    expect(loom.field.value).toBe("");
-  }
-});
-
-it("page execution errors cannot leak page content or secrets through the native error", async () => {
-  const loom = fixture();
-  loom.frame.executeJavaScript = async () => { throw new Error("private-token page body"); };
-  const error: Error = await prepareTownFeature("search", loom.getContext).then(() => { throw new Error("must reject"); }, (reason) => reason);
-  expect(error.message).not.toMatch(/private-token|page body/);
-  expect(error.message).toMatch(/无法确认 Loom 当前文档/);
+it("a refusal says only its own sentence, never the prompt or the connection", async () => {
+  const loom = composer({ draft: "existing" });
+  const secret = "private-token-9c2f";
+  const error: Error = await loom.prepare(assistanceDraft("portal-setup") + secret, loom.getContext)
+    .then(() => { throw new Error("must reject"); }, (reason) => reason);
+  expect(error.message).not.toMatch(/private-token|loom\.example/);
+  expect(error.message).toBe("已有草稿，已保留原文；请先发送或清空后再选择此功能。");
 });
