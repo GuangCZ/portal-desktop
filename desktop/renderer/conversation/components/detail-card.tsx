@@ -13,13 +13,12 @@
 // Every card is drawn, and the ones belonging to another conversation are
 // hidden rather than unmounted — a card belongs to the conversation it was
 // opened from, so coming back finds it and its half-typed follow-up.
-import { useCallback, useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { Markdown } from "../../shared/components/markdown";
 import { useModel } from "../../shared/hooks/use-model";
 import { decode } from "../../../shared/chat-references";
 import type { ConversationModel } from "../models/conversation";
 import type { DetailCardState } from "../models/details";
-import { displayText } from "../models/mentions";
 import { interleave } from "../models/transcript";
 import { ReferenceChip } from "./messages";
 
@@ -61,8 +60,7 @@ function DetailCard({ model, card, hidden }: { model: ConversationModel; card: D
   // (chat-selection.js line 191 is handed the function that walks the text
   // nodes), so `@t_abc` reads as a name here exactly as it does in the
   // transcript beside it.
-  const names = useModel(model.directory).displayNames;
-  const renderText = useCallback((text: string) => displayText(text, names), [names]);
+  const renderText = useModel(model.directory).project;
   const details = model.details;
   const log = useRef<HTMLDivElement>(null);
   const items = messages(card);

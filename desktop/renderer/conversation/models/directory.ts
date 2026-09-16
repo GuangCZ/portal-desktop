@@ -20,7 +20,7 @@ import type {
 } from '../../../shared/desktop-types';
 import type { TownDesktopAPI, TownDesktopMemberCacheState } from '../../../shared/town-desktop-types';
 import { buildKitPrompt } from './completion';
-import { displayNames, memberMap, resolve, unresolvedNotice } from './mentions';
+import { displayNames, displayText, memberMap, resolve, unresolvedNotice } from './mentions';
 
 /** The two abilities the Being always has. They are not installed, so no
  * catalogue read can add or remove them, and they stay in the menu while the
@@ -116,6 +116,7 @@ export class ComposerDirectory extends Store {
   private identity = '';
   private names: ReadonlyMap<string, string> = new Map();
   private namesFor: ChatComposerData | null = null;
+  private projector: (text: string) => string = text => text;
   private currentSession = '';
   private generation = 0;
   private membersExpiresAt = 0;
@@ -143,8 +144,23 @@ export class ComposerDirectory extends Store {
    * a read replaces the directory.
    */
   get displayNames(): ReadonlyMap<string, string> {
-    if (this.namesFor !== this.data) { this.namesFor = this.data; this.names = displayNames(this.data.members); }
+    if (this.namesFor !== this.data) {
+      this.namesFor = this.data;
+      const names = this.names = displayNames(this.data.members);
+      this.projector = text => displayText(text, names);
+    }
     return this.names;
+  }
+
+  /** `displayText` bound to the current directory.
+   *
+   * A property rather than a closure built in the view, and that is the whole
+   * point: it keeps the same identity until a read replaces the directory, so the
+   * memoized message bodies below it are not thrown away on every streamed token —
+   * and they ARE thrown away, exactly once, when the names change. */
+  get project(): (text: string) => string {
+    void this.displayNames;
+    return this.projector;
   }
   get kits(): ChatComposerEntry[] { return this.data.kits; }
   get hasTown(): boolean { return Boolean(this.town); }

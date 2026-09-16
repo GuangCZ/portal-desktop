@@ -12,10 +12,11 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { Bubble } from "../desktop/renderer/conversation/components/messages";
 import { WorkerResultCard } from "../desktop/renderer/conversation/components/worker-result";
 import { ConversationModel } from "../desktop/renderer/conversation/models/conversation";
 import { workerResults, workerStatusLabel } from "../desktop/renderer/conversation/models/worker-results";
-import { transcript } from "../desktop/renderer/conversation/models/transcript";
+import { transcript, type TranscriptItem } from "../desktop/renderer/conversation/models/transcript";
 import { tokenAtCaret } from "../desktop/renderer/conversation/models/completion";
 import type {
   ChatAPI, ChatComposerData, ChatComposerEntry, ChatDetailCard, ChatDetailEvent,
@@ -528,6 +529,104 @@ describe("switching conversations", () => {
     expect(test.model.composer.text).toBe("甲的草稿 @");
     draft(test, "甲的草稿 @");
     expect(test.model.menu.items.map(item => item.id)).toEqual(["alice", "bob"]);
+    test.stop();
+  });
+});
+
+/* ------------------------------------- an `@id` read as the name behind it */
+
+describe("the names in a transcript", () => {
+  /** 0.8.26's own fixture data: a member whose id is nothing like its name, so a
+   * bubble showing one cannot be mistaken for a bubble showing the other
+   * (test/chat-composer-ui.cjs line 98). */
+  const YOMI = kit({ id: "t_hidden_yomi", name: "YomiyaHina", handle: "t_hidden_yomi", kind: "member", description: "" });
+
+  const bubble = (test: Fixture, item: Partial<TranscriptItem>) =>
+    renderToStaticMarkup(createElement(Bubble, {
+      item: { id: "row-1", role: "user", text: "", at: "2026-09-14T10:00:00Z", ...item },
+      beingName: "Being", activity: null, found: false, onOpenWorker: () => {},
+      renderText: test.model.directory.project,
+    }));
+
+  const withYomi = async (over: Partial<ChatComposerEntry> = {}) => {
+    const test = fixture();
+    test.catalogue.value = { ...structuredClone(CATALOGUE), members: [{ ...YOMI, ...over }] };
+    await settle();
+    return test;
+  };
+
+  it("shows the Being's name in a historical and in an unconfirmed bubble", async () => {
+    const test = await withYomi();
+    const history = bubble(test, { text: "@t_hidden_yomi 历史消息" });
+    const pending = bubble(test, { id: "sent-0", text: "@t_hidden_yomi 待确认消息", pending: true });
+    expect(history).toContain("@YomiyaHina 历史消息");
+    expect(pending).toContain("@YomiyaHina 待确认消息");
+    expect(history + pending).not.toContain("t_hidden_yomi");
+    test.stop();
+  });
+
+  it("changes nothing but the painting: the row and the draft keep their own bytes", async () => {
+    const test = await withYomi();
+    const row = { id: "row-1", role: "user" as const, text: "@t_hidden_yomi 历史消息", at: "2026-09-14T10:00:00Z" };
+    expect(bubble(test, row)).toContain("@YomiyaHina");
+    // What was projected is what the conversation still holds, and what a public
+    // mention would still resolve: an id, not a name (chat-composer-ui.cjs line 100).
+    expect(row.text).toBe("@t_hidden_yomi 历史消息");
+    expect(test.model.directory.project("@t_hidden_yomi 历史消息")).not.toBe(row.text);
+    draft(test, "@t_hidden_yomi 你好");
+    expect(test.model.composer.text).toBe("@t_hidden_yomi 你好");
+    test.stop();
+  });
+
+  it("renames the bubbles already on screen when the directory is read again", async () => {
+    const test = await withYomi();
+    const before = test.model.directory.project;
+    expect(bubble(test, { text: "@t_hidden_yomi 待确认消息", pending: true })).toContain("@YomiyaHina");
+    test.catalogue.value = { ...structuredClone(CATALOGUE), members: [{ ...YOMI, name: "Yomiya 新名字" }] };
+    await test.model.directory.load(true);
+    await settle();
+    expect(bubble(test, { text: "@t_hidden_yomi 待确认消息", pending: true })).toContain("@Yomiya 新名字");
+    // A read that replaces the directory replaces the projection with it; one
+    // that does not, does not — the memoized bodies below it are only thrown
+    // away when a name actually moved.
+    expect(test.model.directory.project).not.toBe(before);
+    expect(test.model.directory.project).toBe(test.model.directory.project);
+    test.stop();
+  });
+
+  it("paints a name as text, never as markup", async () => {
+    const test = await withYomi({ name: "<img src=x onerror=alert(1)> **名字**" });
+    const html = bubble(test, { text: "@t_hidden_yomi 待确认消息", pending: true });
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt; **名字**");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<strong>");
+    test.stop();
+  });
+
+  it("leaves a literal id and a link's address exactly as they were written", async () => {
+    const test = await withYomi();
+    const html = bubble(test, {
+      role: "being", id: "row-2",
+      text: "代码：`@t_hidden_yomi` [文档](https://example.invalid/@t_hidden_yomi)",
+    });
+    expect(html).toContain("<code>@t_hidden_yomi</code>");
+    expect(html).toContain('title="https://example.invalid/@t_hidden_yomi"');
+    test.stop();
+  });
+
+  it("does not touch a reply that is still arriving", async () => {
+    const test = await withYomi();
+    // 0.8.26 writes a live body with `textContent` and only walks the rendered
+    // one (chat-app.js line 367): a half-written message is not re-read yet.
+    expect(bubble(test, { id: "live", role: "being", text: "@t_hidden_yomi", live: true })).toContain("@t_hidden_yomi");
+    test.stop();
+  });
+
+  it("is the empty projection while the directory is unavailable", async () => {
+    const test = fixture();
+    test.catalogue.error = true;
+    await settle();
+    expect(test.model.directory.project("@t_hidden_yomi 你好")).toBe("@t_hidden_yomi 你好");
     test.stop();
   });
 });

@@ -5,14 +5,13 @@
 // ("you · 13:44:23" / "<being> · 13:44:23"), the content below it, consecutive
 // messages grouped, a "— 13:40:01 —" divider after a long silence, thinking
 // dots before the first token.
-import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { Markdown } from "../../shared/components/markdown";
 import type { PlaceTarget } from "../../shared/lib/navigation";
 import { decode, type ChatReference } from "../../../shared/chat-references";
 import type { ChatRowImage } from "../../../shared/desktop-types";
 import { useModel } from "../../shared/hooks/use-model";
 import type { Activity, ConversationModel } from "../models/conversation";
-import { displayText } from "../models/mentions";
 import { clock, type TranscriptItem } from "../models/transcript";
 import { WorkerResultCard } from "./worker-result";
 
@@ -103,8 +102,13 @@ export function ActivityLine({ text, think, live, activity }: {
 
 /** One message: meta line, the activity line while the Being works on it, content.
  * A Worker result takes the place of the content — it is the Being reporting a
- * finished task, not something it said (chat-app.js line 372). */
-function Bubble({ item, beingName, activity, found, onPlace, onOpenWorker, renderText }: {
+ * finished task, not something it said (chat-app.js line 372).
+ *
+ * Exported for the same reason `ActivityLine` is: `Transcript` subscribes to two
+ * models and cannot be rendered outside a browser, while the rules 0.8.26 asserts
+ * about a bubble (test/chat-composer-ui.cjs lines 98-106) are about the markup
+ * one of them produces. */
+export function Bubble({ item, beingName, activity, found, onPlace, onOpenWorker, renderText }: {
   item: TranscriptItem; beingName: string; activity: Activity | null; found: boolean;
   onPlace?: (target: PlaceTarget) => void;
   onOpenWorker: (result: { sessionId: string; workerId: string }) => void;
@@ -162,9 +166,7 @@ export function Transcript({ model, onPlace, streamRef }: {
   // `repaint()` (chat-app.js line 190) — so a directory that is read late, or
   // invalidated and read again, renames the Beings already on screen instead of
   // waiting for the next message.
-  const directory = useModel(model.directory);
-  const names = directory.displayNames;
-  const renderText = useCallback((text: string) => displayText(text, names), [names]);
+  const renderText = useModel(model.directory).project;
   const own = useRef<HTMLDivElement>(null);
   const stream = streamRef || own;
   const items = conversation.items;
