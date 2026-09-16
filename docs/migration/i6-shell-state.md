@@ -217,6 +217,10 @@ BD 的 `selectSavedProject` 做两件事：校验目录在 `sidebar.projects` �
 侧栏一打开就是对的。BD 同理（`publicState()` 用的是 `restore()` 解析出来的 `connection`）。
 `connectionVerified` / `connectionCleared` 仍然各推一次，用来在**切 Being** 时纠正渲染层手里的旧账本。
 
+注意一个**既有缺口**（I0 已记录，不是本单元引入的）：`main.ts` 从来没有调用过 `extensions.connectionCleared()`。
+所以「彻底断开 Being」时本单元的 `connectionCleared` 不会被触发；切换到另一个 Being 走的是 `beings:save` → `verifyConnection` →
+`connectionVerified`，这条路径是通的，也是验收项覆盖的那条。等哪个单元把 `connectionCleared` 接上，本单元不需要改一行。
+
 ## 5. IPC 通道清单
 
 | BD | 本单元 | 约定 | payload | 返回 |
@@ -258,6 +262,10 @@ BD 的 `selectSavedProject` 做两件事：校验目录在 `sidebar.projects` �
 - `node tests/sidebar-e2e.mjs`：**本机真跑通过**（Electron 44 真窗口 + 生产 renderer/preload + 生产 reducer）。8 条 check：
   `primary-entry-order`、`only-current-task-selected`、`pinned-task-only-once`、`pin-saved-to-disk`、
   `only-current-task-still-selected`、`fold-survives-state-update`、`metadata-swaps-with-the-being`、`no-script-errors`。
+- `npm run start`（真机冒烟，本机已跑）：`electron-forge start` 用 Vite 构出 `main.js` 与 `preload.js`，客户端正常打开，
+  日志里没有 `subsystem-install:*`、没有渲染层报错；唯一的两条 ERROR 是检查更新走代理时的 TLS 握手失败，退出时一条
+  「客户端正在退出，请稍候。」是 quitting 守卫按预期拒绝了关窗过程中的 `beings:snapshot`。
+  本机没有连接任何 Being，所以没有走到有会话的侧栏——那部分由 `tests/sidebar-e2e.mjs` 在真 Electron 窗口里覆盖。
 - 手工验收项「置顶 → 重启 → 仍置顶」由 `tests/shell-state-ipc.test.ts`「a pin is written to the profile and is still there after a restart」
   自动化覆盖（真 `SettingsStore`，第二个客户端实例读同一个 settings.json）；
   「切 Being → 元数据换一套」由同文件的第三条与 e2e 的 `metadata-swaps-with-the-being` 覆盖。
