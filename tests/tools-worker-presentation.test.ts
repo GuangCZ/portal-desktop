@@ -8,6 +8,7 @@ import os from "node:os";
 import http from "node:http";
 import { WorkerPresentation } from "../desktop/main/tools/worker-presentation";
 import type { BrowserTab, PresentationBrowser } from "../desktop/main/tools/types";
+import type { WorkerPresenter, WorkerRecord } from "../desktop/main/orchestration/types";
 
 const cleanups: (() => Promise<unknown> | unknown)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -38,6 +39,29 @@ function request(url: string | URL, options: http.RequestOptions = {}): Promise<
 }
 
 describe("worker presentation", () => {
+  it("is what orchestration declares a WorkerPresenter to be", async () => {
+    // THE ASSIGNMENT IS THE TEST. `subsystems/tools.ts` does exactly this in its
+    // `linked()`, and it could not until IM widened `WorkerPresenter`: four
+    // mismatches, all `null` vs `undefined` plus a missing `openedAt`, measured
+    // with tsc and recorded in docs/migration/i2-tools.md「类型对齐实测」4. Until
+    // then the tool bridge restated the contract structurally to get past the
+    // compiler, which meant nothing checked the two against each other at all.
+    const f = await fixture();
+    const presenter: WorkerPresenter = f.presentation;
+    // And the shapes orchestration passes really do go in. `present()` hands it a
+    // whole `WorkerRecord`; only three fields are read.
+    const worker = { id: "worker", cwd: f.cwd, status: "completed" } as unknown as WorkerRecord;
+    const value = await presenter.open(worker, { artifactPath: "game/index.html" }, { current: () => true, reveal: false });
+    expect(value?.openedAt).toMatch(/^\d{4}-/);
+    expect(value?.artifactPath).toBe("game/index.html");
+    expect(value?.requestedUrl).toBe(null);
+    // `describe(undefined)` is the branch orchestration takes for a worker that
+    // has never presented anything: `describe(x) || x`.
+    expect(presenter.describe(undefined)).toBe(null);
+    expect(presenter.describe(value)?.state).toBe("loading");
+  });
+
+
   it("Desktop serves completed static output and opens its own browser without a CLI service", async () => {
     const f = await fixture(), value = (await f.presentation.open(f.worker, { artifactPath: "game/index.html" }))!;
     expect(f.shown()).toBe(1); expect(value.state).toBe("loading"); expect(f.tabs.length).toBe(1);

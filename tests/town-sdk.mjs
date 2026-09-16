@@ -14,6 +14,34 @@
 // tests/town-session-client.test.ts; this is the packaged path, including the
 // preload envelope that carries a `code` across IPC.
 //
+// FIRST EXECUTED 2026-09-16 by integration unit IM. Three things this script
+// had never been able to learn about itself came out of that run; two were its
+// own and are fixed above and below (the speak receipt it answered with, and the
+// key order it demanded). The third is not this script's and is left failing on
+// purpose: the four checks that read `error.code` cannot pass today, because
+// `contextBridge` drops every custom property of a thrown Error before it
+// reaches the renderer. Measured on this exact Electron (44.2.0), with a
+// standalone two-file fixture: a preload that rejects with
+// `Object.assign(new Error(m), {code})` arrives in the page as an Error whose
+// own properties are `["stack","message"]` — while the same value passed as a
+// plain object keeps its `code`. So `preload/channels/{bridge,town}.ts` rebuild
+// the Error on the wrong side of the bridge, and the codes die there.
+// BeingDesktop 0.8.26 has the same shape and the same hole (src/preload.cjs
+// lines 60-76, whose own comment says「Electron strips custom Error fields」);
+// its renderer/town-app.js lines 308 and 1027 branch on codes that never arrive.
+// This is therefore inherited, not introduced by the port — and it is not this
+// unit's to fix, because the repair changes what every Town and conversation
+// call site receives. See docs/migration/im-integration.md §4.4.
+//
+// HOW THAT IS RECORDED (IM, 2026-09-16, after review finding 2). `check` is a
+// rule the client keeps and stops the run when it does not. `pending` is a rule
+// the client does NOT keep today: it is printed red with its evidence, the run
+// still fails at the end, and the checks after it still get to run — which is the
+// only reason the nine rules below the first of the four are executed at all.
+// The four assertions themselves are untouched; what each of them used to test
+// TOGETHER with a code has been split, so the half that does hold (the call was
+// refused, Town was not asked, nothing was sent) stays a hard check.
+//
 // SDK contract fixtures only: no real Town pairing, messages or credentials.
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -34,11 +62,39 @@ try {
 const TOKEN = 'e'.repeat(64);
 const dir = await mkdtemp(path.join(os.tmpdir(), 'town-sdk-'));
 const checks = [];
+/** Rules the client does not keep today: name, and where the defect is. */
+const failed = [];
 const check = (name, condition) => {
   assert.equal(condition, true, name);
   checks.push(name);
   process.stdout.write(`${name}: passed\n`);
 };
+/** A rule that is red because of a defect, not because of the fixture. */
+const pending = (name, condition, why) => {
+  if (condition === true) {
+    checks.push(name);
+    process.stdout.write(`${name}: passed\n`);
+    return;
+  }
+  failed.push({ name, why });
+  process.stdout.write(`${name}: FAILED — ${why}\n`);
+};
+const STRIPPED = 'contextBridge 剥掉了 Error 的自定义属性，`code` 到不了渲染层'
+  + '（实测 Electron 44.2.0：页面收到的 Error 自有属性只有 ["stack","message"]；'
+  + '同一个值当普通对象返回时 code 原样到达）。preload/channels/{bridge,town}.ts '
+  + '把包络还原成 Error 的位置在 contextBridge 的错误一侧；0.8.26 src/preload.cjs:60-76 同病。'
+  + '记录 §4.4 / openIssue 1。';
+
+/** Compare bodies by field and value, not by key insertion order: a JSON object
+ * has no ordering on the wire, and `town-client.cjs` line 298 builds a fireside
+ * body as `{message, fireside_id}` while docs/interfaces.md lists the fields the
+ * other way round. Asserting `JSON.stringify` equality made this script demand
+ * an order neither Town nor the client promises (IM, 2026-09-16: first run). The
+ * field set and every value are still asserted exactly. */
+const canonical = value => JSON.stringify(value, (_key, item) =>
+  item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]]))
+    : item);
 
 let app;
 try {
@@ -80,7 +136,12 @@ try {
       if (!globalThis.sdk.paired || headers.authorization !== `Bearer ${token}`) return Response.json({ error: 'unauthorized' }, { status: 401 });
       if (request.method === 'POST') {
         globalThis.sdk.writes.push({ path: url.pathname, body: await request.json() });
-        return Response.json({ ok: true, seq: 12, id: 'sent-1', via: 'client:desktop' });
+        // A speak receipt has to carry the identity Town wrote under and, for a
+        // direct message, `message_id` — `town-client.cjs` line 301/326 reads
+        // exactly these, and its port does too (session/client.ts:458/485).
+        // Answering without them is not「Town said yes」but RESULT_UNKNOWN, which
+        // is what this fixture used to produce (IM, 2026-09-16: first execution).
+        return Response.json({ ok: true, seq: 12, message_id: 'sent-1', town_id: 't_Willow', via: 'client:desktop' });
       }
       if (url.pathname === '/api/bonfire/hear') {
         return Response.json({ ok: true, town_id: 't_Willow', global_latest_seq: 4, messages: [
@@ -111,11 +172,15 @@ try {
   await page.waitForFunction(async () => (await window.beings.townDesktop.appState()).identity.loomBeingId === 'willow');
 
   // ── the catalogue reaches the renderer as a code, not a sentence ───────────
-  const unpaired = await page.evaluate(() => window.beings.townDesktop.bonfire().then(() => '', error => error.code));
-  check('an unpaired read rejects with AUTH_REQUIRED rather than a sentence', unpaired === 'AUTH_REQUIRED');
-  const invalid = await page.evaluate(() => window.beings.townDesktop.pair({ code: 'ABC' }).then(() => '', error => error.code));
-  check('a code that cannot be valid never reaches Town', invalid === 'INVALID_REQUEST'
+  const unpaired = await page.evaluate(() => window.beings.townDesktop.bonfire()
+    .then(() => null, error => ({ code: error.code ?? null, message: String(error.message || '') })));
+  check('an unpaired read is refused rather than answered', unpaired !== null && unpaired.message.length > 0);
+  pending('an unpaired read rejects with AUTH_REQUIRED rather than a sentence', unpaired?.code === 'AUTH_REQUIRED', STRIPPED);
+  const invalid = await page.evaluate(() => window.beings.townDesktop.pair({ code: 'ABC' })
+    .then(() => null, error => ({ code: error.code ?? null, message: String(error.message || '') })));
+  check('a code that cannot be valid never reaches Town', invalid !== null
     && (await app.evaluate(() => globalThis.sdk.confirms)) === 0);
+  pending('…and says so as INVALID_REQUEST', invalid?.code === 'INVALID_REQUEST', STRIPPED);
 
   // ── pairing ────────────────────────────────────────────────────────────────
   const state = await page.evaluate(() => window.beings.townDesktop.pair({ code: 'ab3xy9' }));
@@ -144,24 +209,36 @@ try {
   await page.evaluate(connectionRevision => window.beings.townDesktop.speak({ kind: 'fireside', firesideId: '10', content: '围炉', connectionRevision }), revision);
   await page.evaluate(connectionRevision => window.beings.townDesktop.speak({ kind: 'dm', recipient: 't_River', content: '私信', connectionRevision }), revision);
   const writes = await app.evaluate(() => globalThis.sdk.writes);
-  check('the three speak bodies are the documented ones', JSON.stringify(writes) === JSON.stringify([
+  check('the three speak bodies are the documented ones', canonical(writes) === canonical([
     { path: '/api/bonfire/speak', body: { message: '篝火' } },
     { path: '/api/fireside/speak', body: { fireside_id: 10, message: '围炉' } },
     { path: '/api/messages', body: { recipient: 't_River', content: '私信' } },
   ]));
   const stale = await page.evaluate(connectionRevision => window.beings.townDesktop
-    .speak({ kind: 'bonfire', content: '旧连接', connectionRevision }).then(() => '', error => error.code), revision + 1);
+    .speak({ kind: 'bonfire', content: '旧连接', connectionRevision })
+    .then(() => null, error => ({ code: error.code ?? null, message: String(error.message || '') })), revision + 1);
   check('a send composed under a previous connection is refused before it is sent',
-    stale === 'SESSION_CHANGED' && (await app.evaluate(() => globalThis.sdk.writes.length)) === 3);
+    stale !== null && stale.message.includes('连接已变化')
+    && (await app.evaluate(() => globalThis.sdk.writes.length)) === 3);
+  pending('…and says so as SESSION_CHANGED', stale?.code === 'SESSION_CHANGED', STRIPPED);
 
   // ── forgetting ─────────────────────────────────────────────────────────────
   const forgotten = await page.evaluate(() => window.beings.townDesktop.forget());
   check('forgetting leaves the client unpaired without asking Town for anything',
     forgotten.paired === false && forgotten.status === 'unpaired');
-  const after = await page.evaluate(() => window.beings.townDesktop.inbox().then(() => '', error => error.code));
-  check('and the next read asks for a pairing again', after === 'AUTH_REQUIRED');
+  const after = await page.evaluate(() => window.beings.townDesktop.inbox()
+    .then(() => null, error => ({ code: error.code ?? null, message: String(error.message || '') })));
+  // The same refusal as before pairing, word for word: forgetting really does put
+  // the client back where it started, and this half needs no code to say so.
+  check('and the next read asks for a pairing again', after !== null && after.message === unpaired.message);
+  pending('…as AUTH_REQUIRED', after?.code === 'AUTH_REQUIRED', STRIPPED);
 
   check('the renderer raised no errors', errors.length === 0);
+  if (failed.length) {
+    console.log(`\n${checks.length} checks passed, ${failed.length} FAILED:`);
+    for (const entry of failed) console.log(`  · ${entry.name}\n    ${entry.why}`);
+    throw new Error(`${failed.length} check(s) failed: ${failed.map(entry => entry.name).join('; ')}`);
+  }
   console.log(`\n${checks.length} checks passed. Scope: SDK contract fixtures; no real Town pairing, messages or credentials.`);
 } finally {
   if (app) await app.close().catch(() => {});

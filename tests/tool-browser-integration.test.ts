@@ -146,8 +146,11 @@ describe("tool browser subsystem", () => {
     try {
       expect(f.subsystem.browser).toBeNull();
       // Installing must still succeed: one unavailable subsystem cannot stop the
-      // client opening (subsystems/types.ts).
-      expect(f.errors).toEqual([]);
+      // client opening (subsystems/types.ts). It is still FILED — a panel that
+      // says「不可用」and a log that says nothing leaves this fault undiagnosable
+      // (IM, 2026-09-16).
+      expect(f.errors.map(entry => entry.scope)).toEqual(["tool-browser-construct"]);
+      expect(String((f.errors[0].error as Error).message)).toContain("Electron 浏览器门面不可用");
       expect(await f.call("beings:tool-browser")).toEqual({ tabs: [], activeTabId: null, visible: false });
       await expect(f.act("new", {})).rejects.toThrow(TOOL_BROWSER_UNAVAILABLE);
       await expect(f.call("beings:tool-browser-viewport", { visible: true, bounds: { x: 0, y: 0, width: 10, height: 10 } })).rejects.toThrow(TOOL_BROWSER_UNAVAILABLE);

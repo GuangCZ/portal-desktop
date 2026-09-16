@@ -33,7 +33,7 @@ import { portalRequestAdapter, type NativeRequestFactory, type PortalRequestAdap
 import type {
   BrowserHostWindow, BrowserSessionFactory, BrowserViewConstructor,
 } from '../tools/browser/host';
-import type { DesktopTerminalLike, OrchestrationLike, ToolResult } from '../tools/types';
+import type { OrchestrationLike } from '../tools/types';
 import { WorkerPresentation } from '../tools/worker-presentation';
 import { parseConnection, sessionPartition } from '../common/loom-connection';
 import { desktopPortalName } from '../app/identity';
@@ -56,62 +56,30 @@ export interface ToolsSubsystem extends DesktopSubsystem {
 
 declare module './types' { interface SubsystemMap { 'tools': ToolsSubsystem } }
 
-/** The orchestration subsystem as THIS one needs it, declared structurally.
- *
- * I4 owns the real `OrchestrationSubsystem` type and it does not exist in this
- * worktree, so the registry lookup goes through one documented cast. Two members
- * are deliberately loose:
- *
- *  · `presentation` is typed as the tool side's own `WorkerPresentation`, not as
- *    orchestration's `WorkerPresenter`. The two do not line up today — measured
- *    with tsc on 2026-09-16, four mismatches, all of them about `null` vs
- *    `undefined` and about `WorkerPresentationValue` lacking `openedAt`; see
- *    docs/migration/i2-tools.md「类型对齐实测」. Runtime is unaffected:
- *    orchestration reads it as `this.presentation?.describe(x) || x`, where null
- *    and undefined take the same branch. Widening `WorkerPresenter` is the real
- *    fix and belongs to whoever merges I4.
- *  · `workers` is only inspected for the presence of a presentation, which is
- *    what 0.8.26's onChange does before asking orchestration to notify.
- */
-interface OrchestrationPeer {
-  readonly orchestration: {
-    mode: { enabled: boolean };
-    configuring?: boolean;
-    tool(name: string, args: Record<string, unknown>, context: { signal?: AbortSignal }): Promise<ToolResult>;
-    presentation?: WorkerPresentation;
-    workers?: readonly { presentation?: unknown }[];
-    notify?(): void;
-  };
-  readonly policy?: { syncBridge(): unknown };
-}
-
-/** The terminal subsystem as this one needs it. I3 owns the real type; the same
- * cast applies, and every use is optional-chained because the terminal is a
- * platform-conditional capability, not a dependency. */
-interface TerminalPeer {
-  readonly terminal: DesktopTerminalLike | null;
-  /** Bring the panel forward and select one session. Rejects when the window is
-   * gone, which is what `DesktopTerminalTools` turns into a tool error. */
-  reveal(terminalId: string): unknown;
-}
-
 export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
   const report = (scope: string, error: unknown) => { try { ctx.onError(scope, error); } catch { /* Reporting a failure must not raise one. */ } };
   const push = toolsPush(() => ({ send: ctx.push }));
 
-  // `SubsystemRegistry.get` is keyed on `SubsystemMap`, which only names the
-  // subsystems this worktree can see. I4's and I3's keys land in parallel
-  // branches, so reaching them goes through one cast to a string-keyed lookup
-  // rather than a `declare module` block this unit would be inventing on their
-  // behalf — two such blocks for one key is a merge conflict, and a wrong guess
-  // at their shape is a compile error in whichever branch lands second.
-  const peers = ctx.registry as unknown as { get(key: string): unknown };
-  const orchestrationPeer = (): OrchestrationPeer | null => {
-    try { return (peers.get('orchestration') as OrchestrationPeer | null) ?? null; }
+  // I2 reached both of these through `ctx.registry as unknown as { get(key: string) }`
+  // and a structural restatement of each peer's shape, because I3 and I4 landed in
+  // parallel branches and their `SubsystemMap` keys were not visible here. Both are
+  // merged now, so the lookups are the typed ones and the restatements are gone
+  // (IM, 2026-09-16). Every use stays optional-chained: an absent peer is normal.
+  const orchestrationPeer = () => {
+    try { return ctx.registry.get('orchestration'); }
     catch { return null; }
   };
-  const terminalPeer = (): TerminalPeer | null => {
-    try { return (peers.get('terminal') as TerminalPeer | null) ?? null; }
+  const terminalPeer = () => {
+    try { return ctx.registry.get('terminal'); }
+    catch { return null; }
+  };
+  /** The tool browser's single instance, or null while it is not installed.
+   *
+   * Resolved on every access and NEVER during install: `INSTALLERS` order is
+   * meaningless, so reading it here would answer null and make `DesktopTools`
+   * build the second instance (docs/migration/i3-terminal-browser.md D1). */
+  const toolBrowser = () => {
+    try { return ctx.registry.get('tool-browser')?.browser ?? null; }
     catch { return null; }
   };
 
@@ -165,7 +133,22 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
     push.reveal('browser');
   };
 
-  try {
+  // 0.8.26 built the browser inside `new DesktopTools(...)`, so a refused Electron
+  // façade was a construction failure and the bridge simply did not exist. The
+  // browser is now injected and therefore built lazily, so that check has to live
+  // here to keep the same surface — otherwise the refusal would surface as a throw
+  // out of the first `snapshot()`, which runs inside `changed()`'s `setImmediate`.
+  const View = ctx.electron.WebContentsView as BrowserViewConstructor | null;
+  const viewSession = ctx.electron.session as BrowserSessionFactory | null;
+  if (typeof View !== 'function' || typeof viewSession?.fromPartition !== 'function') {
+    blocked = '桌面工具暂时不可用，请检查客户端配置目录后重启。';
+    // FILED, NOT ONLY SHOWN. Before the check moved up here this failure was a
+    //「浏览器依赖无效。」out of `new Browser`, caught below and written to
+    // client-errors.log as `tools-install`; a panel message the user may never
+    // open is not a diagnosis. The same line is in `subsystems/tool-browser.ts`,
+    // so one broken façade leaves one entry per subsystem that noticed it.
+    report('tools-install', new Error('Electron 浏览器门面不可用，桌面工具桥未启动。'));
+  } else try {
     tools = new DesktopTools({
       desktopId: ctx.desktopId,
       // `ElectronBindings` types these three as `unknown` on purpose, so that a
@@ -174,8 +157,8 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
       // cast is what that decision costs. `DesktopBrowser` validates all three at
       // construction and refuses with「浏览器依赖无效。」if they are not what it
       // expects, so a wrong façade fails loudly rather than half-working.
-      WebContentsView: ctx.electron.WebContentsView as BrowserViewConstructor,
-      session: ctx.electron.session as BrowserSessionFactory,
+      WebContentsView: View,
+      session: viewSession,
       getWindow: () => ctx.window() as unknown as BrowserHostWindow | null,
       // THE ONE CONVERSION THAT ONLY A REAL RELAY EXPOSES.
       // `DesktopToolLink.connect` wants BeingDesktop's `LoomConnection` — it
@@ -208,7 +191,15 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
         await peer.reveal(terminalId);
       },
       desktopPortalName,
+      // The tool-browser subsystem owns the instance; `Browser` is only the
+      // fallback for a build where that subsystem is absent or could not start.
+      getBrowser: toolBrowser,
       Browser: DesktopBrowser,
+      // The bridge builds its own browser lazily when the tool-browser subsystem
+      // has none, and that build can still fail inside `DesktopBrowser`'s
+      // constructor. It happens under `changed()`'s `setImmediate`, so the bridge
+      // has nowhere to raise it — this is where it lands instead.
+      onError: report,
       onChange: (snapshot: DesktopToolsSnapshot) => {
         const peer = orchestrationPeer();
         // The bridge's capabilities feed the orchestration policy's enforcement
@@ -225,9 +216,9 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
       },
     });
   } catch (error) {
-    // The two ways this throws are a Desktop identity that is not a UUID and an
-    // Electron façade the browser refuses. Both mean there is no tool bridge at
-    // all; say which thing is broken rather than 请先连接 Being.
+    // What is left that can throw is a Desktop identity that is not a UUID (the
+    // Electron façade is checked above). It means there is no tool bridge at all;
+    // say which thing is broken rather than 请先连接 Being.
     blocked = '桌面工具暂时不可用，请检查客户端配置目录后重启。';
     report('tools-install', error);
   }
@@ -272,6 +263,8 @@ export function installToolsSubsystem(ctx: SubsystemContext): ToolsSubsystem {
       // orchestration subsystem is normal, not an error.
       const peer = orchestrationPeer();
       if (!peer || !tools) return;
+      // A direct assignment, with no cast: IM widened `WorkerPresenter` to what
+      // `WorkerPresentation` actually is (docs/migration/im-integration.md §2.6).
       peer.orchestration.presentation = new WorkerPresentation({
         browser: tools.browser,
         showBrowser,

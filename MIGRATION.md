@@ -335,25 +335,23 @@ P1 的 chat 子系统原样搬进 `subsystems/chat.ts`，成为这套注册方�
 
 - **没有接任何一个子系统。** 注册表里只有 chat；`PANEL_SLOTS` / `SIDEBAR_SLOTS` / `TOPBAR_SLOTS` / `SHEET_SLOTS` / `FEATURE_MODELS` 都是空数组。
 - **`connectionCleared()` 依然没有调用方。** 接口和扇出都在，`main.ts` 从来没有接过它——这是 P1 就有的缺口，I0 没有顺手改。
+  （IM 2026-09-16 核实结论：**本外壳没有解绑路径**，所以不是「忘了接」而是「没有可接的时刻」。`SettingsStore.connection` 只被赋非空值，从不回到 null；`save()` 的 `resolveConnection` 在没有链接且没有既有连接时抛「请先输入 Being 链接。」，空链接保留原 Being；61 条 `beings:` 通道里没有一条解绑，渲染层也没有入口。BeingDesktop 0.8.26 的 `handle('disconnect')`（src/main.cjs:1476）就是这个缺失的调用方，portal-desktop 从来没有这条命令。**换 Being 不走这个钩子**：0.8.26 在 `storeConnection`（src/main.cjs:704-716）里一步完成「掉旧绑新」，本外壳的各子系统 `connectionVerified` 按 `sessionPartition` 比对后做同一件事。证据与规则钉在 `tests/connection-cleared.test.ts`。）
 - **`npm run start` 的人工冒烟没做**（本机缺 Rust 工具链，`resources/heart-portal` 不存在；打包验证用的是临时 stub）。
 - **Linux 的 node-pty 没有 prebuild**，`MakerZIP` 的 linux 目标需要构建机上有 python3 + make + g++，本次未验证。
 
-## 集成阶段 I1–I7：并行单元（2026-09-16）
+## 集成阶段：各单元记录（2026-09-16）
 
-I0 的接缝铺好之后，五到七个单元在各自的 worktree 里把移植进来的类接成真实子系统。
-每个单元写自己的 `docs/migration/i<N>-*.md`，**这里只加一行表格项**。
+I0 的接缝铺好之后，每个集成单元在各自的 worktree 里把移植进来的类接成真实子系统，
+详情写在自己的 `docs/migration/<unit>.md`，**这里只追加一行**。
 
-| 单元 | 产出 | 记录 |
+| 单元 | 产出 | 用户可见的变化 / 记录 |
 | --- | --- | --- |
-| I3 终端 + 内置工具浏览器 | `main/subsystems/{terminal,tool-browser}.ts`、`main/tools/{terminal,browser}/ipc.ts`、`main/tools/terminal/node-pty.ts`、`preload/channels/{terminal,tool-browser}.ts`、`shared/{terminal,tool-browser}-types.ts`、`renderer/{terminal,tool-browser}/` | `docs/migration/i3-terminal-browser.md` |
+| I1 · Town | Town 直连读写、累积时间线、成员目录与六位码配对（`subsystems/town.ts` + 24 条 `beings:town-*` 通道 + 三条推送）；删除旧 Town 层与 u3 的 Portal 控制器 | **需要重新配对**：凭据改由 `<userData>/town-client` 保管（与 BeingDesktop 0.8.x 同格式），旧的 `town-credential.json` 不再读取，也没有迁移器；篝火/围炉/私信改为本机直连，不再经 Being 转发，未配对时发送会提示「请用 Being 提供的六位配对码连接 Town。」（`docs/migration/i1-town.md`） |
 | I2 工具桥 + 控制台 | `main/subsystems/tools.ts`、`main/tools/ipc.ts`、`preload/channels/tools.ts`、`shared/tools-types.ts`、`renderer/tools/`；六个接缝各 append 一行 | `docs/migration/i2-tools.md` |
+| I3 终端 + 内置工具浏览器 | `main/subsystems/{terminal,tool-browser}.ts`、`main/tools/{terminal,browser}/ipc.ts`、`main/tools/terminal/node-pty.ts`、`preload/channels/{terminal,tool-browser}.ts`、`shared/{terminal,tool-browser}-types.ts`、`renderer/{terminal,tool-browser}/` | `docs/migration/i3-terminal-browser.md` |
 | I4 编排 + 功能任务账本 | `main/subsystems/orchestration.ts`、`main/orchestration/{instructions,ipc}.ts`、`main/features/{methods,history-cache,town-sync,ipc}.ts`、`preload/channels/orchestration.ts`、`shared/orchestration-types.ts`、`renderer/{orchestration,features}/`；六个接缝各 append 一行。`orchestration.presentation` 待 I2 赋值、Worker 验收卡片待 I5，在那之前对话里看不到卡片（方案接受的中间态） | `docs/migration/i4-orchestration-features.md` |
 | I6 | 侧栏持久化 + 关于/隐私：`main/shell/{sidebar-state,ipc}.ts`、`main/subsystems/shell-state.ts`、`preload/channels/shell-state.ts`、`shared/shell-state-types.ts`、`renderer/settings/`；`OrganizerModel` 改为主进程账本的投影 | `docs/migration/i6-shell-state.md` |
----
-## 集成阶段 I1 起：各单元一行（2026-09-16）
-I0 之后每个集成单元在下表**追加一行**（详情写在各自的 `docs/migration/<unit>.md`）。表头由第一个落地的单元建起。
-| 单元 | 接上了什么 | 用户可见的变化 |
-| I1 · Town | Town 直连读写、累积时间线、成员目录与六位码配对（`subsystems/town.ts` + 24 条 `beings:town-*` 通道 + 三条推送）；删除旧 Town 层与 u3 的 Portal 控制器 | **需要重新配对**：凭据改由 `<userData>/town-client` 保管（与 BeingDesktop 0.8.x 同格式），旧的 `town-credential.json` 不再读取，也没有迁移器；篝火/围炉/私信改为本机直连，不再经 Being 转发，未配对时发送会提示「请用 Being 提供的六位配对码连接 Town。」 |
 | I5 · 对话补全 | 请求上下文帧（发送时在主进程读取本机运行态，`prepareMessage` + `desktopEnvironment`）、解释卡片的七条 `beings:chat-detail-*` / `beings:chat-worker-result` 通道、composer 的 `/` Kit 与 `@` 成员补全数据、Worker 结果卡片；`tests/electron-smoke.mjs` 按原生对话页重写并在打包客户端上跑通 | 选中转写里的文字可以「添加到对话」或开一张**临时**解释卡片（关闭即不留本地记录）；`/` 唤出已安装 Kit 与两个内置能力、`@` 唤出 Being 成员（提及会公开到篝火，发送前要求本人按键确认）；委派出去的 Worker 有结果时，对话里出现可打开预览的验收卡片；`⌘1–9` 切到侧栏第 N 个会话 |
 | I7 · Channel + 草稿入口 | 飞书/微信渠道向导与只读绑定检查、Town 功能目录与公开页、四种对话草稿合成一条 `beings:town-draft`（`subsystems/channel.ts` + 9 条通道 + 两条推送）；`prepareLoomDraft` 换成推向原生 composer 的 `prepareNativeDraft`，功能任务的「带到聊天里讨论」与「打开功能页」因此接通 | 顶栏多一个「消息渠道」按钮，打开是渠道向导与 Town 功能两个标签页；Town 功能的草稿**只填入当前会话、不发送**，对话框里已有草稿时会拒绝并保留原文 |
 | I6b · 模型设置 + SBS | `/api/llm/config` 的读写（`subsystems/model-settings.ts` + `main/model-settings/{config,runtime,ipc}.ts` + `beings:model-settings` / `beings:model-config-get` / `beings:model-config-save` / `beings:sbs-set` 四条通道与 `beings:model-settings-state` 推送）；`PROVIDERS` 表逐字节镜像 Loom 1.8.0；`renderer/settings/` 新增模型页 | 侧栏底部多一个「模型」入口：在客户端里就能换模型、换服务商、填 API Key，保存后从 Being 读回确认；Side by Side 第一次可以在客户端开关（0.8.26 只显示、让你去 Loom 改）。状态未读到时显示「未知」而不是「已关闭」。API Key 只转发给 Being，不落盘、不进日志 |
+| IM 合并后整合修复 | 工具浏览器归属收敛到 `tool-browser` 子系统（`DesktopTools` 改惰性注入，构造失败降级不再崩主进程），两条视口通道进 `QUIT_ALLOWED` 且**各自只为自己的矩形说话**、`test:tools` / `test:terminal` / `test:sidebar` 三个脚本接进 `test:all`、`main/town/channel/` 的 u3 副本收敛到 `main/common/`、`WorkerPresenter` 类型放宽、侧栏活动灯认 Worker、`beings:select-saved-project` 补回；`connectionCleared()` 核实为**本外壳没有可接的时刻**（见上）并把结论钉成测试；在打包产物上真跑了八个 E2E，修好 `town-sdk` / `town-ui` / `menu-keyboard` 三个从未执行过或已过时的脚本，并让前两个跑到底（红的两/四条各自带实测证据） | 侧栏项目可以切换工作目录（终端 / 控制台 / 工具桥随之改变）；有 Worker 在跑的会话，侧栏的灯是「说话中」；`beings:town-open` 回到工具浏览器标签页而不是系统浏览器；工具面板开在控制台页时不再把工具浏览器面板的网页摘掉（`docs/migration/im-integration.md`） |

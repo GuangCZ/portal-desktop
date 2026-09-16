@@ -54,6 +54,12 @@ export interface ShellStateAPI {
    * `choose('workspace')`. Already-listed folders are accepted and change
    * nothing. */
   addProject(project: string): Promise<ShellSidebarState>;
+  /** Make one already-listed folder the working directory the terminal, the
+   * console and the Being's desktop tools start from — BeingDesktop's
+   * `selectSavedProject`. The ledger comes back unchanged; the caller re-renders
+   * from one shape either way. Rejects with「项目不存在，请重新选择文件夹。」for a
+   * folder that is not on the list. */
+  selectProject(project: string): Promise<ShellSidebarState>;
   /** Every change to the ledger, including the one that follows switching
    * Beings — a different Being is a different set of pins. */
   onSidebar(callback: (state: ShellSidebarState) => void): () => void;

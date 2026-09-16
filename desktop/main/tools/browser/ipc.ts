@@ -20,6 +20,7 @@
 // check and the quitting guard. Arguments are untrusted: structural whitelist
 // checks here, and the measured limits — 16 tabs, the address grammar, the
 // bounds — stay inside `DesktopBrowser`, which owns them.
+import { normalizeBounds, VIEWPORT_SOURCES } from './browser';
 import type { DesktopBrowser } from './browser';
 import type { ToolBrowserState } from '../../../shared/tool-browser-types';
 
@@ -98,11 +99,30 @@ export function registerToolBrowserIpc({ handle, browser, blocked }: ToolBrowser
   // Where the panel's placeholder is, in window coordinates. `visible:false`
   // without bounds keeps the last rectangle, which is what `DesktopBrowser`
   // expects when a panel is merely hidden rather than resized.
-  handle('beings:tool-browser-viewport', (value: unknown): ToolBrowserState =>
-    // `setViewport` owns both checks: a non-boolean `visible` is
-    //「浏览器显示选项无效。」and a rectangle that is not four finite numbers in
-    // range is「浏览器显示区域无效。」.
-    state(required().setViewport(fields(value, ['visible', 'bounds'], '浏览器显示'))));
+  handle('beings:tool-browser-viewport', (value: unknown): ToolBrowserState => {
+    const options = fields(value, ['visible', 'bounds'], '浏览器显示');
+    // TYPES, HERE, NOT ONLY INSIDE `setViewport`. The destroyed branch below
+    // never reaches the browser, so a check that lives only there is skipped for
+    // the whole of a quit — `{visible:'no'}` would then be accepted in silence.
+    // These two lines are `setViewport`'s own first two, character for character
+    // and branch for branch (including「visible:true with no bounds is invalid」),
+    // so neither the refusals nor their measured messages can drift apart.
+    if (typeof options.visible !== 'boolean') throw new TypeError('浏览器显示选项无效。');
+    if (options.bounds !== undefined || options.visible) normalizeBounds(options.bounds);
+    // This channel is on QUIT_ALLOWED, so the panel's last `visible:false` can
+    // land after `tool-browser`'s `quitting()` destroyed the browser. There is
+    // no rectangle left to move and nothing to report: answer idle rather than
+    // throw「浏览器已经关闭。」into the error log on every quit. Only *destroyed*
+    // is quiet — `required()` still refuses when there is no browser at all
+    // (the Electron facade was rejected), and the argument is fully validated
+    // above, so a malformed payload is still refused.
+    const current = required();
+    if (current.destroyed) return idle;
+    // Named for the same reason the tool pane's channel is: one browser, two
+    // panels, and each may only speak for its own rectangle (browser.ts
+    //`viewports`).
+    return state(current.setViewport(options, VIEWPORT_SOURCES.toolBrowserPanel));
+  });
 }
 
 /** The one push, given the window to send on. */

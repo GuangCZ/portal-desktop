@@ -48,13 +48,27 @@ export function installToolBrowserSubsystem(ctx: SubsystemContext): ToolBrowserS
   const session = ctx.electron.session as BrowserSessionFactory | null;
   if (typeof View !== 'function' || typeof session?.fromPartition !== 'function') {
     blocked = '内置浏览器在当前运行环境不可用。';
+    // The constructor's own failure is reported below; a façade that never got
+    // that far was not, so this one fault used to leave no trace in
+    // client-errors.log at all. IM, 2026-09-16.
+    report('tool-browser-construct', new Error('Electron 浏览器门面不可用，内置浏览器未启动。'));
   } else {
     try {
       browser = new DesktopBrowser({
         WebContentsView: View,
         session,
         getWindow: () => ctx.window() as unknown as BrowserHostWindow | null,
-        onChange: snapshot => push.state(snapshot),
+        onChange: snapshot => {
+          push.state(snapshot);
+          // THE SECOND HALF OF 0.8.26's `onChange: () => this.changed()`.
+          // There, `DesktopTools` built the browser and rebuilt its own snapshot
+          // on every browser change, which is what puts a new tab or a finished
+          // navigation into `beings:tools-state` (src/desktop-tools.cjs line 120
+          // in the port). Ownership moved here, so the fan-out is explicit — and
+          // lazy, because the tool bridge may install after this subsystem.
+          try { ctx.registry.get('tools')?.tools?.changed(); }
+          catch (error) { report('tool-browser-tools-change', error); }
+        },
       });
     } catch (error) {
       // The constructor validates its four dependencies and locks the partition

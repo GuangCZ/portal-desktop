@@ -81,10 +81,53 @@ export interface DesktopToolsOptions {
   showTerminal?: (terminalId: string) => unknown;
   /** src/desktop-identity.cjs, owned by the identity unit; required once desktopId is set. */
   desktopPortalName: DesktopPortalName;
+  /** The already-built tool browser, resolved on EVERY access.
+   *
+   * 0.8.26 has one `DesktopTools` and it builds the browser itself. This shell
+   * gives the browser its own subsystem — it is a visible panel with a partition
+   * and a rectangle, and it exists whether or not a Being is connected
+   * (docs/migration/i3-terminal-browser.md D1) — so the bridge consumes that
+   * instance instead of constructing a second one. Two instances fight over the
+   * same window's `contentView` and share one partition.
+   *
+   * It has to be a function, and it must not be called while constructing: the
+   * order `INSTALLERS` runs in carries no meaning, so the tool browser may not be
+   * in the registry yet. Answering null is normal — this instance then builds its
+   * own, once, exactly as 0.8.26 does. */
+  getBrowser?: () => DesktopBrowserLike | null;
   /** src/desktop-browser.cjs, owned by the browser unit; it has no local default here. */
   Browser: DesktopBrowserConstructor;
   Console?: DesktopConsoleConstructor;
   ToolLink?: DesktopToolLinkConstructor;
+  /** Where a failure that has nowhere else to go is filed.
+   *
+   * 0.8.26 built the browser inside the constructor, so a browser that could not
+   * be built took the whole bridge down with it and `boot()`'s try/catch wrote
+   * the reason to the activity log. Construction is deferred now (`getBrowser`),
+   * which moved the throw to the first `snapshot()` — and `changed()` runs that
+   * inside a `setImmediate`, where nothing is listening and an exception is a
+   * main-process crash. The bridge reports and degrades instead. IM, 2026-09-16. */
+  onError?: (scope: string, error: unknown) => void;
+}
+
+/** The one thing left of a browser that could not be built.
+ *
+ * Its `destroyed` is true, which is exactly what it is: the two viewport channels
+ * read that field and answer quietly (tools/ipc.ts, tools/browser/ipc.ts), while
+ * every tool call gets the same sentence the tool-browser subsystem shows in its
+ * panel. The bridge keeps working without it — the console, the terminal scopes
+ * and the relay have nothing to do with the browser. IM, 2026-09-16. */
+function deadBrowser(): DesktopBrowserLike {
+  const refuse = (): never => { throw new Error('内置浏览器暂时无法使用，请重启客户端后重试。'); };
+  return {
+    snapshot: (): LiveBrowserSnapshot => ({tabs: [], activeTabId: null, visible: false}),
+    newTab: refuse, activateTab: refuse, closeTab: refuse, navigate: refuse,
+    goBack: refuse, goForward: refuse, reload: refuse, stop: refuse,
+    readPage: refuse, prepareAction: refuse, click: refuse, fill: refuse, screenshot: refuse,
+    setViewport: refuse,
+    destroyed: true,
+    destroy: () => {},
+  };
 }
 interface InvokeOptions { signal?: AbortSignal; generation?: number; targetToken?: string; reviewJobIds?: string[] }
 
@@ -103,11 +146,42 @@ export class DesktopTools {
   disposed: boolean;
   notifyQueued: boolean;
   requestResult: DesktopToolsRequestResult | null;
-  browser: DesktopBrowserLike;
+  /** The browser THIS instance built, and therefore the only one it may destroy.
+   * Null while an injected browser is answering. */
+  ownBrowser: DesktopBrowserLike | null;
+  /** The injection point, or `() => null` when there is none. */
+  resolveBrowser: () => DesktopBrowserLike | null;
+  /** The 0.8.26 constructor call, deferred so it only runs if nothing is injected. */
+  createBrowser: () => DesktopBrowserLike;
+  onError?: (scope: string, error: unknown) => void;
   console: DesktopConsoleLike;
   link: DesktopToolLinkLike;
-  constructor({desktopId,WebContentsView,session,getWindow,getConnection,getWorkspace,onChange,orchestration,getTerminal=()=>null,showTerminal=()=>{},desktopPortalName,Browser,Console=DesktopConsole,ToolLink=DesktopToolLink}: DesktopToolsOptions) {
-    this.onChange=onChange;this.getConnection=getConnection;this.getWorkspace=getWorkspace;
+  /** The tool browser, injected or self-built. Every use inside this class goes
+   * through here, so ownership is decided once, per access, and never cached at
+   * construction time (see `DesktopToolsOptions.getBrowser`). */
+  get browser(): DesktopBrowserLike {
+    const injected = this.resolveBrowser();
+    if (injected) return injected;
+    if (this.ownBrowser) return this.ownBrowser;
+    // BUILDING IT IS THE PART THAT CAN THROW, AND THIS GETTER IS READ FROM
+    // `snapshot()`, which `changed()` runs inside a `setImmediate`. An exception
+    // there reaches nothing: this process installs no `uncaughtException` handler,
+    // so it would end the client. `DesktopBrowser`'s constructor locks a partition
+    // down (permissions, downloads, the protocol gate) and any of those can fail —
+    // `subsystems/tool-browser.ts` catches the same throw and blocks its panel,
+    // and when it does, its `browser` is null and this resolver falls through to
+    // here, to the same failing constructor. Report once, then answer with a
+    // browser that is simply not there.
+    try { this.ownBrowser = this.createBrowser(); }
+    catch (error) {
+      this.ownBrowser = deadBrowser();
+      try { this.onError?.('tools-browser-construct', error); }
+      catch { /* Reporting a failure must not raise one. */ }
+    }
+    return this.ownBrowser;
+  }
+  constructor({desktopId,WebContentsView,session,getWindow,getConnection,getWorkspace,onChange,onError,orchestration,getTerminal=()=>null,showTerminal=()=>{},desktopPortalName,getBrowser,Browser,Console=DesktopConsole,ToolLink=DesktopToolLink}: DesktopToolsOptions) {
+    this.onChange=onChange;this.onError=onError;this.getConnection=getConnection;this.getWorkspace=getWorkspace;
     this.orchestration=orchestration;
     this.getTerminal=getTerminal;
     this.terminalTools=new DesktopTerminalTools({getTerminal,showTerminal});
@@ -117,7 +191,15 @@ export class DesktopTools {
     // through (desktop/main/subsystems/types.ts explains why they are typed that
     // way). One cast, here, is what the browser's own contract costs; the browser
     // validates all three at runtime and refuses with「浏览器依赖无效。」.
-    this.browser=new Browser({WebContentsView,session,getWindow,onChange:()=>this.changed()} as DesktopBrowserOptions);
+    this.createBrowser=()=>new Browser({WebContentsView,session,getWindow,onChange:()=>this.changed()} as DesktopBrowserOptions);
+    this.resolveBrowser=getBrowser ?? (()=>null);
+    // NO INJECTION POINT MEANS THIS INSTANCE OWNS THE BROWSER, exactly as 0.8.26
+    // does — built here, so a refused Electron façade is a CONSTRUCTION failure
+    // rather than a surprise on the first snapshot. With an injection point the
+    // build is deferred instead: calling the resolver now would read an empty
+    // registry and build the second instance this whole arrangement exists to
+    // prevent.
+    this.ownBrowser=getBrowser?null:this.createBrowser();
     this.console=new Console({getWorkspace,onChange:()=>this.changed()});
     this.link=new ToolLink({shouldReconnect:()=>!this.disposed && orchestration?.mode.enabled===true && !orchestration.configuring,...(desktopId?{portalName:desktopPortalName(desktopId)}:{}),onChange:()=>this.changed(),toolAllowed:name=>orchestration?.mode.enabled?name.startsWith('desktop_worker_'):!name.startsWith('desktop_worker_') && (!name.startsWith('desktop_terminal_') || Boolean(getTerminal()) && ['win32','darwin'].includes(process.platform)),invokeTool:(name,args,context)=>this.request(name,args,context)});
   }
@@ -250,6 +332,10 @@ export class DesktopTools {
     this.changed();
   }
   async dispose(): Promise<void> {
-    this.disconnectLink();await this.console.dispose();this.browser.destroy();this.disposed=true;
+    // Only the browser this instance built is this instance's to destroy: an
+    // injected one belongs to the tool-browser subsystem, which destroys it in
+    // its own `quitting()`. `?.` also keeps a never-touched fallback from being
+    // constructed just so it can be torn down.
+    this.disconnectLink();await this.console.dispose();this.ownBrowser?.destroy();this.disposed=true;
   }
 }

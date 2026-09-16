@@ -5,6 +5,22 @@
 //
 // MESSAGES.auth is load-bearing: ChannelBeing recognizes an expired credential by that exact
 // string, so neither the wording nor the code may drift.
+//
+// `parseConnection` BELOW IS NOT `main/common/loom-connection.ts`'s, despite the name.
+// Checked line by line on 2026-09-16 (IM) against both upstreams, because
+// docs/migration/i1-town.md listed this directory as still holding a copy to converge:
+//
+//   · this one is extensions/being-anywhere/being-client.mjs:34 — it rejects control
+//     characters, backslashes and a repeated `api`/`token`/`secret`/`relay_secret`
+//     parameter, caps the token at 4096, clips `beingName` to 100, answers `origin`,
+//     and throws `ClientError` with a `code` that ChannelBeing branches on;
+//   · the shared one is src/security.cjs — it answers `secret` (relay_secret falling
+//     back to token), which is part of `sessionPartition`, A DISK FORMAT. This client
+//     never partitions anything and has no `secret` field at all.
+//
+// Neither is a superset of the other, and the strict one is the boundary for a
+// credential the user pasted. They stay apart. The copies that DID need converging
+// (`town/channel/{sanitize,loom-connection}.ts`) were deleted in the seam stage.
 
 const MAX_EVENT_CHARS = 256 * 1024;
 const MAX_STREAM_BYTES = 8 * 1024 * 1024;

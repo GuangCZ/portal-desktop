@@ -25,7 +25,7 @@
 //    change to a conversation that does not exist, and chat may install after it.
 import { parseConnection, sessionPartition } from '../common/loom-connection';
 import { registerShellStateIpc, shellStatePush } from '../shell/ipc';
-import { addSidebarProject, sidebarState, updateSidebar } from '../shell/sidebar-state';
+import { addSidebarProject, assertSavedProject, sidebarState, updateSidebar } from '../shell/sidebar-state';
 import type { ShellSidebarAction, ShellSidebarState } from '../../shared/shell-state-types';
 import type { DesktopSubsystem, SubsystemContext } from './types';
 
@@ -71,10 +71,46 @@ export function installShellStateSubsystem(ctx: SubsystemContext): ShellStateSub
     return current;
   };
 
+  /** BeingDesktop's `selectSavedProject` (src/main.cjs:574), which is the only
+   * thing that moves the Desktop working directory after startup:
+   *
+   *   `disk.workspace = selected; await persist(); state.workspace = {...};
+   *    desktopTools?.changed();`
+   *
+   * `disk.workspace` is the SAME DISK KEY this client reads into
+   * `Settings.projectWorkspace` (app/settings.ts line 68), so writing it through
+   * `saveExtra` keeps a 0.8.x profile and this one on the same file — which is why
+   * this does not go through `save()`: that is the Portal path, and it re-verifies
+   * the connection and can restart the engine (main.ts line 441). Choosing a
+   * folder in the sidebar must not do either.
+   *
+   * THE SECOND LINE IS THE ONE THAT MATTERS. `SettingsStore.settings` is the live
+   * object every subsystem reads its workspace off — `DesktopTools` and
+   * `DesktopConsole` through `projectWorkspace || workspace`, the terminal through
+   * `projectWorkspace` alone (docs/migration/i3-terminal-browser.md D6) — and
+   * `saveExtra` writes the file without touching it. Updating it here is 0.8.26's
+   * `state.workspace = {path: selected, files}`: one assignment, in the one place
+   * that changes the directory. `save()` carries `projectWorkspace` through
+   * unchanged (app/settings.ts line 147), so a later Portal save preserves it, and
+   * `load()` reads it back from the key written above. IM, 2026-09-16. */
+  const selectProject = async (project: string): Promise<ShellSidebarState> => {
+    const chosen = assertSavedProject(saved(), scope(), workspace(), project);
+    await ctx.store.saveExtra({ workspace: chosen });
+    ctx.store.settings.projectWorkspace = chosen;
+    const current = state();
+    push(current);
+    // `desktopTools?.changed()`: the console pane's「在 X 运行」and the bridge's
+    // own snapshot both carry the workspace, and nothing else will push them.
+    try { ctx.registry.get('tools')?.tools?.changed(); }
+    catch (error) { ctx.onError('shell-state-tools-change', error); }
+    return current;
+  };
+
   registerShellStateIpc({
     handle: ctx.handle, exclusive: ctx.exclusive, state,
     apply: (action: ShellSidebarAction) => commit(updateSidebar(saved(), scope(), workspace(), action, conversations())),
     addProject: (project: string) => commit(addSidebarProject(saved(), scope(), workspace(), project)),
+    selectProject,
   });
 
   return {

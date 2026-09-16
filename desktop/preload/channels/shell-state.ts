@@ -15,5 +15,6 @@ export const shellState: ShellStateAPI = {
   sidebar: () => ipcRenderer.invoke('beings:sidebar-state'),
   sidebarAction: (action: ShellSidebarAction) => ipcRenderer.invoke('beings:sidebar-action', action),
   addProject: (project: string) => ipcRenderer.invoke('beings:sidebar-project-add', project),
+  selectProject: (project: string) => ipcRenderer.invoke('beings:select-saved-project', project),
   onSidebar: callback => subscribe<ShellSidebarState>('beings:sidebar', callback),
 };
