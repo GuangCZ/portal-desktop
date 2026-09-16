@@ -12,13 +12,17 @@ const image = (name: string, bytes: number, type = "image/png") =>
 
 const fixture = () => make();
 
-function make({ read }: { read?: (file: File) => Promise<{ data: string; thumb: string }> } = {}) {
+function make({ read, now }: {
+  read?: (file: File) => Promise<{ data: string; thumb: string }>;
+  now?: () => number;
+} = {}) {
   const toasts: string[] = [];
   let id = 0;
   const composer = new ComposerModel({
     toast: message => toasts.push(message),
     read: read || (async (file: File) => ({ data: `base64:${file.name}`, thumb: `data:image/jpeg;base64,${file.name}` })),
     randomUUID: () => `image-${++id}`,
+    ...(now ? { now } : {}),
   });
   composer.switchTo("session-a");
   return { composer, toasts };
@@ -109,6 +113,35 @@ describe("the composer", () => {
     expect(composer.refusal().blocked).toBe(true);
     composer.setText("看看这张图");
     expect(composer.refusal()).toEqual({ blocked: false, message: "" });
+  });
+
+  // BeingDesktop 0.8.26 test/chat-composer-ui.cjs line 39, "IME commit and its
+  // trailing Enter never send or publish": the Enter that accepts a candidate
+  // is a plain key press on several input methods, and line 40 waits 65ms —
+  // past the 50ms window — before an Enter is allowed to send again.
+  it("refuses a message still settling out of an input method, and lets it go once the window passes", () => {
+    let time = 1_700_000_000_000;
+    const { composer } = make({ now: () => time });
+    composer.setText("这句还没写完");
+    expect(composer.settling).toBe(false);
+    expect(composer.refusal()).toEqual({ blocked: false, message: "" });
+    composer.startComposition();
+    expect(composer.settling).toBe(true);
+    expect(composer.refusal()).toEqual({ blocked: true, message: "请完成输入后再发送。" });
+    composer.endComposition();
+    time += 49;
+    expect(composer.settling).toBe(true);
+    expect(composer.refusal()).toEqual({ blocked: true, message: "请完成输入后再发送。" });
+    time += 16;
+    expect(composer.settling).toBe(false);
+    expect(composer.refusal()).toEqual({ blocked: false, message: "" });
+  });
+
+  it("says nothing about an empty box while an input method is still committing", () => {
+    const { composer, toasts } = make({ now: () => 1_700_000_000_000 });
+    composer.startComposition();
+    expect(composer.refusal()).toEqual({ blocked: true, message: "" });
+    expect(toasts).toEqual([]);
   });
 
   it("waits for an image still being read rather than sending the message without it", async () => {

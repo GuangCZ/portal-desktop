@@ -21,6 +21,13 @@ import { validate, type ChatReference } from '../../../shared/chat-references';
 export const IMAGE_TYPES = /^image\/(?:png|jpeg|webp|gif)$/;
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024, MAX_IMAGES = 8, THUMB_EDGE = 256, MAX_THUMB = 48 * 1024;
 
+/** How long after an input method commits its text an Enter still belongs to
+ * that commit rather than to us (chat-composer.js line 142: 50ms). Several
+ * input methods report the Enter that accepts a candidate as a plain key press
+ * — `isComposing` already false — and without this window that keystroke sends
+ * the half-typed message. */
+export const COMPOSITION_MS = 50;
+
 export interface PendingImage {
   id: string;
   name: string;
@@ -42,6 +49,7 @@ export interface ComposerOptions {
   /** Overridden in tests; the default uses FileReader and a canvas. */
   read?: ImageReader;
   randomUUID?: () => string;
+  now?: () => number;
 }
 
 /** Reads a file as base64 and draws a small preview of it. A transparent PNG is
@@ -84,12 +92,33 @@ export class ComposerModel extends Store {
   /** No conversation selected means nothing can be typed into anything. */
   session = '';
   private drafts = new Map<string, Draft>();
+  private composing = false;
+  private compositionUntil = 0;
   private readonly read: ImageReader;
   private readonly uuid: () => string;
+  private readonly now: () => number;
   constructor(private readonly options: ComposerOptions) {
     super();
     this.read = options.read || browserImageReader;
     this.uuid = options.randomUUID || (() => crypto.randomUUID());
+    this.now = options.now || (() => Date.now());
+  }
+
+  /** An input method opened a candidate window over the composer. */
+  startComposition() { this.composing = true; }
+
+  /** It committed. Nothing is published: no rendered output depends on the flag,
+   * and a re-render in the middle of a commit is exactly what not to do. */
+  endComposition() {
+    this.composing = false;
+    this.compositionUntil = this.now() + COMPOSITION_MS;
+  }
+
+  /** Composing, or within the grace window after a commit (chat-composer.js
+   * lines 98 and 106 ask this same question of `composing` and
+   * `compositionUntil` before letting an Enter through). */
+  get settling(): boolean {
+    return this.composing || this.now() < this.compositionUntil;
   }
 
   /** Point the composer at another conversation, keeping each one's draft where
@@ -220,11 +249,16 @@ export class ComposerModel extends Store {
    * and a message of images alone is refused with the reason it would actually
    * fail (docs §十) rather than a generic one. An empty message with nothing
    * attached is refused silently — pressing Enter on an empty box is not a
-   * mistake worth a notice.
+   * mistake worth a notice. A message still settling out of an input method is
+   * refused last, where 0.8.26 put it: `send` reached `composerUI.prepare`
+   * only after the checks below (chat-app.js line 498, chat-composer.js line
+   * 106), so an empty box during a commit stays silent too.
    */
   refusal(): { blocked: boolean; message: string } {
     if (this.reading) return { blocked: true, message: '图片还在读取，稍等一下再发送。' };
-    if (this.text.trim()) return { blocked: false, message: '' };
+    if (this.text.trim()) return this.settling
+      ? { blocked: true, message: '请完成输入后再发送。' }
+      : { blocked: false, message: '' };
     if (this.references.length) return { blocked: true, message: '输入想讨论的问题，再连同引用一起发送。' };
     if (this.images.length) return { blocked: true, message: '给图片配一句话再发送。' };
     return { blocked: true, message: '' };

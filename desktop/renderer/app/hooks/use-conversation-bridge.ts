@@ -35,13 +35,18 @@ export function useConversationBridge(app: AppModel, conversation: ConversationM
     };
     return () => { app.post = () => {}; };
   }, [app, conversation]);
-  // A new connection means a new conversation layer: read the newest window as a
-  // fresh baseline, and let the shell stop reporting the surface as loading.
+  // A new connection means a new conversation layer; let the shell stop
+  // reporting the surface as loading. Nothing is re-read here: binding to a
+  // Being already reconciles the newest window once, in the main process
+  // (`ChatSessions.start` → `recovery.reconcile({ full: !store.seeded })`,
+  // main/chat/sessions.ts line 228), and a second full read from here would
+  // either race that one or be dropped by `reload`'s own guard, depending on
+  // which promise settled first. 0.8.26 did not re-read on connect either
+  // (chat-app.js: `chatReload` is the truncation banner's button alone).
   useEffect(() => {
     if (!app.chatSource) return;
     app.frameLoaded();
-    void conversation.reload();
-  }, [app, app.chatSource, conversation]);
+  }, [app, app.chatSource]);
   // ⌘F searches what this conversation has actually said. `chatSource` is a
   // dependency because the effect above resets the index through `frameLoaded`
   // when the surface reloads, and that can land after a projection: without it,

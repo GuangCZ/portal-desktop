@@ -95,11 +95,19 @@ export function Composer({ model }: { model: ConversationModel }) {
           disabled={disabled}
           value={composer.text}
           onChange={event => composer.setText(event.target.value)}
+          onCompositionStart={() => composer.startComposition()}
+          onCompositionEnd={() => composer.endComposition()}
           onKeyDown={event => {
-            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              send();
-            }
+            if (event.key !== "Enter" || event.shiftKey) return;
+            // The Enter that accepts an input method's candidate is reported as
+            // a plain key press by several of them: `isComposing` is already
+            // false by the time it arrives. 0.8.26 swallowed it through the
+            // 50ms window after `compositionend` (chat-composer.js lines 98 and
+            // 142) and, like there, a swallowed Enter is not prevented — the
+            // textarea keeps whatever the input method just committed.
+            if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || composer.settling) return;
+            event.preventDefault();
+            send();
           }}
           onPaste={event => {
             const files = [...(event.clipboardData?.files || [])].filter(file => IMAGE_TYPES.test(file.type));
