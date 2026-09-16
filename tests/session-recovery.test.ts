@@ -13,7 +13,8 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createHash, webcrypto } from "node:crypto";
-import { importSessionRecovery, readSessionRecovery, sessionPartition } from "../desktop/main/chat/session-recovery";
+import { importSessionRecovery, readSessionRecovery } from "../desktop/main/chat/session-recovery";
+import { sessionPartition } from "../desktop/main/common/loom-connection";
 import type { RecoveryConnection } from "../desktop/main/chat/types";
 
 test("recovery preserves current sessions, retains conflicts separately, and imports only once", () => {

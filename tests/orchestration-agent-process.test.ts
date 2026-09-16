@@ -3,7 +3,7 @@
 // using a generated node script as the fake CLI exactly as BeingDesktop does.
 // The fifth case is a regression guard added on 2026-09-16 for the win32 branch, which neither
 // BeingDesktop nor this port covered: it pins the spawn shape to src/agent-process.cjs so the
-// vendored WINDOWS_RUNNER default cannot silently disappear again.
+// shared WINDOWS_RUNNER default cannot silently disappear again.
 // Contract: docs/orchestration.md "Environment" (allow-list, no code injection).
 
 import { EventEmitter } from "node:events";
@@ -13,7 +13,7 @@ import path from "node:path";
 import type { spawn as spawnType } from "node:child_process";
 import { afterAll, describe, expect, it } from "vitest";
 import { agentEnvironment, launchAgent, psValue } from "../desktop/main/orchestration/agent-process";
-import { WINDOWS_RUNNER } from "../desktop/main/orchestration/vendored";
+import { WINDOWS_RUNNER } from "../desktop/main/common/platform";
 
 interface SpawnCall { file: string; args: readonly string[]; options: Record<string, unknown> }
 

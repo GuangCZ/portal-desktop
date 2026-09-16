@@ -5,7 +5,7 @@
 // The pairing conversation has its own scene. Neither another scene's reply nor
 // partial text, reasoning, tool output or replay history can authorize this client.
 import { codedError, type CodedError } from './errors';
-import { parseConnection, sessionPartition, type LoomConnection } from './loom-connection';
+import { parseConnection, sessionPartition, type LoomConnection } from '../../common/loom-connection';
 import { consumeEvents, type SseData } from './sse';
 import type { PairingClient, PairingConnectionContext, TownPairingState } from './types';
 

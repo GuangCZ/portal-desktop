@@ -88,9 +88,9 @@ export interface LaunchAgentOptions {
   platform?: NodeJS.Platform;
   spawnImpl?: typeof spawn;
   environment?: NodeJS.ProcessEnv;
-  /** DesktopTerminal owns `consoleEnvironment`; optional override, defaults to the vendored copy. */
+  /** `common/platform.ts` owns `consoleEnvironment`; optional override, defaults to it. */
   consoleEnvironment?: (source: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
-  /** DesktopTerminal owns `WINDOWS_RUNNER`; optional override, defaults to the vendored copy. */
+  /** `common/platform.ts` owns `WINDOWS_RUNNER`; optional override, defaults to it. */
   windowsRunner?: string;
 }
 

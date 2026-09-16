@@ -5,7 +5,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { desktopEnvironment } from './vendored';
+import { desktopEnvironment } from '../common/platform';
 import { launchAgent } from './agent-process';
 import type { AgentDefinition, AgentRecord, ExecutableFinder, LaunchAgent, OrchestrationMode, OrchestrationModeInput, ProbeResult, ProbeRunner } from './types';
 

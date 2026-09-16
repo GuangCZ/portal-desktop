@@ -1,21 +1,15 @@
 // Ported line for line from BeingDesktop 0.8.26 src/session-recovery.cjs
-// (48 lines); `sessionPartition` from src/security.cjs lines 45-48; 2026-09-16.
-// The recovery file lives next to the Loom page's own session partition, so the
-// partition name is part of the on-disk contract and is reproduced exactly.
+// (48 lines); 2026-09-16. The recovery file lives next to the Loom page's own
+// session partition, so the partition name is part of the on-disk contract:
+// `sessionPartition` comes from `common/loom-connection.ts` (BeingDesktop
+// src/security.cjs lines 45-48) rather than being reproduced here a fourth time.
+// `RecoveryConnection` is exactly the four fields that take part in the identity,
+// which is why that function takes `ConnectionIdentity` and not a whole
+// `LoomConnection`.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { sessionPartition } from '../common/loom-connection';
 import type { RecoveryConnection, SessionRecovery } from './types';
-
-const SESSION_IDENTITY_VERSION = 'v1';
-
-/** BeingDesktop src/security.cjs: the Electron partition one Loom identity gets.
- * Kept here so the recovery file name matches byte for byte; it merges with the
- * security port later. */
-export function sessionPartition(connection: RecoveryConnection): string {
-  const identity = JSON.stringify([SESSION_IDENTITY_VERSION, connection.displayUrl, connection.apiBase, connection.token, connection.secret]);
-  return `persist:loom-${SESSION_IDENTITY_VERSION}-${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`;
-}
 
 export async function readSessionRecovery(directory: string, connection: RecoveryConnection): Promise<SessionRecovery | null> {
   const file = path.join(directory, 'session-recovery', sessionPartition(connection).slice(8) + '.json');

@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { createRequire } from 'node:module';
 import os from 'node:os';
-import { parseConnection } from './security';
+import { parseConnection } from '../common/loom-connection';
 import type { InvokeTool, ToolContent, ToolResult } from './types';
 
 export const MAX_MESSAGE_BYTES = 131072;

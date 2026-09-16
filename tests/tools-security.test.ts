@@ -1,7 +1,8 @@
 // Ported line by line from BeingDesktop 0.8.26 test/security.test.cjs on 2026-09-16.
 import { describe, expect, it } from "vitest";
 import path from "node:path";
-import { parseConnection, endpoint, publicModelUrl, protocolFile, sessionPartition, allowedNavigation } from "../desktop/main/tools/security";
+import { protocolFile } from "../desktop/main/tools/security";
+import { allowedNavigation, endpoint, parseConnection, publicModelUrl, sessionPartition } from "../desktop/main/common/loom-connection";
 
 describe("desktop security boundaries", () => {
   it("connection separates public metadata from credentials", () => {

@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { DesktopConsole, consoleEnvironment } from "../desktop/main/tools/console";
+import { DesktopConsole } from "../desktop/main/tools/console";
+import { consoleEnvironment } from "../desktop/main/common/platform";
 import type { ConsoleSpawn, DesktopConsoleOptions } from "../desktop/main/tools/console";
 
 const dirname = path.resolve("tests");

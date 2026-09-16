@@ -1,38 +1,10 @@
 // Ported line for line from BeingDesktop 0.8.26 src/session-titles.cjs (69 lines);
-// 2026-09-16. `sanitizeText` comes from BeingDesktop src/services.cjs lines 12-37
-// and is carried here verbatim so the redaction the title input relies on does not
-// change shape during the port; it merges into a shared redaction module later.
+// 2026-09-16. The redaction the title input relies on is `common/sanitize.ts`
+// (BeingDesktop src/services.cjs lines 12-37); this file carried its own copy of
+// it until the I0 seam stage folded the four copies into one.
 import { createHash } from 'node:crypto';
+import { sanitizeText } from '../common/sanitize';
 import type { SessionSummary, SessionTitlesOptions, TitleRow, TitleStore } from './types';
-
-/** BeingDesktop src/services.cjs `sanitizeText`: strips ANSI, named secrets, URL
- * credentials and queries, auth headers, key/value secrets and long opaque blobs. */
-export function sanitizeText(value: unknown, secrets: unknown[] = []): string {
-  let text = String(value ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
-  for (const secret of secrets) {
-    if (typeof secret === 'string' && secret.length >= 4) text = text.split(secret).join('[redacted]');
-  }
-  text = text.replace(/\b(?:https?|wss?):\/\/[^\s<>"']+/gi, (match) => {
-    try {
-      const url = new URL(match);
-      url.username = '';
-      url.password = '';
-      url.search = '';
-      url.hash = '';
-      return url.toString();
-    } catch { return '[redacted URL]'; }
-  });
-  text = text
-    .replace(/\b(?:Cookie|Set-Cookie|Authorization|Proxy-Authorization)\s*:[^\r\n]*/gi, '[redacted header]')
-    .replace(/\bBearer\s+[^\s,"']+/gi, 'Bearer [redacted]')
-    .replace(/(["']?(?:[\w-]*(?:token|secret|password|credential)[\w-]*|api[_-]?key|key|authorization|cookie|set-cookie)["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)/gi, '$1[redacted]')
-    .replace(/\bsk-[a-z0-9_-]+\b/gi, '[redacted]')
-    .replace(/\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)?\b/g, '[redacted]')
-    .replace(/\b[a-f0-9]{32,}\b/gi, '[redacted]')
-    .replace(/\b[a-zA-Z0-9_+/=-]{48,}\b/g, '[redacted]')
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
-  return text.slice(0, 2000);
-}
 
 export const defaultTitle = (title: string): boolean => !title || /^(?:新会话|新任务|会话 \d+)$/.test(title);
 const eligible = (session: SessionSummary): boolean => !session.titleSource && defaultTitle(session.title);

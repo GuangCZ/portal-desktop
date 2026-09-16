@@ -1,50 +1,48 @@
-// Ported from BeingDesktop 0.8.26 on 2026-09-16.
-// Small pure helpers this unit depends on whose owning modules belong to other migration units:
-//   sanitizeText      <- src/services.cjs   (Portal services unit)
-//   desktopEnvironment<- src/platform.cjs   (platform unit)
-//   consoleEnvironment<- src/desktop-console.cjs (DesktopTerminal unit)
-//   WINDOWS_RUNNER    <- src/desktop-console.cjs (DesktopTerminal unit)
-// Copied line by line so this unit is testable on its own; the integration phase should re-point
-// the three call sites at the canonical ports instead of keeping two copies.
-
+// The local machine as the main process sees it; 2026-09-16.
+//
+// Ported from BeingDesktop 0.8.26 src/platform.cjs (`desktopPlatform`,
+// `desktopEnvironment`, `shellPath`) and src/desktop-console.cjs
+// (`ENVIRONMENT_KEYS`, `consoleEnvironment`, `WINDOWS_RUNNER`).
+//
+// Three migration units had arrived with their own copies — `tools/platform.ts`,
+// `tools/terminal/platform.ts` and `orchestration/vendored.ts`, plus the console
+// helpers inlined in `tools/console.ts`. A byte comparison found every body
+// identical and `WINDOWS_RUNNER` equal to the byte (2774 of them), so the copies
+// are gone and this is the implementation. The types are the widest of the set:
+// `NodeJS.Platform | string` so a test can pass 'freebsd', `Record<string,
+// string | undefined>` so `process.env` and a literal both fit.
 import path from 'node:path';
 
-/** src/services.cjs `sanitizeText`. */
-export function sanitizeText(value: unknown, secrets: readonly unknown[] = []): string {
-  let text = String(value ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
-  for (const secret of secrets) {
-    if (typeof secret === 'string' && secret.length >= 4) text = text.split(secret).join('[redacted]');
-  }
-  text = text.replace(/\b(?:https?|wss?):\/\/[^\s<>"']+/gi, (match) => {
-    try {
-      const url = new URL(match);
-      url.username = '';
-      url.password = '';
-      url.search = '';
-      url.hash = '';
-      return url.toString();
-    } catch { return '[redacted URL]'; }
-  });
-  text = text
-    .replace(/\b(?:Cookie|Set-Cookie|Authorization|Proxy-Authorization)\s*:[^\r\n]*/gi, '[redacted header]')
-    .replace(/\bBearer\s+[^\s,"']+/gi, 'Bearer [redacted]')
-    .replace(/(["']?(?:[\w-]*(?:token|secret|password|credential)[\w-]*|api[_-]?key|key|authorization|cookie|set-cookie)["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)/gi, '$1[redacted]')
-    .replace(/\bsk-[a-z0-9_-]+\b/gi, '[redacted]')
-    .replace(/\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)?\b/g, '[redacted]')
-    .replace(/\b[a-f0-9]{32,}\b/gi, '[redacted]')
-    .replace(/\b[a-zA-Z0-9_+/=-]{48,}\b/g, '[redacted]')
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
-  return text.slice(0, 2000);
+export interface DesktopPlatformInfo {
+  platform: NodeJS.Platform | string;
+  arch: string;
+  name: string;
+  shell: string;
+  terminalSupported: boolean;
+  portalSupported: boolean;
 }
 
-/** src/platform.cjs `desktopEnvironment`. */
+const PLATFORM_NAMES: Record<string, string> = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' };
+
+export function desktopPlatform(platform: NodeJS.Platform | string = process.platform, arch: string = process.arch): DesktopPlatformInfo {
+  return {
+    platform, arch,
+    name: PLATFORM_NAMES[platform] || platform,
+    shell: platform === 'darwin' ? 'zsh' : 'PowerShell',
+    terminalSupported: ['win32', 'darwin'].includes(platform),
+    portalSupported: (platform === 'win32' && arch === 'x64') || (platform === 'darwin' && ['arm64', 'x64'].includes(arch)),
+  };
+}
+
+// Finder-launched applications do not inherit a terminal's Homebrew PATH.
+// Add known locations without evaluating a login shell or loading shell secrets.
 export function desktopEnvironment(
-  source: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-): NodeJS.ProcessEnv {
+  source: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform | string = process.platform,
+): Record<string, string | undefined> {
   const env = { ...source };
   if (platform !== 'darwin') return env;
-  const dirs = (env.PATH || '').split(':').filter((value) => path.posix.isAbsolute(value) && !/[\0\r\n]/.test(value));
+  const dirs = (env.PATH || '').split(':').filter(value => path.posix.isAbsolute(value) && !/[\0\r\n]/.test(value));
   dirs.push('/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin');
   if (env.HOME && path.posix.isAbsolute(env.HOME) && !/[\0\r\n]/.test(env.HOME)) {
     dirs.push(path.posix.join(env.HOME, '.local/bin'), path.posix.join(env.HOME, '.cargo/bin'));
@@ -53,7 +51,17 @@ export function desktopEnvironment(
   return env;
 }
 
-/** src/desktop-console.cjs `ENVIRONMENT_KEYS`. */
+export function shellPath(
+  platform: NodeJS.Platform | string = process.platform,
+  environment: Record<string, string | undefined> = process.env,
+): string {
+  return platform === 'darwin' ? '/bin/zsh'
+    : path.win32.join(environment.SystemRoot || environment.SYSTEMROOT || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
+/** src/desktop-console.cjs `ENVIRONMENT_KEYS`: the only variables a Desktop-owned
+ * command inherits. Everything else — tokens, proxies, editor state — stays in
+ * this process. */
 const ENVIRONMENT_KEYS = new Set([
   'tmpdir', 'lang', 'lc_all', 'lc_ctype', 'user', 'logname', 'shell',
   'systemroot', 'windir', 'systemdrive', 'comspec', 'pathext', 'path',
@@ -65,16 +73,16 @@ const ENVIRONMENT_KEYS = new Set([
   'commonprogramw6432', 'allusersprofile', 'public', 'psmodulepath',
 ]);
 
-/** src/desktop-console.cjs `consoleEnvironment`. */
-export function consoleEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const result: NodeJS.ProcessEnv = {};
+export function consoleEnvironment(source: Record<string, string | undefined> = process.env): Record<string, string> {
+  const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(source)) {
     if (ENVIRONMENT_KEYS.has(key.toLowerCase()) && typeof value === 'string' && !value.includes('\0')) result[key] = value;
   }
   return result;
 }
 
-/** src/desktop-console.cjs `WINDOWS_RUNNER` (copied byte for byte; `String.raw` keeps every backslash literal). */
+/** src/desktop-console.cjs `WINDOWS_RUNNER`, byte for byte; `String.raw` keeps
+ * every backslash literal. */
 // The shell owns this non-inheritable handle. Windows closes it when the shell
 // exits or Node terminates its process handle, killing only that job's tree.
 // Command text travels through stdin, never through a shell-quoted argument.

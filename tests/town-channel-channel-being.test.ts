@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { ChannelBeing, parseChannelOutcome } from "../desktop/main/town/channel/channel-being";
-import { parseConnection } from "../desktop/main/town/channel/loom-connection";
+import { parseConnection } from "../desktop/main/common/loom-connection";
 import type { ChannelBeingOptions } from "../desktop/main/town/channel/channel-being";
 
 const event = (type: string, data: unknown) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;

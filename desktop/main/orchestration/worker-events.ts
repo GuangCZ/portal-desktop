@@ -2,7 +2,7 @@
 // Adapter event mappings are measured, not inferred: see docs/orchestration.md "Agent adapters"
 // (Claude Code stream measured 2026-09-11 on 2.1.245).
 
-import { sanitizeText } from './vendored';
+import { sanitizeText } from '../common/sanitize';
 import type { NormalizedEvent } from './types';
 
 export const clean = (value: unknown): string => {

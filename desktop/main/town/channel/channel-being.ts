@@ -12,7 +12,7 @@
 //
 // Electron is never imported; every outside dependency arrives through the constructor.
 import { BeingClient as DefaultBeingClient } from './being-client';
-import { sanitizeText } from './sanitize';
+import { sanitizeText } from '../../common/sanitize';
 import type { ChannelBeingContext, ChannelClientFactory, ChannelOutcome, ChannelSession, ChannelStatusReader, RequestRecord } from './types';
 
 const RESULT_PROTOCOL = 'being-desktop-channel-result/1';

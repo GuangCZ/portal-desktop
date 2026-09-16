@@ -57,7 +57,7 @@ import { errorCode, TownError, type SanitizeText, type TownCandidate, type TownC
 import { candidates as defaultCandidates } from './candidates';
 import { libraryQuery, libraryRoute } from './library-contract';
 import { validateTownToolResult } from './result-contract';
-import { sanitizeText as defaultSanitize } from './sanitize';
+import { sanitizeText as defaultSanitize } from '../../common/sanitize';
 import { normalizeTownResponse, validId } from './wire';
 
 const ORIGIN = 'https://beings.town';

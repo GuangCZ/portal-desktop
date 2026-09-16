@@ -6,7 +6,7 @@ import { once } from "node:events";
 import { createRequire } from "node:module";
 import { DesktopToolLink, toolDefinitions, validArguments, MAX_MESSAGE_BYTES, MAX_RESPONSE_BYTES, MAX_PENDING, MAX_BUFFERED_BYTES } from "../desktop/main/tools/tool-link";
 import type { ToolSocketFactory } from "../desktop/main/tools/tool-link";
-import { parseConnection } from "../desktop/main/tools/security";
+import { parseConnection } from "../desktop/main/common/loom-connection";
 import { LoopbackRelay, frame, until } from "./tools-portal-loopback";
 
 const { WebSocket, WebSocketServer } = createRequire(import.meta.url)("ws");

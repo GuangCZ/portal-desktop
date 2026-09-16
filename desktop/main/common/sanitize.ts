@@ -1,8 +1,21 @@
-// Ported from BeingDesktop src/services.cjs (sanitizeText) on 2026-09-16.
-// Any text that can reach the renderer passes through here: secrets, credentials
-// inside URLs, headers and control characters must not survive.
-
-export function sanitizeText(value: unknown, secrets: unknown[] = []): string {
+// The one text redaction the whole main process shares; 2026-09-16.
+//
+// Ported from BeingDesktop 0.8.26 src/services.cjs `sanitizeText` (lines 12-37).
+// Four migration units each carried their own copy of it — `chat/titles.ts`,
+// `town/channel/sanitize.ts`, `town/session/sanitize.ts` and
+// `orchestration/vendored.ts` — and a byte comparison of the four bodies found
+// them equivalent (the only textual difference was `match =>` against
+// `(match) =>`). The copies are gone; this is the implementation.
+//
+// docs/architecture.md §6.3: logs, activity records, diagnostics exports and IPC
+// error prose all pass through here, so a secret that survives this function
+// reaches disk and the renderer.
+//
+// The `secrets` parameter takes the widest of the four signatures on purpose:
+// `readonly unknown[]` accepts every caller the copies had (`string[]`,
+// `unknown[]`), and non-string members are skipped rather than coerced, exactly
+// as 0.8.26 does.
+export function sanitizeText(value: unknown, secrets: readonly unknown[] = []): string {
   let text = String(value ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
   for (const secret of secrets) {
     if (typeof secret === 'string' && secret.length >= 4) text = text.split(secret).join('[redacted]');

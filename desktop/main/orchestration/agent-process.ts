@@ -1,11 +1,11 @@
 // Ported from BeingDesktop 0.8.26 src/agent-process.cjs on 2026-09-16.
-// `consoleEnvironment` and `WINDOWS_RUNNER` belong to the DesktopTerminal unit; they stay optional
-// injection points for the integration phase, and default to the byte-identical copies in ./vendored
+// `consoleEnvironment` and `WINDOWS_RUNNER` live in `common/platform.ts`; they stay optional
+// injection points for the integration phase, and default to the shared implementations in ../common/platform
 // so win32 and posix behaviour match src/agent-process.cjs without any wiring.
 
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { consoleEnvironment as defaultConsoleEnvironment, WINDOWS_RUNNER } from './vendored';
+import { consoleEnvironment as defaultConsoleEnvironment, WINDOWS_RUNNER } from '../common/platform';
 import type { AgentChild, AgentExitResult, AgentStream, LaunchAgentOptions } from './types';
 
 // Only CLI configuration is inherited; Desktop/Loom tokens and runtime code
