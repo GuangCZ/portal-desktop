@@ -24,11 +24,15 @@
 
 | 模块 | 状态 |
 | --- | --- |
-| wire.ts | 未开始 |
-| library-contract.ts | 未开始 |
-| client.ts | 未开始 |
+| types.ts | 已移植 |
+| wire.ts | 已移植 |
+| library-contract.ts | 已移植 |
+| result-source.ts | 已移植 |
+| result-contract.ts | 已移植 |
+| sanitize.ts | 已移植 |
+| candidates.ts | 已移植 |
+| client.ts | 已移植 |
 | session.ts | 未开始 |
-| types.ts | 未开始 |
 
 ### BeingDesktop/docs/town-sdk-integration.md（111 行，已读完）
 
