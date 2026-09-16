@@ -50,3 +50,28 @@
 - `bridge.ts` 导出 `subscribe<T>(channel, cb)` 与 `enveloped<T>(channel, ...args)`（后者解 `chatErrorEnvelope`）。
 - `channels/index.ts` 的 `desktopChannels = { chat }`；`shared/desktop-types.ts` 只有 `export * from './chat-types';`。
 - `shared/types.ts` 的 `DesktopAPI` 追加区在 111 行 `chat: ChatAPI;`，按字母序插在其后。
+
+### docs/migration/u6-orchestration.md（833 行）
+- 九个模块已移植：`types/worker-events/native-worker-results/agent-kits/agent-process/orchestration-policy/worker-callbacks/orchestration`
+  （`vendored.ts` I0 已删并改指 `common/*`）。测试 `tests/orchestration-{policy,agent-process,manager,worker-callbacks,native-results}.test.ts`。
+- 集成阶段注入点：`OrchestrationPolicy.validDesktopId`/`desktopPortalName`（→ app/identity.ts）；
+  `createCallbackSender`/`createContinuationSender` 的 `parseConnection`/`sessionPartition`（→ common/loom-connection）、`fetchImpl`（→ net.fetch）、
+  `getTarget`（→ link.capabilities().place）；`WorkerCallbacks` 的 `send/resume/ready/toolsReady/report`；
+  `Orchestration.presentation`（I2）、`assertEnforced`/`enforcement`（policy）、`getExecutionContext`。
+- BD boot() wiring 原文已抄进该文档 654-680 行，与方案 §3.4 一致。
+- `tests/orchestration-native-results.test.ts` 缺的最后一条断言（`sessions.workersChanged()` 让 snapshot.version 递增）属 I5。
+
+### docs/migration/u7-features.md（758 行）
+- 四个模块已移植：`feature-tasks/feature-task-runner/feature-task-history/feature-task-discussion` + `types.ts`。
+- `FeatureTaskHistory` 的 `normalizeTownSyncRecords` 是**必填注入**（I0/u7 没有实现），本单元要建 `features/town-sync.ts`。
+- `discussFeatureTask` 的 `prepareDraft` 改成必填注入（BD 是 `prepareLoomDraft` 默认值）。
+- BD main.cjs 注入面（u7 文档 625-670 行）已逐段抄录：`loadFeatureHistory` / `publishFeatureTasks` /
+  `featureHistoryCurrent` / `registerFeatureRequest` / `handle()` 的 SESSION_CHANGED 三处 / `endFeatureTaskTracking` 判定 / 退出 flush。
+- **收尾动作**：`tests/features-feature-task-history.test.ts` 的四份本地副本（`normalizeTownSyncRecords`/`libraryRoute`/`detailId`/`RESERVED_SCROLL_IDS`）必须删掉改 import。
+
+### desktop/main/orchestration/types.ts（493 行）与 features/types.ts（114 行）
+- 编排 DTO：`OrchestrationSnapshot`、`WorkerRecord`/`WorkerSummary`（Summary = 去 events/result/taskPrompt + eventCount）、
+  `AgentRecord`、`OrchestrationMode{enabled,defaultAgent,paths}`、`PolicyState{status,scope,detail?}`、`BridgeCapabilities{status?,place?,tools?}`。
+- `CallbackManager` 是 `Orchestration` 被 `WorkerCallbacks` 驱动的子集。
+- 功能任务 DTO：`FeatureTaskRecord`、`FeatureTaskSnapshot`、`FeatureTaskLedger`、`TownSyncRecord`、`NormalizeTownSyncRecords`、
+  `FeatureTaskContext`、`PrepareFeatureTaskDraft`。
