@@ -32,7 +32,18 @@ export class ToolBrowserModel extends Store {
   /** The browser could not be built at all — no Electron in this process. */
   unavailable = "";
   private lifecycle = 0;
-  private bounds: ToolBrowserBounds & { visible: boolean } = { x: 0, y: 0, width: 0, height: 0, visible: false };
+  /** True while the address field has focus. BeingDesktop stops following the
+   * active tab's URL exactly then — renderer/desktop-tools.js `renderBrowser()`'s
+   * `if(document.activeElement!==$('browser-address'))` — and resumes on the next
+   * state push once the field is left. The panel sets it on focus and blur. */
+  private editing = false;
+  /** The last viewport the main process was told about, or null when nothing is
+   * known — which is also what a failed send leaves behind, so the next layout
+   * retries (BeingDesktop's `lastViewport=''`). Everything that changes the
+   * rectangle or the attachment goes through `setViewport`/`detach`, which are the
+   * only two writers: a send that skipped this cache would make the next identical
+   * rectangle dedupe itself away and the panel would come back blank. */
+  private sent: (ToolBrowserBounds & { visible: boolean }) | null = null;
 
   constructor(private readonly api: DesktopAPI, private readonly host: ToolBrowserHost) {
     super();
@@ -51,7 +62,7 @@ export class ToolBrowserModel extends Store {
       this.open = false;
       // Detach the native view: the panel is gone, and a view left attached would
       // sit on top of the conversation.
-      void this.api.toolBrowser.setViewport({ visible: false }).catch(() => { /* Shutting down. */ });
+      this.detach();
     };
   }
 
@@ -63,11 +74,13 @@ export class ToolBrowserModel extends Store {
 
   accept(state: ToolBrowserState): void {
     if (!state || !Array.isArray(state.tabs)) return;
-    const previous = this.state.activeTabId;
     this.state = state;
-    // Follow the active tab's address unless the user is editing the field. The
-    // field is uncontrolled while focused; the panel passes `editing`.
-    if (previous !== state.activeTabId) this.address = this.active?.url || "";
+    // Follow the active tab on EVERY push, not only when the active tab changes:
+    // a link click, a redirect, or `example.com` being normalised to
+    // `https://example.com/` moves the URL inside one tab, and an address bar that
+    // did not move shows something that is not the page. BeingDesktop does the
+    // same, with focus as the one exception (renderer/desktop-tools.js).
+    if (!this.editing) this.address = this.active?.url || "";
     this.changed();
   }
 
@@ -76,12 +89,17 @@ export class ToolBrowserModel extends Store {
     this.changed();
   }
 
+  /** The address field gained or lost focus. Deliberately without `changed()`:
+   * nothing rendered depends on it, and a re-render on focus would fight the
+   * caret. */
+  setEditing(editing: boolean): void { this.editing = editing; }
+
   show(): void { this.open = true; this.changed(); }
 
   hide(): void {
     this.open = false;
     this.changed();
-    void this.api.toolBrowser.setViewport({ visible: false }).catch(() => { /* Already detached. */ });
+    this.detach();
   }
 
   toggle(open = !this.open): void { if (open) this.show(); else this.hide(); }
@@ -90,13 +108,29 @@ export class ToolBrowserModel extends Store {
    * cheap when nothing moved: a `WebContentsView` re-attaches on every call. */
   setViewport(bounds: ToolBrowserBounds, visible: boolean): void {
     const next = { ...bounds, visible };
-    if (next.visible === this.bounds.visible && next.x === this.bounds.x && next.y === this.bounds.y
-      && next.width === this.bounds.width && next.height === this.bounds.height) return;
-    this.bounds = next;
+    const last = this.sent;
+    if (last && last.visible === next.visible && last.x === next.x && last.y === next.y
+      && last.width === next.width && last.height === next.height) return;
+    this.sent = next;
     void this.api.toolBrowser.setViewport({ visible, bounds }).then(
       state => this.accept(state),
-      error => { if (visible) this.host.toast(error); },
+      error => {
+        // Nothing landed. Forget what the main process was believed to know so the
+        // next layout sends again rather than trusting a rectangle that never
+        // arrived — BeingDesktop's `lastViewport=''` on the same failure.
+        if (this.sent === next) this.sent = null;
+        if (visible) this.host.toast(error);
+      },
     );
+  }
+
+  /** Detach the native view. Hiding the panel and tearing it down both come here
+   * rather than calling the bridge directly, so the dedupe cache can never claim
+   * the view is attached while it is not: that is what made a re-opened panel at
+   * the same rectangle stay blank. */
+  private detach(): void {
+    if (this.sent) this.sent = { ...this.sent, visible: false };
+    void this.api.toolBrowser.setViewport({ visible: false }).catch(() => { /* Already detached, or shutting down. */ });
   }
 
   newTab(url?: string): void { void this.run(() => this.api.toolBrowser.newTab(url ? { url } : {})); }
@@ -112,7 +146,16 @@ export class ToolBrowserModel extends Store {
   submit(): void {
     const url = this.address.trim();
     if (!url) return;
-    void this.run(() => this.active ? this.api.toolBrowser.navigate({ url }) : this.api.toolBrowser.newTab({ url }));
+    const active = this.active;
+    // The address the field already shows is not a navigation: BeingDesktop's
+    // `if(active?.url===url)return;`. Re-loading a page is the reload button's job,
+    // and now that the field follows the active tab, Enter on an untouched field
+    // would otherwise re-navigate on every keystroke-free submit.
+    if (active && active.url === url) return;
+    // Name the tab the address belongs to. The active tab can change under a slow
+    // navigation — a Being may open one — and BeingDesktop passes the id for the
+    // same reason.
+    void this.run(() => active ? this.api.toolBrowser.navigate({ id: active.id, url }) : this.api.toolBrowser.newTab({ url }));
   }
 
   private async run(operation: () => Promise<ToolBrowserState>): Promise<void> {

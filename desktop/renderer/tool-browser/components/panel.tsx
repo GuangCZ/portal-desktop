@@ -104,6 +104,13 @@ export function ToolBrowserPanel({ model }: { model: ToolBrowserModel }) {
           spellCheck={false}
           value={browser.address}
           onChange={event => browser.setAddress(event.target.value)}
+          /* While the field has focus the model stops following the active tab, so
+             a page that navigates underneath does not rewrite what is being typed
+             — BeingDesktop's `document.activeElement!==$('browser-address')` test
+             (renderer/desktop-tools.js). Focus also selects, as it does there, so
+             typing over the current address is one keystroke. */
+          onFocus={event => { browser.setEditing(true); event.currentTarget.select(); }}
+          onBlur={() => browser.setEditing(false)}
         />
         <button type="submit" className="secondary">前往</button>
       </form>
