@@ -238,3 +238,19 @@ and says why only once」：断言 12 次布局发 12 次（不再封顶）、`f
 已删除，改成 `import { parseConnection, sessionPartition } from "../desktop/main/common/loom-connection"`——
 这条测试断言的正是回调请求里的 `sessionPartition` 值，注入真实实现之后这些断言才真的在测正式实现。
 
+### 2.9 `tools/security.ts` 的 `protocolFile`（i2 记录 low）——已删
+
+`grep -rn protocolFile desktop tests scripts` 全树只有三处：它自己的定义、`tests/tools-security.test.ts` 的三行断言、
+以及 `security.ts` 文件头里自己的说明。**零生产调用方**（I2 与 I3 都已落地，两个单元都不需要它：
+工具浏览器加载的是远程 http(s)，外壳唯一的本地文档是 `beings://desktop`，由 `app/protocol.ts` 用自己的 join 解析）。
+
+按任务书删除 `desktop/main/tools/security.ts` 与 `tests/tools-security.test.ts` 里对应的那一条用例
+（`app resource handler rejects encoded path traversal`，本单元明确允许删除的那条）。
+测试文件头写清楚为什么删，以及 `app/protocol.ts` 的守卫**不解码 pathname**，所以 `..%2f` 只是个文件名而不是穿越——
+两者是不同的做法，不是同一个函数的两份。
+顺带删掉测试里因此不再使用的 `node:path` import。该文件其余 6 条用例的主体本来就是 `common/loom-connection.ts`。
+
+**留下的缺口（如实记录）**：`desktop/main/app/protocol.ts` 的 403 守卫**没有任何单元测试**——它 import electron，
+本仓库没有给它建过夹具。这不是本单元引入的，也没有因为删 `protocolFile` 而变差（那条测的是另一个函数），
+但既然现在唯一一条「路径穿越」用例没了，把它写进 openIssues。
+

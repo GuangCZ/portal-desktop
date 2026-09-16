@@ -1,7 +1,15 @@
 // Ported line by line from BeingDesktop 0.8.26 test/security.test.cjs on 2026-09-16.
+//
+// The subject is `desktop/main/common/loom-connection.ts`, which is where
+// src/security.cjs ended up. The one case this file used to have for
+// `protocolFile` went with it: that function resolved `being://app/...` for the
+// Loom document's own protocol, which this shell does not serve, and after I2 and
+// I3 landed it still had NO production caller — the tool browser loads remote
+// http(s) pages, and the shell's only local document is `beings://desktop`, served
+// by `app/protocol.ts` with its own guard (it never decodes the path, so an
+// encoded `..%2f` stays a filename rather than becoming a traversal). Keeping a
+// test for a function nothing calls is coverage of nothing. IM, 2026-09-16.
 import { describe, expect, it } from "vitest";
-import path from "node:path";
-import { protocolFile } from "../desktop/main/tools/security";
 import { allowedNavigation, endpoint, parseConnection, publicModelUrl, sessionPartition } from "../desktop/main/common/loom-connection";
 
 describe("desktop security boundaries", () => {
@@ -19,12 +27,6 @@ describe("desktop security boundaries", () => {
   it("native API helper only reads verified endpoints", () => {
     expect(() => endpoint(parseConnection("https://example.test/a"), "/api/chat/stream")).toThrow();
     expect(publicModelUrl("https://name:pass@example.test/v1?key=secret")).toBe("https://example.test/v1");
-  });
-  it("app resource handler rejects encoded path traversal", () => {
-    const root = path.resolve("renderer");
-    expect(() => protocolFile(root, "being://app/..%2fsecret")).toThrow();
-    expect(() => protocolFile(root, "being://other/app.js")).toThrow();
-    expect(protocolFile(root, "being://app/app.js")).toMatch(/app\.js$/);
   });
   it("persistent sessions isolate backends and credentials while retaining the same identity", () => {
     const a = parseConnection("https://example.test/loom/?api=https://example.test/a&token=first");
