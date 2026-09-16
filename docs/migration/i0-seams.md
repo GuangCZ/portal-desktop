@@ -357,3 +357,21 @@ auto-unpack-natives 真的产出 `*.node` 的 unpack 规则、`packagerIgnore` �
 `FeatureModelFactory.create` 的返回类型是裸 `Store`，而 `AppModel.start()` 只对它们调 `subscribe`。
 内置的 `TownModel` 是 `this.town.start()` 把 cleanup 放进 `cleanups`——这正是 I1/I4/I6 的 model 打开/关闭 IPC 订阅所需要的。
 `desktop/renderer/app/models/app.ts` **不在**方案 §3 允许触碰的共享文件清单里（535–538 行只有六个），所以任何单元都加不了这个钩子。
+
+**修法**（finding 1）：`forge.config.ts` 自己声明一条 `asar.unpack`，插件会与它**合并**而不是替换：
+
+```ts
+export const NATIVE_UNPACK = '**/node_modules/node-pty/{build/*,prebuilds/*}/spawn-helper';
+// packagerConfig: asar: { unpack: NATIVE_UNPACK }
+```
+
+合并后的实际 glob 是 `{**/node_modules/node-pty/{build/*,prebuilds/*}/spawn-helper,**/{.**,**}/**/*.node}`。
+`tests/packaging-contract.test.ts` 的第 65 行断言（只 `toMatch(/\*\.node/)`）换成了两条：
+一条断言合并后的字符串两半都在；另一条**用真的 `@electron/asar` 打一个 node-pty 形状的临时目录**，
+逐个断言四个原生文件落在 `app.asar.unpacked/`、helper 保住执行位、而 `lib/index.js` / `ws` / `.vite` 仍留在包内。
+反向验证做过：把 `asar` 改回 `true` 两条都红（`spawn-helper must be unpacked: expected null not to be null`），改回来即绿。
+
+顺带核实（没改）：`scripts/mac-signing.ts` 的 `ignoreMacSigningFile` 按 Mach-O magic 判定，`spawn-helper` 是 Mach-O，
+所以 unpack 之后它会被 osx-sign 正常签名——这也是它必须在 asar 外的第二个理由（asar 内的可执行文件既签不了也 spawn 不了）。
+另外修掉一个测试自身的隐患：插件的 `resolveForgeConfig` 是**原地改写** `packagerConfig.asar`，
+原来的浅拷贝会让它污染导出的真实 config，`asar` 变成对象后重复调用就会把 glob 叠两遍。现在 `resolvedUnpack()` 把 `asar` 也拷了一层。

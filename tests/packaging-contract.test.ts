@@ -23,7 +23,11 @@
 import { describe, expect, it } from "vitest";
 import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
 import type { ResolvedForgeConfig } from "@electron-forge/shared-types";
-import forge, { PACKAGED_MODULES, packagerIgnore } from "../forge.config";
+import { createPackageWithOptions } from "@electron/asar";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import forge, { NATIVE_UNPACK, PACKAGED_MODULES, packagerIgnore } from "../forge.config";
 import main from "../vite.main.config";
 import pkg from "../package.json";
 
@@ -31,6 +35,23 @@ import pkg from "../package.json";
  * each is a native or protocol-level component whose behaviour a minor bump can
  * change under the client. */
 const PINNED = { "ws": "8.21.3", "node-pty": "1.1.0", "@xterm/xterm": "6.0.0", "@xterm/addon-fit": "0.11.0" };
+
+/** The unpack rule as @electron/packager will really see it: forge.config.ts
+ * declares one and AutoUnpackNativesPlugin merges its own into it.
+ *
+ * The plugin rewrites `packagerConfig.asar` IN PLACE, so `asar` is copied as well
+ * as `packagerConfig` — sharing it with the imported config would let one case
+ * mutate what the next one reads, and merge the plugin's glob in twice. */
+async function resolvedUnpack(): Promise<string> {
+  const plugin = forge.plugins?.find(entry => (entry as { name?: string }).name === "auto-unpack-natives") as AutoUnpackNativesPlugin;
+  const resolve = plugin.getHooks().resolveForgeConfig!;
+  const asar = { ...(forge.packagerConfig?.asar as object) };
+  const input = { ...forge, packagerConfig: { ...forge.packagerConfig, asar } } as unknown as ResolvedForgeConfig;
+  const resolved = (await resolve(input, {} as never)) as ResolvedForgeConfig;
+  const unpack = (resolved.packagerConfig?.asar as { unpack?: string }).unpack;
+  expect(typeof unpack).toBe("string");
+  return unpack!;
+}
 
 describe("the packaged client's dependency contract", () => {
   it("keeps ws and node-pty in dependencies, pinned, and out of devDependencies", () => {
@@ -54,15 +75,58 @@ describe("the packaged client's dependency contract", () => {
     expect(forge.packagerConfig?.asar).toBeTruthy();
     const plugin = forge.plugins?.find(entry => (entry as { name?: string }).name === "auto-unpack-natives");
     expect(plugin).toBeInstanceOf(AutoUnpackNativesPlugin);
-    // Run the plugin's own hook over this project's real packager config rather
-    // than asserting the glob it is documented to use: the glob is the plugin's
-    // business, having `.node` files outside the archive is ours.
-    const resolve = (plugin as AutoUnpackNativesPlugin).getHooks().resolveForgeConfig!;
-    const input = { ...forge, packagerConfig: { ...forge.packagerConfig } } as unknown as ResolvedForgeConfig;
-    const resolved = (await resolve(input, {} as never)) as ResolvedForgeConfig;
-    const asar = resolved.packagerConfig?.asar;
-    expect(typeof asar).toBe("object");
-    expect((asar as { unpack?: string }).unpack).toMatch(/\*\.node/);
+    const unpack = await resolvedUnpack();
+    // The plugin contributes the `.node` rule and forge.config.ts contributes the
+    // extensionless macOS helper; the plugin merges the two rather than replacing
+    // ours, so losing either half shows up here.
+    expect(unpack).toMatch(/\*\.node/);
+    expect(unpack).toContain(NATIVE_UNPACK);
+  });
+
+  // What the glob string says and what @electron/asar does with it are different
+  // questions, and the one that matters is the second: `spawn-helper` has no
+  // extension, so `**/*.node` leaves it inside the archive, node-pty resolves it
+  // at app.asar.unpacked/…/spawn-helper (lib/unixTerminal.js:29-32) and every
+  // `pty.fork` on macOS dies with `posix_spawnp failed.` This packs a real
+  // node-pty-shaped tree through the resolved glob, which is the only way to
+  // answer it. See docs/migration/i0-seams.md §H.
+  it("leaves every file node-pty loads outside the archive, helper included", async () => {
+    const unpack = await resolvedUnpack();
+    const host = `${process.platform}-${process.arch}`;
+    // @electron/rebuild writes build/Release during packaging and node-pty's
+    // loader prefers it (lib/utils.js:19); prebuilds/<host> is the fallback. Both
+    // carry a helper beside the binary, so both must be unpacked.
+    const native = [
+      "node_modules/node-pty/build/Release/pty.node",
+      "node_modules/node-pty/build/Release/spawn-helper",
+      `node_modules/node-pty/prebuilds/${host}/pty.node`,
+      `node_modules/node-pty/prebuilds/${host}/spawn-helper`,
+    ];
+    const packed = ["node_modules/node-pty/lib/index.js", "node_modules/ws/index.js", ".vite/build/main.js"];
+    const root = await mkdtemp(path.join(os.tmpdir(), "packaging-unpack-"));
+    try {
+      const source = path.join(root, "app");
+      for (const file of [...native, ...packed]) {
+        await mkdir(path.dirname(path.join(source, file)), { recursive: true });
+        await writeFile(path.join(source, file), `// ${file}\n`, file.endsWith("spawn-helper") ? { mode: 0o755 } : {});
+      }
+      await createPackageWithOptions(source, path.join(root, "app.asar"), { unpack });
+      const unpacked = path.join(root, "app.asar.unpacked");
+      for (const file of native) {
+        // stat throws when the file stayed inside the archive, which is the failure
+        // this whole case exists to catch.
+        const entry = await stat(path.join(unpacked, file)).catch(() => null);
+        expect(entry, `${file} must be unpacked`).not.toBeNull();
+        // posix_spawn needs the helper executable, so the mode has to survive too.
+        if (file.endsWith("spawn-helper") && process.platform !== "win32")
+          expect(entry!.mode & 0o111, file).not.toBe(0);
+      }
+      // Everything else belongs in the archive: unpacking more would defeat it.
+      for (const file of packed)
+        expect(await stat(path.join(unpacked, file)).catch(() => null), `${file} must stay packed`).toBeNull();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

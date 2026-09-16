@@ -63,6 +63,34 @@ const MODULE_PATH = /^\/node_modules\/((?:@[^/]+\/)?[^/]+)(?:\/|$)/;
 // runs AFTER the copy (measured — the source tree still has no `build/`
 // afterwards), so binding.gyp, src/, deps/ and third_party/ must be present.
 const FOREIGN_PREBUILD = /^\/node_modules\/node-pty\/prebuilds\/([^/]+)/;
+// node-pty's macOS helper is an executable with NO extension, so the plugin's
+// `**/{.**,**}/**/*.node` never matches it. node-pty resolves it at
+// `<native.dir>/spawn-helper` with `app.asar` rewritten to `app.asar.unpacked`
+// (node_modules/node-pty/lib/unixTerminal.js:29-32) and hands the path to
+// posix_spawn (src/unix/pty.cc:351, inside `#if defined(__APPLE__)`). Left inside
+// the archive there is no file at that path and every `pty.fork` on macOS fails
+// with `posix_spawnp failed.` — Linux and Windows do not use a helper at all
+// (binding.gyp builds the target only under `OS=="mac"`).
+//
+// MEASURED 2026-09-16 against @electron/asar 3.4.1, which is what actually
+// decides this — `minimatch(relativePath, unpack, { matchBase: true })`
+// (lib/asar.js:147) — by packaging a node-pty-shaped tree twice: with the
+// plugin's glob alone both spawn-helper copies stay inside app.asar; with this
+// one merged in, all four of build/Release/{pty.node,spawn-helper} and
+// prebuilds/<host>/{pty.node,spawn-helper} land in app.asar.unpacked, the
+// helpers keeping mode 755.
+//
+// Both directories are listed because @electron/rebuild builds a fresh
+// `build/Release/spawn-helper` while packaging (measured: rebuild 3.7.2 against
+// Electron 44.2.0 emits a Mach-O arm64 executable beside pty.node) and node-pty's
+// loader prefers `build/Release` over `prebuilds/`; the prebuilt copy is the
+// fallback and must be outside the archive too.
+//
+// AutoUnpackNativesPlugin MERGES an existing unpack rather than replacing it —
+// `{<existing>,**/{.**,**}/**/*.node}` (AutoUnpackNativesPlugin.js:21-23) — so
+// declaring this one keeps the `.node` rule as well. tests/packaging-contract.ts
+// packs a real fixture through the merged glob rather than trusting the string.
+export const NATIVE_UNPACK = '**/node_modules/node-pty/{build/*,prebuilds/*}/spawn-helper';
 export function packagerIgnore(file: string): boolean {
   if (!file) return false;
   if (file.startsWith('/.vite')) return false;
@@ -76,7 +104,7 @@ export function packagerIgnore(file: string): boolean {
 const config: ForgeConfig = {
   outDir: process.env.PORTAL_DESKTOP_PACKAGE_OUT || 'out',
   packagerConfig: {
-    asar: true,
+    asar: { unpack: NATIVE_UNPACK },
     ignore: packagerIgnore,
     // Packager also derives macOS's display name from its executable name.
     executableName: process.platform === 'darwin' ? 'Being Desktop' : 'being-desktop',
@@ -120,9 +148,11 @@ const config: ForgeConfig = {
     new MakerDMG({ title: 'Being Desktop', icon: path.resolve('resources/branding/app.icns'), format: 'ULFO' }, ['darwin']),
   ],
   // node-pty's `.node` binaries cannot be loaded from inside an asar, so the
-  // plugin adds `asar.unpack: '**/{.**,**}/**/*.node'` (measured against
-  // @electron-forge/plugin-auto-unpack-natives 7.11.2, which rewrites
-  // packagerConfig.asar in a resolveForgeConfig hook and throws if asar is off).
+  // plugin adds `asar.unpack: '**/{.**,**}/**/*.node'` to the rule declared above
+  // (measured against @electron-forge/plugin-auto-unpack-natives 7.11.2, which
+  // rewrites packagerConfig.asar in a resolveForgeConfig hook and throws if asar
+  // is off). Its glob covers the binaries; NATIVE_UNPACK covers the extensionless
+  // macOS spawn-helper it cannot see.
   //
   // node-pty 1.1.0 ships N-API prebuilds for darwin-arm64, darwin-x64, win32-x64
   // and win32-arm64, so no electron-rebuild step is needed on the platforms this
