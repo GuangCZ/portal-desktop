@@ -5,7 +5,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import type { RecoveryConnection, SessionRecovery } from './store-types';
+import type { RecoveryConnection, SessionRecovery } from './types';
 
 const SESSION_IDENTITY_VERSION = 'v1';
 

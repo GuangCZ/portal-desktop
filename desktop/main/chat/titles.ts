@@ -3,7 +3,7 @@
 // and is carried here verbatim so the redaction the title input relies on does not
 // change shape during the port; it merges into a shared redaction module later.
 import { createHash } from 'node:crypto';
-import type { SessionSummary, SessionTitlesOptions, TitleRow, TitleStore } from './store-types';
+import type { SessionSummary, SessionTitlesOptions, TitleRow, TitleStore } from './types';
 
 /** BeingDesktop src/services.cjs `sanitizeText`: strips ANSI, named secrets, URL
  * credentials and queries, auth headers, key/value secrets and long opaque blobs. */

@@ -9,7 +9,7 @@ import type {
   ChatCacheLike,
   ChatSnapshot,
   StoreSummary,
-} from "../desktop/main/chat/store-types";
+} from "../desktop/main/chat/types";
 
 const DESKTOP = "11111111-1111-4111-8111-111111111111";
 const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";

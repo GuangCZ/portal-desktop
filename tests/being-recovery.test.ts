@@ -13,7 +13,7 @@ import { expect, test } from "vitest";
 import { BeingChat, sceneId, sessionFromScene } from "../desktop/main/chat/being-chat";
 import { BeingRecovery, CATCH_UP_ABSOLUTE_MAX_MS, STALL_GIVEUP_MS, STALL_MS } from "../desktop/main/chat/recovery";
 import type { RecoveryStore, RecoveryTimers } from "../desktop/main/chat/recovery";
-import type { ChatContext, HistoryRow } from "../desktop/main/chat/protocol-types";
+import type { ChatContext, HistoryRow } from "../desktop/main/chat/types";
 
 const DESKTOP = "11111111-1111-4111-8111-111111111111";
 const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";

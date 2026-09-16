@@ -23,9 +23,9 @@
 //      truth. With encryption unavailable the store still works in memory and each launch re-reads.
 import { unwrapMessage } from './frame';
 import type {
-  ApplyResult, ChatCacheLike, ChatSnapshot, ChatStoreOptions, HistoryPage,
+  ApplyPage, ApplyResult, ChatCacheLike, ChatSnapshot, ChatStoreOptions,
   StoredImage, StoredRow, StoredSession, StoreSummary, TitleSource,
-} from './store-types';
+} from './types';
 
 const MAX_SESSIONS = 100;
 const MAX_ROWS = 300;
@@ -250,7 +250,7 @@ export class ChatStore {
    * Rows whose scene names no conversation of ours — another Desktop's, the Loom page's, or the
    * unscoped rows that predate scene support — advance the cursor without being stored.
    */
-  async apply({ rows = [], cursor = 0, baseline = false }: HistoryPage = {}): Promise<ApplyResult> {
+  async apply({ rows = [], cursor = 0, baseline = false }: ApplyPage = {}): Promise<ApplyResult> {
     if (!Array.isArray(rows) || !Number.isSafeInteger(cursor) || cursor < 0) throw new TypeError('Invalid history page');
     let stored = 0, skipped = 0;
     // History never carries images, so a row that comes back keeps the previews the local one had.

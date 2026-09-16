@@ -34,7 +34,7 @@ import type {
   RouterState,
   SceneMeta,
   StopResult,
-} from './protocol-types';
+} from './types';
 
 // Silence budgets per phase (loom.html:2506). Slower is better than killing a legitimately slow
 // tool: run_command or browse_web can take five minutes.

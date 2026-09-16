@@ -85,7 +85,7 @@ import {
   type SendResult,
   type StatusResult,
   type StopResult,
-} from './protocol-types';
+} from './types';
 
 const MAX_BYTES = 4 * 1024 * 1024;
 export const MAX_MESSAGE = 200000;

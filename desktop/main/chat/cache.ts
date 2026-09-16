@@ -10,7 +10,7 @@ import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promis
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { snapshot } from './store';
-import type { ChatSnapshot } from './store-types';
+import type { ChatSnapshot } from './types';
 import type { SecretStorage } from '../app/settings';
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;

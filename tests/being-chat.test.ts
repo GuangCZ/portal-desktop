@@ -12,7 +12,7 @@ import {
   sceneId,
   sessionFromScene,
 } from "../desktop/main/chat/being-chat";
-import type { ChatContext, ChatError, ChatEvent, ImageInput, SceneMeta } from "../desktop/main/chat/protocol-types";
+import type { ChatContext, ChatError, ChatEvent, ImageInput, SceneMeta } from "../desktop/main/chat/types";
 
 const DESKTOP = "11111111-1111-4111-8111-111111111111";
 const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";

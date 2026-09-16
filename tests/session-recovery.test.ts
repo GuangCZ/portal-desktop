@@ -14,7 +14,7 @@ import path from "node:path";
 import os from "node:os";
 import { createHash, webcrypto } from "node:crypto";
 import { importSessionRecovery, readSessionRecovery, sessionPartition } from "../desktop/main/chat/session-recovery";
-import type { RecoveryConnection } from "../desktop/main/chat/store-types";
+import type { RecoveryConnection } from "../desktop/main/chat/types";
 
 test("recovery preserves current sessions, retains conflicts separately, and imports only once", () => {
   const key = "being-desktop-sessions-v1:/loom/Being";
