@@ -14,7 +14,7 @@
 | 支撑函数 | `src/security.cjs` `src/services.cjs` `src/being-chat.cjs` | `channel/errors.ts` `loom-connection.ts` `sanitize.ts` `sse.ts` | 已移植（随各模块测试通过） |
 | ChannelBeing | `src/channel-being.cjs` | `channel/channel-being.ts` + `channel/being-client.ts` | 测试通过（tests/town-channel-channel-being.test.ts，26/26） |
 | TownBackground | `src/town-background.cjs` | `channel/town-background.ts` | 测试通过（tests/town-channel-town-background.test.ts，11 通过 + 15 skip，skip 原因见上表） |
-| TownController | `src/town-controller.cjs` | `channel/town-controller.ts` | 未开始 |
+| TownController | `src/town-controller.cjs` | `channel/town-controller.ts` + `channel/portal-config.ts` + `channel/portal-release.ts` | 测试通过（tests/town-channel-town-controller.test.ts，31 通过 + 1 skip） |
 | Town catalog/drafts | `src/town.cjs` | `channel/town-catalog.ts` | 测试通过（tests/town-channel-town-catalog.test.ts，18/18） |
 | TownPairing 探活 | `src/town-pairing.cjs` | `channel/pairing-probe.ts` | 测试通过（tests/town-channel-pairing.test.ts，7 通过 + 8 skip） |
 
@@ -428,3 +428,24 @@ TownPairing 的 5 个用例（全部移植）：
 31. `Desktop project changes never replace a deployed Portal workspace or config`
 32. `external configuration is authoritative even while the process is stopped`
 注：用例 16 用 `t.mock.method(crypto,'randomUUID',…)` 固定 UUID → 移植为注入的 `randomUUID` 选项。
+
+
+## 收尾（2026-09-16）
+
+门槛：`npm run typecheck` 通过；`npx vitest run` → `Test Files 50 passed | 7 skipped (57)` / `Tests 404 passed | 40 skipped (444)`。
+基线为 309 通过 / 16 跳过；本单元新增 95 通过 + 24 跳过，既有测试一条未删未改。
+
+新增文件（只新增，未改动任何既有文件）：
+- `desktop/main/town/channel/`：`types.ts`（注入契约）、`errors.ts`、`loom-connection.ts`、`sanitize.ts`、`sse.ts`、`being-client.ts`、`pairing-probe.ts`、`town-catalog.ts`、`channel-being.ts`、`town-background.ts`、`town-controller.ts`、`portal-config.ts`、`portal-release.ts`。
+- `tests/`：`town-channel-pairing.test.ts`、`town-channel-town-catalog.test.ts`、`town-channel-channel-being.test.ts`、`town-channel-town-background.test.ts`、`town-channel-sdk-background.test.ts`、`town-channel-town-controller.test.ts`。
+
+跳过的用例（原名保留，`it.skip`，集成阶段必须重新启用）：
+- `tests/town-channel-pairing.test.ts` 的 8 条：测的是 `src/town-client.cjs`（TownClient 单元）。
+- `tests/town-channel-town-background.test.ts` 的 15 条：测的是 `src/town-refresh.cjs`（轮询调度、staleness、失败计数、reason 串、快照合并、缓存回执）。
+- `tests/town-channel-town-controller.test.ts` 的 1 条：需要 `src/grove-portal.cjs` 的 `enableGrovePortal` / `grovePortalConfigText`（Grove/Kits 单元）。
+
+与 BeingDesktop 的两处环境性差异（语义未改）：
+1. `tests/town-channel-town-controller.test.ts` 先 `fs.realpath(os.tmpdir())` 再 `mkdtemp`：macOS 的 `/var` 是符号链接，`validatePortalWorkspace` 会拒绝；夹具其余部分照抄。
+2. `crypto.randomUUID` 从 `t.mock.method` 改为构造参数注入（`randomUUID` 选项），因为 vitest 无法对 ESM 命名空间打桩。
+
+放弃的迁移点：`townSpeak` 的 Being 中继回退（BeingTownWriter）按任务要求不移植；`ChannelBeing` 与 `TownController` 都把对应回退点保留为可注入的可选钩子（`createClient` / `groveConfigText`），缺省即无回退。
