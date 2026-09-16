@@ -54,10 +54,32 @@
 - `common/` 已在 I0 一次收敛完（`sanitize` / `platform` / `loom-connection` / `message-context`），各单元不再有「删副本」步骤。
 - `tests/architecture.test.ts` 强制分层；`main/common/` 只能 import node 内建与同目录文件。
 
+### 接缝真实代码（`subsystems/types.ts`、`extensions.ts`、`subsystems/chat.ts`、`preload/channels/{index,bridge,chat}.ts`、`app/slots.tsx`、`app/models/registry.ts`、`shared/desktop-types.ts`）
+
+- `extensions.ts`：`INSTALLERS` 只有 `installChatSubsystem`；`installSubsystems(ctx, installers)` 导出供测试注入假子系统；
+  `store` 是对 `ExtensionSettings` 的 getter 包装，`saveExtra` 缺省时 reject「设置暂时无法写入，请重启客户端后重试。」。
+- `subsystems/chat.ts` 是模板：`declare module './types' { interface SubsystemMap { 'chat': ChatSubsystem } }`，
+  `registerChatIpc({handle, exclusive, sessions, blocked})`，`chatPush(() => ({ send: ctx.push }))`。
+- preload `bridge.ts` 提供 `subscribe<T>(channel, cb)` 与 `enveloped<T>(channel, ...args)`（包络转 Error）。
+- `slots.tsx`：四个空数组 + `visiblePanels/sidebarSections/topbarActions/viewSheets`；排序 `order` 升序、同 order 按 `key`。
+- `registry.ts`：`FeatureModel = Store & { start?(): () => void }`，`create(api, app)` 的 `app` 是 `unknown`，**构造期不得读 app 状态**。
+- `desktop-types.ts` 只有 `export * from './chat-types';`。
+
+### `desktop/renderer/conversation/models/organizer.ts`（现状，本单元要改）
+
+- `entries: Map<string, SessionMetadata>` 内存态 + `EMPTY`；`projects: string[]` 由 `sidebar.tsx` 的 effect 从 `snapshot.settings.workspace` 灌入单项。
+- 导出 `basename`、`touched`、`age`、`SessionGroups`、`OrganizerModel{metadata,setProjects,pin,archive,move,forget,ordered,groups,search}`。
+- 文件头已写明「DEVIATION：0.8.26 把这份元数据放主进程按 Being 分桶持久化（`sidebarAction`，src/main.cjs 1139），本壳层暂放内存」——本单元就是来还这笔账的。
+- `groups()`：pinned 优先；`projects` 按 `this.projects` 顺序；`standalone` 是「不 pinned 且 project 不在 projects 列表里」的；archived 全部排除。
+- `sidebar.tsx` 消费点：`organizer.metadata/pin/archive/move/projects/groups/search`，`ProjectGroup` 的折叠是组件内 `useState(true)`，
+  新建会话后 `conversation.create().then(id => organizer.move(id, project.path))`。
+
 ## 3. 进度
 
 - [x] 读方案 §3 约定 / §3.6 / §2.1 / §2.4 / §1.2 / §4 / 附录
 - [x] 读 `docs/migration/i0-seams.md`
+- [x] 读接缝真实代码（subsystems / preload channels / slots / registry / desktop-types）
+- [x] 读 `renderer/conversation/models/organizer.ts` 与 `renderer/app/components/sidebar.tsx`
 
 ## 4. 决定与偏差
 
