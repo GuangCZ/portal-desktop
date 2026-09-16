@@ -84,3 +84,25 @@
 - **§7 安全边界（Town 部分，逐条保真）**：`credentials:'omit'`、`referrerPolicy:'no-referrer'`、**固定来源**、**禁止重定向**、**响应体 ≤1MB**、**DTO 严格校验**（`town-wire`、`town-library-contract`、`town-session`）。
 - **§6.3 凭据**：连接地址只以 safeStorage 密文落盘；`isEncryptionAvailable()` 为假拒绝保存与配对（Linux basic_text 同样拒绝）。日志/诊断经 `sanitizeText`。
 - **§8 并发约定（本单元相关）**：①纪元校验 `generation`/`identityRevision`/各子系统 `_epoch`，过期结果静默丢弃、过期写入抛 `SESSION_CHANGED`。③**不自动重发**：`202`/`RESULT_UNKNOWN`/网络中断保留待确认状态。④Town 每个 feed 单飞（`_flight`），60 秒最小间隔退避（最长 300 秒）。⑥定时器全部 `unref()`。
+
+### 源码 src/town-wire.cjs（35 行，已读完）
+
+导出面：`{validId, memberId, normalizeTownResponse, matchesTownIdentity}`（纯函数，无构造参数、无注入）。
+
+- 内部 helper `record(value)` = `value !== null && typeof value === 'object' && !Array.isArray(value)`（**不导出**）。
+- `validId(value)`：`typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(value)`（首字符必须字母数字，总长 ≤100）。
+- `memberId(value)`：`record(value) && Object.hasOwn(value,'town_id') ? value.town_id : value?.being_id`。注意用 `Object.hasOwn`（不是真值判断），所以 `town_id: undefined` 也会返回 `undefined`。
+- `author(value)`（内部）：非 record 原样返回；否则 `{...value, ...(hasOwn 'town_id' ? {being: town_id, being_id: town_id} : {}), ...(hasOwn 'reply_to_town_id' ? {reply_to_being: reply_to_town_id} : {})}`。
+- `normalizeTownResponse(value, route, beingId)`：
+  1. `route === '/api/fireside/members'` 且 `Array.isArray(value)` → `value.map(item => record(item) ? {...item, being_id: memberId(item)} : item)`（**先于 record 检查**，因为成员响应是数组）。
+  2. 非 record → 原样返回。
+  3. `result = {...value}`；若 `hasOwn 'town_id'` 且 route ∈ `['/api/bonfire/hear','/api/bonfire/mentions','/api/fireside/hear']` → `result.being = beingId`（注入调用方的 Loom beingId）。
+  4. route ∈ `['/api/bonfire/hear','/api/fireside/hear']` 且 `Array.isArray(value.messages)` → `result.messages = value.messages.map(author)`。
+  5. route === `'/api/messages'` 且 `Array.isArray(value.messages)` → 每条 record item 展开 `sender_town_id→sender`、`recipient_town_id→recipient`（均用 hasOwn）、`sender_display→sender_name`（用 `typeof === 'string'`，**不是 hasOwn**）。
+- `matchesTownIdentity(value, {loomBeingId, townId}, legacy = 'being')`：
+  - 非 record → `false`。
+  - `hasOwn 'town_id'` → `validId(town_id) && !!townId && town_id === townId && (!hasOwn legacy || value[legacy] === loomBeingId || value[legacy] === townId)`。（**冲突的 legacy 字段不能被规范化掩盖**）
+  - 否则 → `validId(value[legacy]) && (value[legacy] === loomBeingId || (!!townId && value[legacy] === townId))`。
+  - 展示名永不参与身份判定。
+
+移植注意：`Object.hasOwn` 的语义要保留；TS 下用 `Object.prototype.hasOwnProperty.call` 或 `Object.hasOwn`（ES2022 lib 已含）。
